@@ -7,82 +7,136 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  host-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure host tests
+        run: cmake -S . -B build -DBUILD_TESTING=ON
+
+      - name: Build host tests
+        run: cmake --build build --target iee_tests --parallel
+
+      - name: Run host tests
+        run: ctest --test-dir build --output-on-failure
+
+  windows-build:
+    needs: host-tests
     runs-on: windows-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup MSBuild
-      uses: microsoft/setup-msbuild@v2
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-    - name: Setup MSVC
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-    - name: Configure CMake
-      run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
+      - name: Configure CMake
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DIEE_BUILD_WINDOWS_DLL=ON -DBUILD_TESTING=ON
 
-    - name: Build
-      run: cmake --build build --config Release --parallel
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: InfinityEngine-Enhancer-${{ github.sha }}
-        path: build/Release/InfinityEngine-Enhancer.dll
+      - name: Build release bundle
+        run: cmake --build build --config Release --target release_bundle
+
+      - name: Run native tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Verify generated version header
+        shell: pwsh
+        run: |
+          $content = Get-Content build/generated/iee/core/version.h -Raw
+          if ($content -match '@IEE_VERSION@') {
+            throw "Generated version header still contains the placeholder"
+          }
+
+      - name: Verify release bundle contents
+        shell: pwsh
+        run: |
+          $required = @(
+            "build/release-bundle/InfinityEngine-Enhancer.dll",
+            "build/release-bundle/M_IEEE.lua",
+            "build/release-bundle/InfinityEngine-Enhancer.sample.ini"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Missing release bundle file: $path"
+            }
+          }
+
+      - name: Archive release bundle
+        shell: pwsh
+        run: Compress-Archive -Path build/release-bundle/* -DestinationPath build/InfinityEngine-Enhancer-bundle.zip -Force
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
+          path: build/InfinityEngine-Enhancer-bundle.zip
 
   alpha-release:
     if: github.ref == 'refs/heads/main'
-    needs: build
+    needs: windows-build
     runs-on: ubuntu-latest
 
     steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: InfinityEngine-Enhancer-${{ github.sha }}
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
+          path: artifact
 
-    - name: Generate version
-      id: version
-      run: echo "sha=${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+      - name: Generate version label
+        id: version
+        run: echo "sha=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
 
-    - name: Delete existing alpha release
-      continue-on-error: true
-      run: gh release delete alpha --yes
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Delete existing alpha release
+        continue-on-error: true
+        run: gh release delete alpha --yes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Create Alpha Release
-      uses: softprops/action-gh-release@v1
-      with:
-        tag_name: alpha
-        name: "Alpha Build (${{ steps.version.outputs.sha }})"
-        files: InfinityEngine-Enhancer.dll
-        body: |
-          Alpha build from commit ${{ github.sha }}
+      - name: Create alpha release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: alpha
+          name: "Alpha Build (${{ steps.version.outputs.sha }})"
+          files: artifact/InfinityEngine-Enhancer-bundle.zip
+          body: |
+            Alpha build from commit ${{ github.sha }}
 
-          **⚠️ Unstable development build**
-        prerelease: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            This bundle contains the DLL, EEex loader script, and sample INI.
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: windows-build
     runs-on: ubuntu-latest
 
     steps:
-    - name: Download artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: InfinityEngine-Enhancer-${{ github.sha }}
+      - name: Download release bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
+          path: artifact
 
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: InfinityEngine-Enhancer.dll
-        draft: true
+      - name: Create draft release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifact/InfinityEngine-Enhancer-bundle.zip
+          draft: true

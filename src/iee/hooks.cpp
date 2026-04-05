@@ -4,6 +4,11 @@
 #include "iee/core/logger.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
+#include "iee/game/tile_upscale.h"
+#include "iee/game/tis_runtime.h"
+#include "iee/core/pattern_scanner.h"
+#include <array>
+#include <optional>
 #include <windows.h>
 
 namespace iee::hooks {
@@ -25,6 +30,108 @@ namespace iee::hooks {
     using game::DrawMode;
     using game::ShaderTone;
 
+    static void log_pointer_dwords(const char *label, const void *address) {
+        const auto value = reinterpret_cast<std::uintptr_t>(address);
+        if (!address) {
+            LOG_WARN("  {} = null", label);
+            return;
+        }
+
+        std::array<std::uint32_t, 6> words{};
+        if (!core::safe_read(address, words)) {
+            LOG_WARN("  {} @ 0x{:X}: unreadable", label, value);
+            return;
+        }
+
+        LOG_WARN("  {} @ 0x{:X}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 label,
+                 value,
+                 words[0],
+                 words[1],
+                 words[2],
+                 words[3],
+                 words[4],
+                 words[5]);
+    }
+
+    static void log_tis_header_diagnostics(void *vidTile,
+                                           const game::TileInfo &tileInfo,
+                                           const char *reason,
+                                           std::optional<std::uint32_t> detectedTileDimension,
+                                           bool includeCandidatePointers) {
+        game::CResTileSet tilesetSnapshot{};
+        const bool haveTilesetSnapshot = tileInfo.tileset && core::safe_read(tileInfo.tileset, tilesetSnapshot);
+
+        const auto dataPointer = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.pData : nullptr;
+        const auto dataSize = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.nSize : 0U;
+        const auto dataCount = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.nCount : 0U;
+        const auto page = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].page : -1;
+        const auto u = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].u : -1;
+        const auto v = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].v : -1;
+
+        if (detectedTileDimension) {
+            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} runtimeTileDimension=0x{:X} tileIndex={} page={} uv=({}, {}) detectedTileDimension=0x{:X}",
+                     reason,
+                     reinterpret_cast<std::uintptr_t>(vidTile),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.resource),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.header),
+                     reinterpret_cast<std::uintptr_t>(dataPointer),
+                     dataSize,
+                     dataCount,
+                     tileInfo.runtimeTileDimension,
+                     tileInfo.index,
+                     page,
+                     u,
+                     v,
+                     *detectedTileDimension);
+        } else {
+            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} runtimeTileDimension=0x{:X} tileIndex={} page={} uv=({}, {})",
+                     reason,
+                     reinterpret_cast<std::uintptr_t>(vidTile),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.resource),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
+                     reinterpret_cast<std::uintptr_t>(tileInfo.header),
+                     reinterpret_cast<std::uintptr_t>(dataPointer),
+                     dataSize,
+                     dataCount,
+                     tileInfo.runtimeTileDimension,
+                     tileInfo.index,
+                     page,
+                     u,
+                     v);
+        }
+
+        log_pointer_dwords("header", tileInfo.header);
+        log_pointer_dwords("pData", dataPointer);
+
+        if (!includeCandidatePointers || !tileInfo.tileset) {
+            return;
+        }
+
+        const auto *tilesetBytes = reinterpret_cast<const std::byte *>(tileInfo.tileset);
+        constexpr std::size_t candidateSlots = 4;
+        const auto baseOffset = sizeof(game::CRes);
+
+        for (std::size_t slot = 0; slot < candidateSlots; ++slot) {
+            const auto offset = baseOffset + slot * sizeof(void *);
+            std::uintptr_t candidate = 0;
+            if (!core::safe_read(tilesetBytes + offset, candidate)) {
+                LOG_WARN("  tileset[+0x{:X}] unreadable", offset);
+                continue;
+            }
+
+            LOG_WARN("  tileset[+0x{:X}] = 0x{:X}", offset, candidate);
+
+            const auto *candidatePtr = reinterpret_cast<const void *>(candidate);
+            if (!candidatePtr || candidatePtr == tileInfo.header || candidatePtr == dataPointer) {
+                continue;
+            }
+
+            LOG_WARN("  candidate(+0x{:X}) dump follows", offset);
+            log_pointer_dwords("candidate", candidatePtr);
+        }
+    }
 
     // Function to trigger cache reset from LoadArea
     static void reset_thread_local_cache() {
@@ -64,7 +171,7 @@ namespace iee::hooks {
     // Main RenderTexture hook - handles HD detection and texture enhancement
     static void Detour_RenderTexture(void *thisPtr, int texId, void *unused, int x, int y, unsigned long flags) {
         // Safety check - ensure context is valid
-        if (!g_ctx) {
+        if (!g_ctx || !g_ctx->manifest) {
             return; // Context destroyed, don't process
         }
 
@@ -72,7 +179,7 @@ namespace iee::hooks {
 
         // Try to get tile information
         game::TileInfo tileInfo;
-        if (!game::get_tile_info(thisPtr, tileInfo, ctx.draw.CRes_Demand)) {
+        if (!game::get_tile_info(thisPtr, *ctx.manifest, tileInfo, ctx.draw.CRes_Demand)) {
             // Can't resolve tile info - use original function
             H_RenderTexture.original()(thisPtr, texId, unused, x, y, flags);
             return;
@@ -87,29 +194,91 @@ namespace iee::hooks {
         const auto &entry = tileInfo.table[tileInfo.index];
         int U0 = entry.u, V0 = entry.v;
 
-        // Detect upscaled content and update area-wide scale factor
-        if (!ctx.scaleDetected.load() && ctx.detectionCount.load() < game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
-            ctx.detectionCount.fetch_add(1);
-
-            if (entry.u > game::UpscaleThresholds::UV_THRESHOLD || entry.v > game::UpscaleThresholds::UV_THRESHOLD ||
-                texId > game::UpscaleThresholds::TEXTURE_ID_THRESHOLD) {
-                // Upscaled content detected - set area-wide 4x scaling
-                ctx.areaScale.store(4);
+        // Detect area scale from authored TIS metadata first, with heuristics as a fallback.
+        if (!ctx.scaleDetected.load()) {
+            if (const auto headerDetection = game::detect_scale_from_tis_header(tileInfo, *ctx.manifest)) {
+                ctx.areaScale.store(headerDetection->scaleFactor);
                 ctx.scaleDetected.store(true);
-                LOG_INFO(
-                    "Upscaled tiles detected! Setting the new scale factor for entire area (texId: {}, UV: ({},{}))",
-                    texId, entry.u, entry.v);
-            } else if (ctx.detectionCount.load() == game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
+
+                if (headerDetection->scaleFactor > 1) {
+                    LOG_INFO("Detected {}x tiles from TIS header (tileDimension=0x{:X})",
+                             headerDetection->scaleFactor,
+                             headerDetection->detectedTileDimension);
+                } else {
+                    try {
+                        H_RenderTexture.disable();
+                        ctx.isRenderHookActive = false;
+                        LOG_INFO("Detected standard tiles from TIS header (tileDimension=0x{:X})",
+                                 headerDetection->detectedTileDimension);
+                    } catch (const std::exception &e) {
+                        LOG_WARN("Failed to disable RenderTexture hook after TIS header detection: {}", e.what());
+                    }
+                    H_RenderTexture.original()(thisPtr, texId, unused, x, y, flags);
+                    return;
+                }
+            } else if (const auto tableDetection = game::detect_scale_from_tile_table(tileInfo)) {
+                ctx.areaScale.store(tableDetection->scaleFactor);
+                ctx.scaleDetected.store(true);
+
+                if (tableDetection->scaleFactor > 1) {
+                    LOG_INFO("Detected {}x tiles from PVR entry table (smallest step=0x{:X})",
+                             tableDetection->scaleFactor,
+                             tableDetection->detectedTileDimension);
+                } else {
+                    try {
+                        H_RenderTexture.disable();
+                        ctx.isRenderHookActive = false;
+                        LOG_INFO("Detected standard tiles from PVR entry table (smallest step=0x{:X})",
+                                 tableDetection->detectedTileDimension);
+                    } catch (const std::exception &e) {
+                        LOG_WARN("Failed to disable RenderTexture hook after table detection: {}", e.what());
+                    }
+                    H_RenderTexture.original()(thisPtr, texId, unused, x, y, flags);
+                    return;
+                }
+            } else if (ctx.detectionCount.load() < game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
+                const int sampleCount = ctx.detectionCount.fetch_add(1) + 1;
+                if (sampleCount == 1) {
+                    if (const auto headerTileDimension = game::get_tis_header_tile_dimension(tileInfo, *ctx.manifest)) {
+                        log_tis_header_diagnostics(thisPtr,
+                                                   tileInfo,
+                                                   "Unsupported deterministic tile metadata; using heuristic fallback",
+                                                   *headerTileDimension,
+                                                   true);
+                    } else {
+                        log_tis_header_diagnostics(thisPtr,
+                                                   tileInfo,
+                                                   "TIS header missing and tile table did not resolve scale; using heuristic fallback",
+                                                   std::nullopt,
+                                                   true);
+                    }
+                }
+
+                if (game::is_upscaled_by_heuristics(tileInfo, texId)) {
+                    ctx.areaScale.store(4);
+                    ctx.scaleDetected.store(true);
+                    LOG_INFO("Upscaled tiles detected via heuristic fallback (sample {}, texId: {}, UV: ({},{}))",
+                             sampleCount,
+                             texId,
+                             entry.u,
+                             entry.v);
+                } else if (sampleCount == game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
+                    ctx.areaScale.store(1);
+                    ctx.scaleDetected.store(true);
+
+                    try {
+                        H_RenderTexture.disable();
+                        ctx.isRenderHookActive = false;
+                        LOG_INFO("Standard tiles detected via heuristic fallback after {} samples", sampleCount);
+                    } catch (const std::exception &e) {
+                        LOG_WARN("Failed to disable RenderTexture hook: {}", e.what());
+                    }
+                    H_RenderTexture.original()(thisPtr, texId, unused, x, y, flags);
+                    return;
+                }
+            } else {
                 ctx.areaScale.store(1);
                 ctx.scaleDetected.store(true);
-
-                try {
-                    H_RenderTexture.disable();
-                    ctx.isRenderHookActive = false;
-                    LOG_INFO("Standard area detected");
-                } catch (const std::exception &e) {
-                    LOG_WARN("Failed to disable RenderTexture hook: {}", e.what());
-                }
             }
         }
 
@@ -163,7 +332,7 @@ namespace iee::hooks {
         }
 
         // Check the "linear tiles" switch in TIS structure
-        if (game::get_tis_linear_tiles_flag(tileInfo.tis)) {
+        if (game::get_tis_linear_tiles_flag(tileInfo.tileset, *ctx.manifest)) {
             tone = static_cast<int>(ShaderTone::Seam);
         }
 
@@ -253,6 +422,13 @@ namespace iee::hooks {
         g_ctx = nullptr;
 
         LOG_INFO("Hook cleanup complete");
+    }
+
+    void prepare_for_shutdown() noexcept {
+        if (g_ctx) {
+            g_ctx->isRenderHookActive = false;
+        }
+        g_ctx = nullptr;
     }
 
     bool is_active() {
