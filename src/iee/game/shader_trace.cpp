@@ -31,6 +31,20 @@ namespace iee::game::shader_trace {
         constexpr GLenum GL_TEXTURE_WIDTH = 0x1000;
         constexpr GLenum GL_TEXTURE_HEIGHT = 0x1001;
         constexpr GLenum GL_TEXTURE0 = 0x84C0;
+        constexpr GLenum GL_FRAMEBUFFER = 0x8D40;
+        constexpr GLenum GL_READ_FRAMEBUFFER = 0x8CA8;
+        constexpr GLenum GL_DRAW_FRAMEBUFFER = 0x8CA9;
+        constexpr GLenum GL_COLOR_ATTACHMENT0 = 0x8CE0;
+        constexpr GLenum GL_POINTS = 0x0000;
+        constexpr GLenum GL_LINES = 0x0001;
+        constexpr GLenum GL_LINE_LOOP = 0x0002;
+        constexpr GLenum GL_LINE_STRIP = 0x0003;
+        constexpr GLenum GL_TRIANGLES = 0x0004;
+        constexpr GLenum GL_TRIANGLE_STRIP = 0x0005;
+        constexpr GLenum GL_TRIANGLE_FAN = 0x0006;
+        constexpr GLenum GL_QUADS = 0x0007;
+        constexpr GLenum GL_QUAD_STRIP = 0x0008;
+        constexpr GLenum GL_POLYGON = 0x0009;
 
         using Fn_wglGetProcAddress = PROC (WINAPI*)(LPCSTR);
         using Fn_glBindTexture = void (APIENTRY*)(GLenum, GLuint);
@@ -48,6 +62,10 @@ namespace iee::game::shader_trace {
         using Fn_glGetProgramInfoLog = void (APIENTRY*)(GLuint, GLsizei, GLsizei *, GLchar *);
         using Fn_glActiveTexture = void (APIENTRY*)(GLenum);
         using Fn_glGetTexLevelParameteriv = void (APIENTRY*)(GLenum, GLint, GLenum, GLint *);
+        using Fn_glBindFramebuffer = void (APIENTRY*)(GLenum, GLuint);
+        using Fn_glFramebufferTexture2D = void (APIENTRY*)(GLenum, GLenum, GLenum, GLuint, GLint);
+        using Fn_glDrawArrays = void (APIENTRY*)(GLenum, GLint, GLsizei);
+        using Fn_glDrawElements = void (APIENTRY*)(GLenum, GLsizei, GLenum, const void *);
         using Fn_glUseProgram = void (APIENTRY*)(GLuint);
         using Fn_glGetUniformLocation = GLint (APIENTRY*)(GLuint, const GLchar *);
         using Fn_glGetUniformfv = void (APIENTRY*)(GLuint, GLint, GLfloat *);
@@ -87,6 +105,8 @@ namespace iee::game::shader_trace {
         };
 
         core::Hook<Fn_glBindTexture> H_glBindTexture;
+        core::Hook<Fn_glDrawArrays> H_glDrawArrays;
+        core::Hook<Fn_glDrawElements> H_glDrawElements;
         core::Hook<Fn_wglGetProcAddress> H_wglGetProcAddress;
 
         std::mutex g_mutex;
@@ -95,7 +115,10 @@ namespace iee::game::shader_trace {
         std::unordered_map<GLint, GLuint> g_boundTextures2D;
         GLuint g_currentProgram = 0;
         GLuint g_lastLoggedProgram = 0;
+        GLuint g_currentFramebuffer = 0;
         GLint g_currentActiveTextureUnit = 0;
+        std::size_t g_loggedDrawCallsForCurrentProgram = 0;
+        bool g_suppressedDrawLogsForCurrentProgram = false;
         bool g_traceEnabled = false;
         bool g_tcScaleInjectionEnabled = false;
         bool g_enabled = false;
@@ -116,6 +139,10 @@ namespace iee::game::shader_trace {
         Fn_glGetProgramInfoLog g_glGetProgramInfoLog{};
         Fn_glActiveTexture g_glActiveTexture{};
         Fn_glGetTexLevelParameteriv g_glGetTexLevelParameteriv{};
+        Fn_glBindFramebuffer g_glBindFramebuffer{};
+        Fn_glFramebufferTexture2D g_glFramebufferTexture2D{};
+        Fn_glDrawArrays g_glDrawArrays{};
+        Fn_glDrawElements g_glDrawElements{};
         Fn_glUseProgram g_glUseProgram{};
         Fn_glGetUniformLocation g_glGetUniformLocation{};
         Fn_glGetUniformfv g_glGetUniformfv{};
@@ -182,6 +209,31 @@ namespace iee::game::shader_trace {
             switch (type) {
                 case GL_FRAGMENT_SHADER: return "fragment";
                 case GL_VERTEX_SHADER: return "vertex";
+                default: return "other";
+            }
+        }
+
+        const char *framebuffer_target_name(GLenum target) noexcept {
+            switch (target) {
+                case GL_FRAMEBUFFER: return "GL_FRAMEBUFFER";
+                case GL_READ_FRAMEBUFFER: return "GL_READ_FRAMEBUFFER";
+                case GL_DRAW_FRAMEBUFFER: return "GL_DRAW_FRAMEBUFFER";
+                default: return "other";
+            }
+        }
+
+        const char *draw_mode_name(GLenum mode) noexcept {
+            switch (mode) {
+                case GL_POINTS: return "GL_POINTS";
+                case GL_LINES: return "GL_LINES";
+                case GL_LINE_LOOP: return "GL_LINE_LOOP";
+                case GL_LINE_STRIP: return "GL_LINE_STRIP";
+                case GL_TRIANGLES: return "GL_TRIANGLES";
+                case GL_TRIANGLE_STRIP: return "GL_TRIANGLE_STRIP";
+                case GL_TRIANGLE_FAN: return "GL_TRIANGLE_FAN";
+                case GL_QUADS: return "GL_QUADS";
+                case GL_QUAD_STRIP: return "GL_QUAD_STRIP";
+                case GL_POLYGON: return "GL_POLYGON";
                 default: return "other";
             }
         }
@@ -264,6 +316,17 @@ namespace iee::game::shader_trace {
             GLint blurLocation{-1};
         };
 
+        struct DrawCallSnapshot {
+            GLuint program{};
+            std::string label;
+            bool interesting{};
+            GLuint framebuffer{};
+            GLint samplerUnit{-1};
+            GLuint texture{};
+            std::size_t loggedDrawCalls{};
+            bool suppressedDrawLogs{};
+        };
+
         GLint uniform_location_by_name(const ProgramRecord &record, std::string_view name) {
             for (const auto &[location, uniformName]: record.uniformNames) {
                 if (uniformName == name) return location;
@@ -298,6 +361,35 @@ namespace iee::game::shader_trace {
                 uniforms.push_back(UniformEntry{location, name});
             }
             return uniforms;
+        }
+
+        std::optional<DrawCallSnapshot> snapshot_current_draw_call() {
+            std::lock_guard lock(g_mutex);
+            const auto programIt = g_programs.find(g_currentProgram);
+            if (programIt == g_programs.end()) return std::nullopt;
+
+            DrawCallSnapshot snapshot;
+            snapshot.program = g_currentProgram;
+            snapshot.label = programIt->second.label;
+            snapshot.interesting = programIt->second.interesting;
+            snapshot.framebuffer = g_currentFramebuffer;
+            snapshot.loggedDrawCalls = g_loggedDrawCallsForCurrentProgram;
+            snapshot.suppressedDrawLogs = g_suppressedDrawLogsForCurrentProgram;
+
+            for (const auto &[location, name]: programIt->second.uniformNames) {
+                if (name != "uTex") continue;
+                if (!ensure_proc(g_glGetUniformiv, "glGetUniformiv")) break;
+                GLint samplerUnit = 0;
+                g_glGetUniformiv(g_currentProgram, location, &samplerUnit);
+                snapshot.samplerUnit = samplerUnit;
+                const auto textureIt = g_boundTextures2D.find(samplerUnit);
+                if (textureIt != g_boundTextures2D.end()) {
+                    snapshot.texture = textureIt->second;
+                }
+                break;
+            }
+
+            return snapshot;
         }
 
         bool update_last_uniform_value(GLuint program, GLint location, std::string_view value) {
@@ -469,6 +561,28 @@ namespace iee::game::shader_trace {
                          name,
                          value);
             }
+        }
+
+        bool begin_draw_log(std::size_t *outDrawIndex = nullptr, bool *outWasSuppressed = nullptr) {
+            std::lock_guard lock(g_mutex);
+            const auto programIt = g_programs.find(g_currentProgram);
+            if (programIt == g_programs.end() || !programIt->second.interesting) return false;
+
+            if (outDrawIndex) *outDrawIndex = g_loggedDrawCallsForCurrentProgram;
+            if (outWasSuppressed) *outWasSuppressed = g_suppressedDrawLogsForCurrentProgram;
+
+            constexpr std::size_t maxLogsPerProgramBind = 8;
+            if (g_loggedDrawCallsForCurrentProgram < maxLogsPerProgramBind) {
+                ++g_loggedDrawCallsForCurrentProgram;
+                return true;
+            }
+
+            if (!g_suppressedDrawLogsForCurrentProgram) {
+                g_suppressedDrawLogsForCurrentProgram = true;
+                return true;
+            }
+
+            return false;
         }
 
         void maybe_inject_sprite_tcscale(GLuint program, std::string_view reason) {
@@ -710,6 +824,8 @@ namespace iee::game::shader_trace {
                 }
                 if (program != g_lastLoggedProgram) {
                     g_lastLoggedProgram = program;
+                    g_loggedDrawCallsForCurrentProgram = 0;
+                    g_suppressedDrawLogsForCurrentProgram = false;
                     shouldTraceBind = snapshot && snapshot->interesting;
                 }
             }
@@ -745,6 +861,8 @@ namespace iee::game::shader_trace {
                 }
                 if (program != g_lastLoggedProgram) {
                     g_lastLoggedProgram = program;
+                    g_loggedDrawCallsForCurrentProgram = 0;
+                    g_suppressedDrawLogsForCurrentProgram = false;
                     shouldTraceBind = snapshot && snapshot->interesting;
                 }
             }
@@ -779,6 +897,122 @@ namespace iee::game::shader_trace {
 
             std::lock_guard lock(g_mutex);
             g_currentActiveTextureUnit = static_cast<GLint>(texture - GL_TEXTURE0);
+        }
+
+        void APIENTRY Detour_glBindFramebuffer(GLenum target, GLuint framebuffer) {
+            g_glBindFramebuffer(target, framebuffer);
+
+            bool changed = false;
+            GLuint program = 0;
+            std::string label;
+            {
+                std::lock_guard lock(g_mutex);
+                if (target == GL_FRAMEBUFFER || target == GL_DRAW_FRAMEBUFFER) {
+                    changed = g_currentFramebuffer != framebuffer;
+                    g_currentFramebuffer = framebuffer;
+                }
+
+                program = g_currentProgram;
+                const auto it = g_programs.find(program);
+                if (it != g_programs.end()) {
+                    label = it->second.label;
+                }
+            }
+
+            if (!g_traceEnabled || !changed) return;
+
+            LOG_INFO("ShaderTrace glBindFramebuffer target={} framebuffer={} currentProgram={} label={}",
+                     framebuffer_target_name(target),
+                     framebuffer,
+                     program,
+                     label.empty() ? "unknown" : label);
+        }
+
+        void APIENTRY Detour_glFramebufferTexture2D(GLenum target,
+                                                    GLenum attachment,
+                                                    GLenum textarget,
+                                                    GLuint texture,
+                                                    GLint level) {
+            g_glFramebufferTexture2D(target, attachment, textarget, texture, level);
+
+            if (!g_traceEnabled) return;
+            if (attachment != GL_COLOR_ATTACHMENT0) return;
+
+            GLuint framebuffer = 0;
+            {
+                std::lock_guard lock(g_mutex);
+                framebuffer = g_currentFramebuffer;
+            }
+
+            LOG_INFO("ShaderTrace glFramebufferTexture2D target={} framebuffer={} attachment=0x{:X} textarget=0x{:X} texture={} level={}",
+                     framebuffer_target_name(target),
+                     framebuffer,
+                     attachment,
+                     textarget,
+                     texture,
+                     level);
+        }
+
+        void APIENTRY Detour_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+            g_glDrawArrays(mode, first, count);
+
+            if (!g_traceEnabled) return;
+
+            std::size_t drawIndex = 0;
+            bool wasSuppressed = false;
+            if (!begin_draw_log(&drawIndex, &wasSuppressed)) return;
+
+            const auto snapshot = snapshot_current_draw_call();
+            if (!snapshot || !snapshot->interesting) return;
+
+            if (wasSuppressed) {
+                LOG_INFO("ShaderTrace draw logs suppressed for current bind program={} label={}",
+                         snapshot->program,
+                         snapshot->label);
+                return;
+            }
+
+            LOG_INFO("ShaderTrace glDrawArrays program={} label={} draw={} mode={} framebuffer={} first={} count={} samplerUnit={} texture={}",
+                     snapshot->program,
+                     snapshot->label,
+                     drawIndex + 1,
+                     draw_mode_name(mode),
+                     snapshot->framebuffer,
+                     first,
+                     count,
+                     snapshot->samplerUnit,
+                     snapshot->texture);
+        }
+
+        void APIENTRY Detour_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
+            g_glDrawElements(mode, count, type, indices);
+
+            if (!g_traceEnabled) return;
+
+            std::size_t drawIndex = 0;
+            bool wasSuppressed = false;
+            if (!begin_draw_log(&drawIndex, &wasSuppressed)) return;
+
+            const auto snapshot = snapshot_current_draw_call();
+            if (!snapshot || !snapshot->interesting) return;
+
+            if (wasSuppressed) {
+                LOG_INFO("ShaderTrace draw logs suppressed for current bind program={} label={}",
+                         snapshot->program,
+                         snapshot->label);
+                return;
+            }
+
+            LOG_INFO("ShaderTrace glDrawElements program={} label={} draw={} mode={} framebuffer={} count={} type=0x{:X} samplerUnit={} texture={}",
+                     snapshot->program,
+                     snapshot->label,
+                     drawIndex + 1,
+                     draw_mode_name(mode),
+                     snapshot->framebuffer,
+                     count,
+                     type,
+                     snapshot->samplerUnit,
+                     snapshot->texture);
         }
 
         void APIENTRY Detour_glUniform1i(GLint location, GLint v0) {
@@ -864,6 +1098,14 @@ namespace iee::game::shader_trace {
                 g_glActiveTexture = reinterpret_cast<Fn_glActiveTexture>(proc);
                 return reinterpret_cast<PROC>(&Detour_glActiveTexture);
             }
+            if (procName == "glBindFramebuffer" || procName == "glBindFramebufferEXT") {
+                g_glBindFramebuffer = reinterpret_cast<Fn_glBindFramebuffer>(proc);
+                return reinterpret_cast<PROC>(&Detour_glBindFramebuffer);
+            }
+            if (procName == "glFramebufferTexture2D" || procName == "glFramebufferTexture2DEXT") {
+                g_glFramebufferTexture2D = reinterpret_cast<Fn_glFramebufferTexture2D>(proc);
+                return reinterpret_cast<PROC>(&Detour_glFramebufferTexture2D);
+            }
             if (procName == "glUseProgram") {
                 g_glUseProgram = reinterpret_cast<Fn_glUseProgram>(proc);
                 return reinterpret_cast<PROC>(&Detour_glUseProgram);
@@ -937,16 +1179,32 @@ namespace iee::game::shader_trace {
             H_wglGetProcAddress.create(target, reinterpret_cast<void *>(&Detour_wglGetProcAddress));
             H_wglGetProcAddress.enable();
 
-            if (g_tcScaleInjectionEnabled) {
+            if (g_tcScaleInjectionEnabled || g_traceEnabled) {
                 auto *bindTextureTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glBindTexture"));
                 if (!bindTextureTarget) {
-                    LOG_ERROR("ShaderTrace failed to locate glBindTexture for sprite tc-scale injection");
+                    LOG_ERROR("ShaderTrace failed to locate glBindTexture for runtime sprite tracing");
                     H_wglGetProcAddress.disable();
                     return false;
                 }
 
                 H_glBindTexture.create(bindTextureTarget, reinterpret_cast<void *>(&Detour_glBindTexture));
                 H_glBindTexture.enable();
+            }
+
+            if (g_traceEnabled) {
+                auto *drawArraysTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawArrays"));
+                auto *drawElementsTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawElements"));
+                if (!drawArraysTarget || !drawElementsTarget) {
+                    LOG_ERROR("ShaderTrace failed to locate glDrawArrays/glDrawElements");
+                    H_glBindTexture.disable();
+                    H_wglGetProcAddress.disable();
+                    return false;
+                }
+
+                H_glDrawArrays.create(drawArraysTarget, reinterpret_cast<void *>(&Detour_glDrawArrays));
+                H_glDrawArrays.enable();
+                H_glDrawElements.create(drawElementsTarget, reinterpret_cast<void *>(&Detour_glDrawElements));
+                H_glDrawElements.enable();
             }
 
             g_installed = true;
@@ -958,6 +1216,8 @@ namespace iee::game::shader_trace {
             }
             return true;
         } catch (const std::exception &e) {
+            H_glDrawElements.disable();
+            H_glDrawArrays.disable();
             H_glBindTexture.disable();
             H_wglGetProcAddress.disable();
             LOG_ERROR("ShaderTrace install failed: {}", e.what());
@@ -967,6 +1227,8 @@ namespace iee::game::shader_trace {
 
     void uninstall() noexcept {
         if (!g_installed) return;
+        H_glDrawElements.disable();
+        H_glDrawArrays.disable();
         H_glBindTexture.disable();
         H_wglGetProcAddress.disable();
         g_installed = false;
@@ -980,6 +1242,9 @@ namespace iee::game::shader_trace {
         g_boundTextures2D.clear();
         g_currentProgram = 0;
         g_lastLoggedProgram = 0;
+        g_currentFramebuffer = 0;
         g_currentActiveTextureUnit = 0;
+        g_loggedDrawCallsForCurrentProgram = 0;
+        g_suppressedDrawLogsForCurrentProgram = false;
     }
 }

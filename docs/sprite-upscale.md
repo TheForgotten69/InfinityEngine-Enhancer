@@ -45,6 +45,10 @@ Current extracted baseline observations:
   - slot `5` = `vpDraw` + `fpSprite`
   - slot `7` = `vpDraw` + `fpSELECT`
   - slot `8` = `vpDraw` + `fpSEAM`
+- Ghidra-confirmed `DrawCreateProgram_GL` contract:
+  - every GL program gets cached uniform locations for `uTcScale`, `uTex`, `uTex2`, `uColorTone`, `uZoomStrength`, `uTcClamp`, `uScreenHeight`, and `uSpriteBlurAmount`
+  - the cache stride is `0x28`
+  - the engine immediately seeds `uTex = 0` and `uTex2 = 1` on link
 - Ghidra also confirms that shader compile failure is fatal during initialization, which makes startup breakage an immediate signal that a replacement shader is invalid.
 
 Reference material:
@@ -68,12 +72,21 @@ The repo does not currently claim answers to those questions beyond the captured
 
 If live shader behavior is ambiguous, enable DLL shader tracing with `EnableShaderTracing = true` in `InfinityEngine-Enhancer.ini`. The tracer logs shader source hashes and labels, compile/link results, interesting program binds, uniform existence, and runtime updates for `uTcScale` and `uSpriteBlurAmount`.
 
+The tracer now also logs:
+
+- interesting sprite draw calls through `glDrawArrays` and `glDrawElements`
+- framebuffer binds and framebuffer color attachment updates
+
+Those logs are the current path to answer whether a sprite-only offscreen pipeline can be inserted cleanly.
+
 Current runtime conclusion for BGEE `2.6.6.x`:
 
 - the engine does load replacement `fpsprite.glsl` and `fpselect.glsl` files from disk
 - `uTcScale` links successfully on both programs
 - the engine leaves `uTcScale` at `0,0` unless the DLL populates it
 - `fpselect.glsl` is primarily the selected-sprite outline path, not the main sprite-rendering path
+- one-pass EASU-style shader experiments were near-no-op at gameplay zoom even after `uTcScale` injection
+- this repo should treat sprite-FBO exploration as the next serious path, not more shader-file-only tuning
 
 ## Shader Contract Checklist
 
@@ -112,6 +125,7 @@ The current design choices are:
 - Apply a stronger alpha-aware single-pass sharpen on solid sprite texels because runtime delta diagnostics showed the pure one-pass EASU path was too subtle to matter visually at gameplay zoom.
 - Keep sprite alpha and selection-outline semantics conservative rather than chasing aggressive sharpening.
 - Keep `fpselect` outline logic intact and only upscale solid sprite texels.
+- Use the DLL tracer, not Ghidra alone, to answer live draw-boundary and framebuffer questions for a future sprite-only FBO design.
 
 Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to answer two runtime questions quickly:
 
@@ -119,6 +133,8 @@ Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to 
 - Is `uTcScale` non-zero inside `fpsprite` and `fpselect`.
 
 This is intentionally not a claim that full FSR is integrated. It is a gated one-pass sprite experiment.
+
+The repo now also contains enough tracing to pivot to a sprite-FBO prototype once the engine’s draw-boundary and framebuffer behavior are confirmed from logs.
 
 ## Acceptance Criteria
 

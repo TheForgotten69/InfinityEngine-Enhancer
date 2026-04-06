@@ -30,7 +30,7 @@ The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.lo
 
 For sprite-upscale experiments, the main runtime flags are:
 
-- `EnableShaderTracing = true` to log shader compile/link and uniform state
+- `EnableShaderTracing = true` to log shader compile/link, uniform state, interesting sprite draw calls, and framebuffer activity
 - `EnableSpriteTcScaleInjection = true` to populate `uTcScale` for the confirmed `fpsprite` / `fpselect` programs from the bound texture size
 
 ## Development

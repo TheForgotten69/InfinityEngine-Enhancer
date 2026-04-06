@@ -90,6 +90,18 @@ Current local evidence for the target runtime:
 
 - Extracted baseline `fpsprite.glsl` declares `uTex`, `uSpriteBlurAmount`, `vTc`, and `vColor`.
 - Extracted baseline `fpselect.glsl` declares `uTex`, `uSpriteBlurAmount`, `uTcScale`, `vTc`, and `vColor`.
+- Ghidra review of `DrawCreateProgram_GL` confirms the per-program uniform cache layout with stride `0x28`:
+  - `+0x00` program object
+  - `+0x04` `uST`
+  - `+0x08` `uTcScale`
+  - `+0x0C` `uTex`
+  - `+0x10` `uTex2`
+  - `+0x14` `uColorTone`
+  - `+0x18` `uZoomStrength`
+  - `+0x1C` `uTcClamp`
+  - `+0x20` `uScreenHeight`
+  - `+0x24` `uSpriteBlurAmount`
+- The same `DrawCreateProgram_GL` path immediately binds the program and seeds `uTex = 0` and `uTex2 = 1` when present. This makes the cached offsets above the right static-search targets for live setter callsites.
 - Runtime tracing now confirms that replacement `fpsprite.glsl` and `fpselect.glsl` files are compiled from disk for this build.
 - Runtime tracing also confirms that both sprite programs link `uTcScale`, but the engine leaves the live value at `0,0` unless the DLL injects texel scale from the bound texture.
 - `fpselect.glsl` behaves as the selected-sprite outline path; `fpsprite.glsl` remains the primary sprite-rendering path worth tuning for quality.
@@ -99,5 +111,30 @@ Current local evidence for the target runtime:
   - program `8` = `vpDraw` + `fpSEAM`
 - The same `DrawInit_GL` path treats shader compile failure as fatal and shows a message box before exiting, which confirms that direct shader-file replacement is part of the normal startup path.
 - Inference from the same function: there is also a separate `fpCatRom` postprocess program behind `gl.pp.enabled`, but this is not evidence of a sprite-local two-pass path.
+- Ghidra review of `DrawHookUpGLFunctions` confirms the runtime resolves:
+  - shader lifecycle calls such as `glCreateProgram`, `glCreateShader`, `glShaderSource`, `glLinkProgram`, and `glUseProgram`
+  - uniform setters including `glUniform1f`, `glUniform2fv`, and related ARB variants
+  - framebuffer functions including `glGenFramebuffers`, `glBindFramebuffer`, and `glFramebufferTexture2D`
+
+## Current Runtime Trace Workflow
+
+With `EnableShaderTracing = true`, the DLL tracer now logs:
+
+- shader source hashes, labels, and compile/link results
+- uniform existence and current values for `uTcScale`, `uTex`, and `uSpriteBlurAmount`
+- sprite draw calls via `glDrawArrays` and `glDrawElements` for interesting programs
+- framebuffer binds and color attachment updates around interesting programs
+
+That makes the DLL the preferred source of truth for:
+
+- whether `fpSprite` or `fpSELECT` is active for a given scene
+- whether the engine is writing texel-scale or blur uniforms at draw time
+- whether sprite draws already pass through a reusable offscreen framebuffer path
+
+The next static Ghidra targets should therefore be xrefs to the cached `gl.programs` offsets rather than raw uniform strings:
+
+- `+0x00` for program selection and `glUseProgram`
+- `+0x08` for `uTcScale`
+- `+0x24` for `uSpriteBlurAmount`
 
 Until a sprite-local intermediate is proven, treat full two-pass FSR as unsupported and keep sprite-upscale work in the one-pass shader-replacement bucket.
