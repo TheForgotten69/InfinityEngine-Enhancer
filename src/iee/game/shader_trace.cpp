@@ -954,7 +954,7 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
-            g_glDrawArrays(mode, first, count);
+            H_glDrawArrays.original()(mode, first, count);
 
             if (!g_traceEnabled) return;
 
@@ -985,7 +985,7 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
-            g_glDrawElements(mode, count, type, indices);
+            H_glDrawElements.original()(mode, count, type, indices);
 
             if (!g_traceEnabled) return;
 
