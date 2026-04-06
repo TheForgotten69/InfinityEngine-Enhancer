@@ -10,6 +10,7 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/game/game_addrs.h"
 #include "iee/game/renderer.h"
+#include "iee/game/shader_trace.h"
 
 namespace iee {
     static std::unique_ptr<AppContext> g_appContext;
@@ -24,6 +25,10 @@ namespace iee {
             core::init_logger(logPath.string(), cfg.enableVerboseLogging);
 
             LOG_INFO("Infinity Engine Enhancer initializing...");
+
+            if (!game::shader_trace::install(cfg)) {
+                LOG_WARN("ShaderTrace was requested but could not be installed");
+            }
 
             g_appContext = std::make_unique<AppContext>();
             auto &ctx = *g_appContext;
@@ -91,6 +96,7 @@ namespace iee {
             g_appContext->reset_all_state();
             g_appContext.reset();
         }
+        game::shader_trace::uninstall();
     }
 }
 

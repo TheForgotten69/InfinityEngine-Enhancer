@@ -4,6 +4,8 @@
 
 The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one validated BGEE build manifest, and one feature set centered on tile upscaling. The code is structured so additional game/build support is a data expansion exercise, not another rewrite.
 
+There is also an experimental sprite-shader workspace in `shaders/sprite/`. That path is intentionally separate from the supported DLL pipeline. It is for live GLSL replacement experiments against the target game install, not a new runtime subsystem inside the DLL.
+
 ## Runtime Modules
 
 `src/iee/game/build_manifest.*`
@@ -39,6 +41,16 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - `LoadArea` resets area-scoped detection state.
 - `RenderTexture` applies the tile upscale path once scale is known.
 
+`shaders/sprite/runtime_baseline/*`
+
+- Stores captured live `fpsprite.glsl` and `fpselect.glsl` sources from the target runtime.
+- Serves as the immutable reference point for sprite-only experiments.
+
+`shaders/sprite/v1/*`
+
+- Holds the repo-owned working copies for sprite-only upscale experiments.
+- Current design target is a one-pass shader replacement that preserves vanilla sprite behavior and does not require new DLL hooks by default.
+
 ## Build Layout
 
 The CMake graph is split on purpose:
@@ -54,6 +66,8 @@ This keeps reverse-engineering and parsing code testable without requiring a Win
 - Use WSL for code analysis, docs, and host tests.
 - Use Windows or CI for final DLL validation.
 - Unknown or incompatible builds should fail during manifest/address/callsite resolution instead of reaching gameplay with bad hooks.
+- For sprite-shader work, use live shader files and runtime screenshots as the primary validation loop.
+- Do not conflate the tile DLL path with the sprite shader-file path. `CVidTile::RenderTexture` remains the terrain/tile hook, not the entrypoint for sprite v1.
 
 ## Archival Code
 

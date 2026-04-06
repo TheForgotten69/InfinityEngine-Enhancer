@@ -95,6 +95,8 @@ namespace {
             expect_true(static_cast<bool>(out), "Config test fixture should be writable");
             out << "[Core]\n";
             out << "VerboseLogs = true\n\n";
+            out << "EnableShaderTracing = true\n\n";
+            out << "EnableSpriteTcScaleInjection = true\n\n";
             out << "[Rendering]\n";
             out << "EnableAnisotropicFiltering = false\n";
             out << "MaxAnisotropy = 4.0\n";
@@ -107,6 +109,8 @@ namespace {
         iee::core::EngineConfig cfg{};
         expect_true(iee::core::ConfigManager::load(tempPath, cfg), "ConfigManager::load should parse a valid INI");
         expect_true(cfg.enableVerboseLogging, "Verbose logging flag should parse");
+        expect_true(cfg.enableShaderTracing, "Shader tracing flag should parse");
+        expect_true(cfg.enableSpriteTcScaleInjection, "Sprite tc-scale injection flag should parse");
         expect_true(!cfg.enableAnisotropicFiltering, "Rendering bool should parse");
         expect_eq(cfg.maxAnisotropy, 4.0f, "Floating-point values should parse");
         expect_eq(cfg.lodBias, -0.5f, "Negative float values should parse");

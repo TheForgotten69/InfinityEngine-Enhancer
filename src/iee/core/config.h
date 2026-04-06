@@ -12,6 +12,9 @@ namespace iee::core {
 
         // endregion
 
+        bool enableShaderTracing = false;
+        bool enableSpriteTcScaleInjection = false;
+
         // region Cached addresses (auto-generated from pattern scanning)
         std::uintptr_t cachedLoadAreaRVA = 0x27E710;
         std::uintptr_t cachedRenderTextureRVA = 0x4247E0;

@@ -1,4 +1,5 @@
 #pragma once
+#include <mutex>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -8,16 +9,40 @@ namespace iee::core {
     class HookInit {
     public:
         HookInit() {
-            const auto s = MH_Initialize();
-            if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
-                throw std::runtime_error("MinHook initialization failed");
+            std::lock_guard lock(state_mutex());
+            auto &count = ref_count();
+            if (count++ == 0) {
+                const auto s = MH_Initialize();
+                if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
+                    count = 0;
+                    throw std::runtime_error("MinHook initialization failed");
+                }
+            }
         }
 
-        ~HookInit() { MH_Uninitialize(); }
+        ~HookInit() {
+            std::lock_guard lock(state_mutex());
+            auto &count = ref_count();
+            if (count == 0) return;
+            if (--count == 0) {
+                MH_Uninitialize();
+            }
+        }
 
         HookInit(const HookInit &) = delete;
 
         HookInit &operator=(const HookInit &) = delete;
+
+    private:
+        static std::mutex &state_mutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        static int &ref_count() {
+            static int count = 0;
+            return count;
+        }
     };
 
     template<class T>

@@ -71,6 +71,10 @@ namespace iee::core {
         // [Core]
         if (iequals(section, "core")) {
             if (iequals(key, "VerboseLogs")) cfg.enableVerboseLogging = parse_bool(val, cfg.enableVerboseLogging);
+            else if (iequals(key, "EnableShaderTracing"))
+                cfg.enableShaderTracing = parse_bool(val, cfg.enableShaderTracing);
+            else if (iequals(key, "EnableSpriteTcScaleInjection"))
+                cfg.enableSpriteTcScaleInjection = parse_bool(val, cfg.enableSpriteTcScaleInjection);
             return;
         }
 
@@ -173,6 +177,8 @@ namespace iee::core {
 
         write_section(f, "Core");
         write_bool(f, "VerboseLogs", cfg.enableVerboseLogging);
+        write_bool(f, "EnableShaderTracing", cfg.enableShaderTracing);
+        write_bool(f, "EnableSpriteTcScaleInjection", cfg.enableSpriteTcScaleInjection);
 
         write_section(f, "Auto-Generated");
         f << "CachedLoadAreaRVA = 0x" << std::hex << cfg.cachedLoadAreaRVA << std::dec << "\n";

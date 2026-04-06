@@ -28,6 +28,11 @@ Some standard tilesets legitimately have no live header pointer. In those cases 
 
 The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.log` next to the game executable.
 
+For sprite-upscale experiments, the main runtime flags are:
+
+- `EnableShaderTracing = true` to log shader compile/link and uniform state
+- `EnableSpriteTcScaleInjection = true` to populate `uTcScale` for the confirmed `fpsprite` / `fpselect` programs from the bound texture size
+
 ## Development
 
 Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
@@ -46,12 +51,14 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
 - [docs/reverse-engineering.md](docs/reverse-engineering.md)
 - [docs/build-manifests.md](docs/build-manifests.md)
 - [docs/tile-upscale.md](docs/tile-upscale.md)
+- [docs/sprite-upscale.md](docs/sprite-upscale.md)
 - [AGENTS.md](AGENTS.md)
 
 ## Notes
 
 - [shaders/InfinityEngine-Enhancer.cpp](shaders/InfinityEngine-Enhancer.cpp) is archival research code, not the supported runtime path.
 - Build-specific offsets and callsites live in the manifest layer under [src/iee/game/build_manifest.cpp](src/iee/game/build_manifest.cpp).
+- Sprite-upscale experiments live under [shaders/sprite](shaders/sprite) and are kept separate from the supported DLL tile pipeline.
 
 ## License
 

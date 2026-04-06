@@ -61,4 +61,14 @@ $RECYCLE.BIN/
 *.msm
 *.msp
 *.lnk
-shaders/
+shaders/*
+!shaders/InfinityEngine-Enhancer.cpp
+!shaders/sprite/
+shaders/sprite/*
+!shaders/sprite/README.md
+!shaders/sprite/easu_rcas/
+!shaders/sprite/runtime_baseline/
+!shaders/sprite/v1/
+!shaders/sprite/easu_rcas/**
+!shaders/sprite/runtime_baseline/**
+!shaders/sprite/v1/**

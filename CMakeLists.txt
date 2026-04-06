@@ -96,6 +96,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/hooks.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
+        src/iee/game/shader_trace.cpp
     )
 
     target_link_libraries(InfinityEngine-Enhancer

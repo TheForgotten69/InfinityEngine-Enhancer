@@ -7,6 +7,7 @@
 - Ghidra, PDB, and in-game logs can disagree on absolute addresses because of ASLR and function chunking.
 - Treat EEex-documented layouts as authoritative when they match runtime behavior.
 - Treat build-manifest offsets as locally validated runtime facts that may need revalidation per build.
+- Shader-name assumptions are not enough for sprite work. Treat live shader file contents plus runtime evidence as authoritative for shader behavior.
 
 ## Hook Targets
 
@@ -72,3 +73,31 @@ Locally validated for this project/build:
 - `CResTileSet::h` is present for at least the authored 4x path, but can be null for standard tilesets.
 - When `h` is null, the 12-byte PVR entry table in `pData` is still sufficient to classify scale deterministically by scanning the smallest positive `u`/`v` step.
 - The `+0x1DC` flag is kept only for the current seam/linear tone handling path, not for deciding upscale factor.
+
+## Sprite Shader Investigation Targets
+
+For sprite-upscale v1, the reverse-engineering targets are the live `fpsprite.glsl` and `fpselect.glsl` files and the code path that loads them.
+
+Questions to answer with Ghidra and runtime evidence:
+
+- Which loader function maps shader filenames to compiled shader/program objects.
+- Whether `fpsprite.glsl` and `fpselect.glsl` are loaded as standalone files or with preprocessing/includes.
+- Which uniforms are bound for sprite shaders, especially whether `uTcScale` is available to `fpsprite` replacements.
+- Whether sprites ever pass through an existing sprite-local intermediate render target or second programmable pass.
+- How shader compile/link failures surface at runtime.
+
+Current local evidence for the target runtime:
+
+- Extracted baseline `fpsprite.glsl` declares `uTex`, `uSpriteBlurAmount`, `vTc`, and `vColor`.
+- Extracted baseline `fpselect.glsl` declares `uTex`, `uSpriteBlurAmount`, `uTcScale`, `vTc`, and `vColor`.
+- Runtime tracing now confirms that replacement `fpsprite.glsl` and `fpselect.glsl` files are compiled from disk for this build.
+- Runtime tracing also confirms that both sprite programs link `uTcScale`, but the engine leaves the live value at `0,0` unless the DLL injects texel scale from the bound texture.
+- `fpselect.glsl` behaves as the selected-sprite outline path; `fpsprite.glsl` remains the primary sprite-rendering path worth tuning for quality.
+- Ghidra review of `DrawInit_GL` confirms the current shader program mapping:
+  - program `5` = `vpDraw` + `fpSprite`
+  - program `7` = `vpDraw` + `fpSELECT`
+  - program `8` = `vpDraw` + `fpSEAM`
+- The same `DrawInit_GL` path treats shader compile failure as fatal and shows a message box before exiting, which confirms that direct shader-file replacement is part of the normal startup path.
+- Inference from the same function: there is also a separate `fpCatRom` postprocess program behind `gl.pp.enabled`, but this is not evidence of a sprite-local two-pass path.
+
+Until a sprite-local intermediate is proven, treat full two-pass FSR as unsupported and keep sprite-upscale work in the one-pass shader-replacement bucket.

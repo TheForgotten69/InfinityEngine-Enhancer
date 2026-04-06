@@ -34,6 +34,10 @@
   `TIS header -> PVR entry table smallest positive step -> legacy heuristic fallback`
 - `+0x1DC` is only the current linear-tiles tone flag for this build.
 - If you need live runtime facts, add DLL logging. Ghidra is useful for offline layout review but cannot answer live process-state questions on its own.
+- Sprite-upscale v1 is shader-file-first. Start from `fpsprite.glsl` and `fpselect.glsl`, not from new DLL hooks.
+- Sprite-upscale v1 is scoped to character/object sprite shaders only. `fpseam`, terrain, tile post-filters, UI, and non-sprite shaders are out of scope.
+- A true two-pass FSR path is forbidden unless an existing sprite-local intermediate pass is proven from live runtime behavior.
+- The current sprite-quality baseline to beat is sprite-only Catmull-Rom plus light sharpening, as demonstrated by external shader-pack work.
 
 ## Repo Layout
 
@@ -41,6 +45,9 @@
 - `src/iee/game/tis_runtime.*` holds explicit runtime views.
 - `src/iee/game/tile_upscale.*` holds scale selection logic.
 - `docs/` contains the architecture and reverse-engineering notes future agents should read first.
+- `shaders/sprite/runtime_baseline/` holds captured live sprite shader sources from the target runtime.
+- `shaders/sprite/v1/` holds the repo-owned working copies for sprite-upscale experiments.
+- `shaders/sprite/easu_rcas/` holds reference FSR shader material, not a proven drop-in runtime path.
 - `shaders/InfinityEngine-Enhancer.cpp` is archival research code only.
 
 ## Done Means
