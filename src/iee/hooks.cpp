@@ -4,6 +4,7 @@
 #include "iee/core/logger.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
+#include "iee/game/shader_trace.h"
 #include "iee/game/tile_upscale.h"
 #include "iee/game/tis_runtime.h"
 #include "iee/core/pattern_scanner.h"
@@ -148,6 +149,7 @@ namespace iee::hooks {
 
         // Reset thread-local cache for new area
         reset_thread_local_cache();
+        game::shader_trace::reset_runtime_capture("load-area");
 
         // Re-enable RenderTexture hook for new area detection
         if (!ctx.isRenderHookActive) {

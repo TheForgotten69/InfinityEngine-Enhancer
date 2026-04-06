@@ -123,7 +123,10 @@ With `EnableShaderTracing = true`, the DLL tracer now logs:
 - shader source hashes, labels, and compile/link results
 - uniform existence and current values for `uTcScale`, `uTex`, and `uSpriteBlurAmount`
 - sprite draw calls via `glDrawArrays` and `glDrawElements` for interesting programs
+- engine-side batch geometry through the resolved `DrawBegin`, `DrawBindTexture`, `DrawTexCoord`, `DrawVertex`, and `DrawEnd` wrappers
 - framebuffer binds and color attachment updates around interesting programs
+- compact runtime summaries keyed by `{program, framebuffer, engineTexId}`
+- an automatic runtime-summary reset on each `LoadArea`
 
 That makes the DLL the preferred source of truth for:
 
@@ -136,5 +139,28 @@ The next static Ghidra targets should therefore be xrefs to the cached `gl.progr
 - `+0x00` for program selection and `glUseProgram`
 - `+0x08` for `uTcScale`
 - `+0x24` for `uSpriteBlurAmount`
+
+Current live-trace gap:
+
+- startup `DrawInit_GL` mapping proves slot `5 = fpSprite` and `7 = fpSELECT`, but current gameplay traces are dominated by runtime `program 3`, `18`, and `24`
+- there is no observed gameplay framebuffer transition away from `framebuffer 0` in the captured scene
+- until the live actor body path is identified from the summarized runtime trace, do not assume the startup slot mapping is the active sprite-rendering path
+
+Current live-trace conclusion:
+
+- a loud `fpDraw` shader probe visibly affects actor bodies, which confirms that the live actor-body path runs through the generic `fpDraw` family rather than through startup `fpSprite`/`fpSELECT` alone
+- the same probe also affects non-sprite scene content, so `fpDraw` is a valid routing probe but not a safe sprite-only implementation point
+- RenderTexture-resolved engine draw-batch hooks are not sufficient to isolate the in-world actor body path in this build
+- when runtime summaries narrow the search to a small `{program, engineTexId}` set, use the batch-highlight probe to tint exactly one pair magenta and verify whether it is the actor body path
+- if a matched batch never changes color on screen, use the batch-suppress probe on the same pair to distinguish “wrong pair” from “color override ineffective”
+- when one texture ID still covers too much scene content, use the batch suppress screen-size bounds to target actor-like quads instead of the whole texture bucket
+- when actor-like size buckets still hit bottom-screen portraits or UI, add center-position bounds so the probe only suppresses in-world batches around the actor
+- if the RenderTexture-resolved engine draw wrappers never affect the in-world actor, use a raw GL program suppress probe instead; the `fpDraw` shader replacement already proves that raw GL layer does see the actor
+- raw GL program suppress results for BGEE `2.6.6.x`:
+  - `program 3` removes UI and in-world actors while leaving the map visible
+  - `program 18` removes font/text
+  - `program 24` removes map rendering while leaving actors and UI visible
+- therefore raw GL `program 3` is the first confirmed coarse entrypoint for actor-body work, but it is too broad on its own because it also carries UI
+- the next useful discriminator must separate in-world actor draws from UI draws within raw GL `program 3`, rather than searching for a different top-level shader program
 
 Until a sprite-local intermediate is proven, treat full two-pass FSR as unsupported and keep sprite-upscale work in the one-pass shader-replacement bucket.

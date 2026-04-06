@@ -39,6 +39,16 @@ namespace iee::core {
         try { return std::stof(s); } catch (...) { return def; }
     }
 
+    static int parse_int(const std::string &s, int def) {
+        try {
+            std::size_t consumed = 0;
+            const auto value = std::stoi(trim(s), &consumed, 0);
+            return consumed > 0 ? value : def;
+        } catch (...) {
+            return def;
+        }
+    }
+
     static std::optional<std::uint32_t> parse_u32_dec_or_hex(std::string s) {
         s = trim(std::move(s));
         if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
@@ -75,6 +85,34 @@ namespace iee::core {
                 cfg.enableShaderTracing = parse_bool(val, cfg.enableShaderTracing);
             else if (iequals(key, "EnableSpriteTcScaleInjection"))
                 cfg.enableSpriteTcScaleInjection = parse_bool(val, cfg.enableSpriteTcScaleInjection);
+            else if (iequals(key, "EnableBatchHighlightProbe"))
+                cfg.enableBatchHighlightProbe = parse_bool(val, cfg.enableBatchHighlightProbe);
+            else if (iequals(key, "EnableBatchSuppressProbe"))
+                cfg.enableBatchSuppressProbe = parse_bool(val, cfg.enableBatchSuppressProbe);
+            else if (iequals(key, "EnableGlProgramSuppressProbe"))
+                cfg.enableGlProgramSuppressProbe = parse_bool(val, cfg.enableGlProgramSuppressProbe);
+            else if (iequals(key, "BatchHighlightProgram"))
+                cfg.batchHighlightProgram = parse_int(val, cfg.batchHighlightProgram);
+            else if (iequals(key, "BatchHighlightTextureId"))
+                cfg.batchHighlightTextureId = parse_int(val, cfg.batchHighlightTextureId);
+            else if (iequals(key, "BatchSuppressMinScreenWidth"))
+                cfg.batchSuppressMinScreenWidth = parse_int(val, cfg.batchSuppressMinScreenWidth);
+            else if (iequals(key, "BatchSuppressMaxScreenWidth"))
+                cfg.batchSuppressMaxScreenWidth = parse_int(val, cfg.batchSuppressMaxScreenWidth);
+            else if (iequals(key, "BatchSuppressMinScreenHeight"))
+                cfg.batchSuppressMinScreenHeight = parse_int(val, cfg.batchSuppressMinScreenHeight);
+            else if (iequals(key, "BatchSuppressMaxScreenHeight"))
+                cfg.batchSuppressMaxScreenHeight = parse_int(val, cfg.batchSuppressMaxScreenHeight);
+            else if (iequals(key, "BatchSuppressMinCenterX"))
+                cfg.batchSuppressMinCenterX = parse_int(val, cfg.batchSuppressMinCenterX);
+            else if (iequals(key, "BatchSuppressMaxCenterX"))
+                cfg.batchSuppressMaxCenterX = parse_int(val, cfg.batchSuppressMaxCenterX);
+            else if (iequals(key, "BatchSuppressMinCenterY"))
+                cfg.batchSuppressMinCenterY = parse_int(val, cfg.batchSuppressMinCenterY);
+            else if (iequals(key, "BatchSuppressMaxCenterY"))
+                cfg.batchSuppressMaxCenterY = parse_int(val, cfg.batchSuppressMaxCenterY);
+            else if (iequals(key, "GlProgramSuppress"))
+                cfg.glProgramSuppress = parse_int(val, cfg.glProgramSuppress);
             return;
         }
 
@@ -179,6 +217,20 @@ namespace iee::core {
         write_bool(f, "VerboseLogs", cfg.enableVerboseLogging);
         write_bool(f, "EnableShaderTracing", cfg.enableShaderTracing);
         write_bool(f, "EnableSpriteTcScaleInjection", cfg.enableSpriteTcScaleInjection);
+        write_bool(f, "EnableBatchHighlightProbe", cfg.enableBatchHighlightProbe);
+        write_bool(f, "EnableBatchSuppressProbe", cfg.enableBatchSuppressProbe);
+        write_bool(f, "EnableGlProgramSuppressProbe", cfg.enableGlProgramSuppressProbe);
+        f << "BatchHighlightProgram = " << cfg.batchHighlightProgram << "\n";
+        f << "BatchHighlightTextureId = " << cfg.batchHighlightTextureId << "\n";
+        f << "BatchSuppressMinScreenWidth = " << cfg.batchSuppressMinScreenWidth << "\n";
+        f << "BatchSuppressMaxScreenWidth = " << cfg.batchSuppressMaxScreenWidth << "\n";
+        f << "BatchSuppressMinScreenHeight = " << cfg.batchSuppressMinScreenHeight << "\n";
+        f << "BatchSuppressMaxScreenHeight = " << cfg.batchSuppressMaxScreenHeight << "\n";
+        f << "BatchSuppressMinCenterX = " << cfg.batchSuppressMinCenterX << "\n";
+        f << "BatchSuppressMaxCenterX = " << cfg.batchSuppressMaxCenterX << "\n";
+        f << "BatchSuppressMinCenterY = " << cfg.batchSuppressMinCenterY << "\n";
+        f << "BatchSuppressMaxCenterY = " << cfg.batchSuppressMaxCenterY << "\n";
+        f << "GlProgramSuppress = " << cfg.glProgramSuppress << "\n";
 
         write_section(f, "Auto-Generated");
         f << "CachedLoadAreaRVA = 0x" << std::hex << cfg.cachedLoadAreaRVA << std::dec << "\n";

@@ -75,7 +75,12 @@ If live shader behavior is ambiguous, enable DLL shader tracing with `EnableShad
 The tracer now also logs:
 
 - interesting sprite draw calls through `glDrawArrays` and `glDrawElements`
+- engine-side batch geometry through the resolved `DrawBegin`, `DrawBindTexture`, `DrawTexCoord`, `DrawVertex`, and `DrawEnd` wrappers
 - framebuffer binds and framebuffer color attachment updates
+- compact runtime summaries keyed by `{program, framebuffer, engineTexId}`
+- automatic runtime-summary reset on each `LoadArea`
+- an optional magenta batch-highlight probe keyed by one `{program, engineTexId}` pair
+- an optional batch-suppress probe keyed by one `{program, engineTexId}` pair
 
 Those logs are the current path to answer whether a sprite-only offscreen pipeline can be inserted cleanly.
 
@@ -86,6 +91,16 @@ Current runtime conclusion for BGEE `2.6.6.x`:
 - the engine leaves `uTcScale` at `0,0` unless the DLL populates it
 - `fpselect.glsl` is primarily the selected-sprite outline path, not the main sprite-rendering path
 - one-pass EASU-style shader experiments were near-no-op at gameplay zoom even after `uTcScale` injection
+- startup program mapping alone is not sufficient to identify the live sprite body path during gameplay
+- current gameplay traces show active draw traffic on `program 3`, `18`, and `24` on `framebuffer 0`, while startup-confirmed `fpsprite`/`fpselect` programs `15` and `21` do not reappear in the captured runtime window
+- a loud `fpDraw` probe visibly affects actor bodies, which confirms that live actor-body rendering goes through the generic `fpDraw` path
+- the same `fpDraw` probe also affects non-sprite scene content, so `fpDraw.glsl` is a good routing probe but a bad feature implementation point for sprite-only quality work
+- raw GL program suppression produced the first reliable coarse role map:
+  - `program 3` removes UI and in-world actors while leaving the map visible
+  - `program 18` removes font/text
+  - `program 24` removes map rendering while leaving actors and UI visible
+- therefore the real actor body path is on raw GL `program 3`, but `program 3` is still too broad to use directly because it also carries UI
+- the RenderTexture-resolved engine draw wrappers are not a sufficient interception point for actor-body work in this build
 - this repo should treat sprite-FBO exploration as the next serious path, not more shader-file-only tuning
 
 ## Shader Contract Checklist
@@ -126,6 +141,7 @@ The current design choices are:
 - Keep sprite alpha and selection-outline semantics conservative rather than chasing aggressive sharpening.
 - Keep `fpselect` outline logic intact and only upscale solid sprite texels.
 - Use the DLL tracer, not Ghidra alone, to answer live draw-boundary and framebuffer questions for a future sprite-only FBO design.
+- Treat `fpDraw.glsl` as the confirmed live routing probe for actor bodies, but keep actual feature work out of raw `fpDraw` replacement because its scope is broader than sprites.
 
 Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to answer two runtime questions quickly:
 
@@ -135,6 +151,29 @@ Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to 
 This is intentionally not a claim that full FSR is integrated. It is a gated one-pass sprite experiment.
 
 The repo now also contains enough tracing to pivot to a sprite-FBO prototype once the engine’s draw-boundary and framebuffer behavior are confirmed from logs.
+
+Current recommendation after the `fpDraw` routing probe:
+
+- do not ship a global `fpDraw` FSR pass
+- do not keep spending time on `fpsprite`/`fpselect` as if they were the main body path
+- do not use RenderTexture-resolved engine wrappers as the primary actor interception point for this build; they miss the in-world actor body path
+- move the real implementation toward DLL-side filtering on raw GL `program 3`, with additional discrimination to exclude UI before any upscale or sharpen filter is applied
+
+Targeted runtime confirmation:
+
+- when a candidate `{program, engineTexId}` pair looks actor-like but is not yet proven, enable the batch-highlight probe and set `BatchHighlightProgram` plus `BatchHighlightTextureId`
+- the probe forces those batches to render in magenta through the engine draw-color wrapper and restores the previous color at `DrawEnd`
+- use it as a routing proof only; it is not a feature path
+- if the magenta probe logs matches but nothing visible changes, enable the batch-suppress probe for the same pair
+- suppression is the stronger proof: if the actor disappears, the pair is correct and the color override path is simply ineffective for those textured draws
+- if texture IDs are still too broad, add screen-size bounds to the suppress probe and target actor-sized batches directly
+- if those still hit UI or portraits, add center-position bounds so the suppress probe only targets in-world batches near the actor
+- if the RenderTexture-resolved engine wrappers still do not affect the in-world sprite, pivot to raw `glDrawArrays`/`glDrawElements` suppression keyed by the active program
+- raw GL suppression is now proven to be the correct coarse layer for role discovery:
+  - `program 3` is the mixed actor/UI path
+  - `program 18` is text
+  - `program 24` is map/background
+- the next discriminator therefore has to split actor draws from UI draws within raw `program 3`
 
 ## Acceptance Criteria
 

@@ -14,6 +14,20 @@ namespace iee::core {
 
         bool enableShaderTracing = false;
         bool enableSpriteTcScaleInjection = false;
+        bool enableBatchHighlightProbe = false;
+        bool enableBatchSuppressProbe = false;
+        bool enableGlProgramSuppressProbe = false;
+        int batchHighlightProgram = 0;
+        int batchHighlightTextureId = -1;
+        int batchSuppressMinScreenWidth = 0;
+        int batchSuppressMaxScreenWidth = 0;
+        int batchSuppressMinScreenHeight = 0;
+        int batchSuppressMaxScreenHeight = 0;
+        int batchSuppressMinCenterX = -1;
+        int batchSuppressMaxCenterX = -1;
+        int batchSuppressMinCenterY = -1;
+        int batchSuppressMaxCenterY = -1;
+        int glProgramSuppress = 0;
 
         // region Cached addresses (auto-generated from pattern scanning)
         std::uintptr_t cachedLoadAreaRVA = 0x27E710;

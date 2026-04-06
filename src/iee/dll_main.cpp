@@ -73,6 +73,10 @@ namespace iee {
                 return 1;
             }
 
+            if (!game::shader_trace::attach_draw_api(ctx.draw) && cfg.enableShaderTracing) {
+                LOG_WARN("ShaderTrace could not attach to DrawBegin/DrawBindTexture/DrawTexCoord/DrawVertex/DrawEnd");
+            }
+
             if (!hooks::install_all(ctx)) {
                 LOG_ERROR("Failed to install hooks");
                 return 1;

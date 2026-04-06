@@ -2,10 +2,12 @@
 
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
+#include "renderer.h"
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -104,25 +106,145 @@ namespace iee::game::shader_trace {
             GLuint lastInjectedTexture{};
         };
 
+        struct RuntimeSummaryKey {
+            GLuint program{};
+            GLuint framebuffer{};
+            int engineTextureId{-1};
+
+            bool operator==(const RuntimeSummaryKey &other) const noexcept {
+                return program == other.program &&
+                       framebuffer == other.framebuffer &&
+                       engineTextureId == other.engineTextureId;
+            }
+        };
+
+        struct RuntimeSummaryKeyHash {
+            std::size_t operator()(const RuntimeSummaryKey &key) const noexcept {
+                auto hash = static_cast<std::size_t>(key.program);
+                hash ^= static_cast<std::size_t>(key.framebuffer) << 1;
+                hash ^= static_cast<std::size_t>(static_cast<std::uint32_t>(key.engineTextureId)) << 2;
+                return hash;
+            }
+        };
+
+        struct RuntimeSummaryValue {
+            std::string label;
+            std::size_t drawArrays{};
+            std::size_t drawElements{};
+            std::size_t drawEnds{};
+            GLint samplerUnit{-1};
+            GLuint texture{};
+            std::size_t lastLoggedTotal{};
+        };
+
+        struct BatchAggregateKey {
+            GLuint program{};
+            int engineTextureId{-1};
+            int mode{};
+
+            bool operator==(const BatchAggregateKey &other) const noexcept {
+                return program == other.program &&
+                       engineTextureId == other.engineTextureId &&
+                       mode == other.mode;
+            }
+        };
+
+        struct BatchAggregateKeyHash {
+            std::size_t operator()(const BatchAggregateKey &key) const noexcept {
+                auto hash = static_cast<std::size_t>(key.program);
+                hash ^= static_cast<std::size_t>(static_cast<std::uint32_t>(key.engineTextureId)) << 1;
+                hash ^= static_cast<std::size_t>(static_cast<std::uint32_t>(key.mode)) << 2;
+                return hash;
+            }
+        };
+
+        struct BatchCapture {
+            bool active{};
+            bool highlightApplied{};
+            GLuint program{};
+            std::string label;
+            GLuint framebuffer{};
+            int engineTextureId{-1};
+            int mode{};
+            unsigned long savedColor{};
+            std::size_t texCoordCount{};
+            std::size_t vertexCount{};
+            bool hasVertexBounds{};
+            bool hasUvBounds{};
+            int minX{};
+            int maxX{};
+            int minY{};
+            int maxY{};
+            int minU{};
+            int maxU{};
+            int minV{};
+            int maxV{};
+        };
+
+        struct BatchAggregateValue {
+            std::string label;
+            std::size_t batchCount{};
+            std::size_t minVertexCount{std::numeric_limits<std::size_t>::max()};
+            std::size_t maxVertexCount{};
+            int minScreenWidth{std::numeric_limits<int>::max()};
+            int maxScreenWidth{};
+            int minScreenHeight{std::numeric_limits<int>::max()};
+            int maxScreenHeight{};
+            int minUvWidth{std::numeric_limits<int>::max()};
+            int maxUvWidth{};
+            int minUvHeight{std::numeric_limits<int>::max()};
+            int maxUvHeight{};
+            std::size_t lastLoggedBatchCount{};
+        };
+
         core::Hook<Fn_glBindTexture> H_glBindTexture;
         core::Hook<Fn_glDrawArrays> H_glDrawArrays;
         core::Hook<Fn_glDrawElements> H_glDrawElements;
         core::Hook<Fn_wglGetProcAddress> H_wglGetProcAddress;
+        core::Hook<DrawApi::DrawBegin_t> H_DrawBeginApi;
+        core::Hook<DrawApi::DrawBindTexture_t> H_DrawBindTextureApi;
+        core::Hook<DrawApi::DrawTexCoord_t> H_DrawTexCoordApi;
+        core::Hook<DrawApi::DrawVertex_t> H_DrawVertexApi;
+        core::Hook<DrawApi::DrawEnd_t> H_DrawEndApi;
 
         std::mutex g_mutex;
         std::unordered_map<GLuint, ShaderRecord> g_shaders;
         std::unordered_map<GLuint, ProgramRecord> g_programs;
         std::unordered_map<GLint, GLuint> g_boundTextures2D;
+        std::unordered_map<RuntimeSummaryKey, RuntimeSummaryValue, RuntimeSummaryKeyHash> g_runtimeSummaries;
+        std::unordered_map<BatchAggregateKey, BatchAggregateValue, BatchAggregateKeyHash> g_batchAggregates;
         GLuint g_currentProgram = 0;
         GLuint g_lastLoggedProgram = 0;
         GLuint g_currentFramebuffer = 0;
         GLint g_currentActiveTextureUnit = 0;
         std::size_t g_loggedDrawCallsForCurrentProgram = 0;
         bool g_suppressedDrawLogsForCurrentProgram = false;
+        std::size_t g_loggedDrawEndsForCurrentProgram = 0;
+        bool g_suppressedDrawEndLogsForCurrentProgram = false;
+        int g_lastEngineTextureId = -1;
         bool g_traceEnabled = false;
         bool g_tcScaleInjectionEnabled = false;
+        bool g_batchHighlightEnabled = false;
+        bool g_batchSuppressEnabled = false;
+        bool g_glProgramSuppressEnabled = false;
         bool g_enabled = false;
         bool g_installed = false;
+        bool g_drawApiAttached = false;
+        BatchCapture g_currentBatch;
+        GLuint g_batchHighlightProgram = 0;
+        int g_batchHighlightTextureId = -1;
+        int g_batchSuppressMinScreenWidth = 0;
+        int g_batchSuppressMaxScreenWidth = 0;
+        int g_batchSuppressMinScreenHeight = 0;
+        int g_batchSuppressMaxScreenHeight = 0;
+        int g_batchSuppressMinCenterX = -1;
+        int g_batchSuppressMaxCenterX = -1;
+        int g_batchSuppressMinCenterY = -1;
+        int g_batchSuppressMaxCenterY = -1;
+        GLuint g_glProgramSuppress = 0;
+        DrawApi::DrawColor_t g_drawColorApi{};
+
+        constexpr unsigned long kBatchHighlightColor = 0xFFFF00FF;
 
         Fn_glBindTexture g_glBindTexture{};
         Fn_glCreateShader g_glCreateShader{};
@@ -264,16 +386,26 @@ namespace iee::game::shader_trace {
         }
 
         std::string classify_shader_label(const ShaderRecord &record, std::string_view source) {
+            if (contains(source, "ieeDiagFpdrawPathProbeMarker")) return "fpdraw-path-probe";
             if (contains(source, "ieeDiagFpspriteEasuDeltaMarker")) return "fpsprite-easu-delta";
             if (contains(source, "ieeDiagFpselectEasuDeltaMarker")) return "fpselect-easu-delta";
             if (contains(source, "ieeProbeFpspriteMarker")) return "fpsprite-probe";
             if (contains(source, "ieeProbeFpselectMarker")) return "fpselect-probe";
             if (contains(source, "ieeV1FpspriteMarker")) return "fpsprite-v1";
             if (contains(source, "ieeV1FpselectMarker")) return "fpselect-v1";
+            if (contains(source, "IEE_DIAG_FPDRAW_PATH_PROBE")) return "fpdraw-path-probe";
             if (contains(source, "IEE_DIAG_FPSPRITE_PROBE")) return "fpsprite-probe";
             if (contains(source, "IEE_DIAG_FPSELECT_PROBE")) return "fpselect-probe";
             if (contains(source, "IEE_V1_FPSPRITE")) return "fpsprite-v1";
             if (contains(source, "IEE_V1_FPSELECT")) return "fpselect-v1";
+            if (contains(source, "fpdraw.glsl")) return "fpdraw-like";
+            if (contains(source, "fptone.glsl")) return "fptone-like";
+            if (contains(source, "fpyuvgry.glsl")) return "fpyuvgry-like";
+            if (contains(source, "fpyuv.glsl")) return "fpyuv-like";
+            if (contains(source, "fpfont.glsl")) return "fpfont-like";
+            if (contains(source, "fpseam.glsl")) return "fpseam-like";
+            if (contains(source, "fpsprite.glsl")) return "fpsprite-like";
+            if (contains(source, "fpselect.glsl")) return "fpselect-like";
             if (record.type == GL_FRAGMENT_SHADER && record.hasSolidThreshold) return "fpselect-like";
             if (record.type == GL_FRAGMENT_SHADER && record.hasBlurAmount) return "fpsprite-like";
             if (record.type == GL_VERTEX_SHADER) return "vpdraw-like";
@@ -282,7 +414,8 @@ namespace iee::game::shader_trace {
         }
 
         bool is_interesting_label(std::string_view label) {
-            return contains(label, "sprite") || contains(label, "select") || contains(label, "seam");
+            return contains(label, "sprite") || contains(label, "select") || contains(label, "seam") || contains(
+                       label, "fpdraw");
         }
 
         bool is_tcscale_injectable_label(std::string_view label) {
@@ -321,10 +454,19 @@ namespace iee::game::shader_trace {
             std::string label;
             bool interesting{};
             GLuint framebuffer{};
+            int engineTextureId{-1};
             GLint samplerUnit{-1};
             GLuint texture{};
             std::size_t loggedDrawCalls{};
             bool suppressedDrawLogs{};
+        };
+
+        struct EngineBatchSnapshot {
+            GLuint program{};
+            std::string label;
+            bool interesting{};
+            GLuint framebuffer{};
+            int engineTextureId{-1};
         };
 
         GLint uniform_location_by_name(const ProgramRecord &record, std::string_view name) {
@@ -365,30 +507,300 @@ namespace iee::game::shader_trace {
 
         std::optional<DrawCallSnapshot> snapshot_current_draw_call() {
             std::lock_guard lock(g_mutex);
-            const auto programIt = g_programs.find(g_currentProgram);
-            if (programIt == g_programs.end()) return std::nullopt;
-
             DrawCallSnapshot snapshot;
             snapshot.program = g_currentProgram;
-            snapshot.label = programIt->second.label;
-            snapshot.interesting = programIt->second.interesting;
             snapshot.framebuffer = g_currentFramebuffer;
+            snapshot.engineTextureId = g_lastEngineTextureId;
             snapshot.loggedDrawCalls = g_loggedDrawCallsForCurrentProgram;
             snapshot.suppressedDrawLogs = g_suppressedDrawLogsForCurrentProgram;
 
-            for (const auto &[location, name]: programIt->second.uniformNames) {
-                if (name != "uTex") continue;
-                if (!ensure_proc(g_glGetUniformiv, "glGetUniformiv")) break;
-                GLint samplerUnit = 0;
-                g_glGetUniformiv(g_currentProgram, location, &samplerUnit);
-                snapshot.samplerUnit = samplerUnit;
-                const auto textureIt = g_boundTextures2D.find(samplerUnit);
-                if (textureIt != g_boundTextures2D.end()) {
-                    snapshot.texture = textureIt->second;
+            const auto programIt = g_programs.find(g_currentProgram);
+            if (programIt != g_programs.end()) {
+                snapshot.label = programIt->second.label;
+                snapshot.interesting = programIt->second.interesting;
+
+                for (const auto &[location, name]: programIt->second.uniformNames) {
+                    if (name != "uTex") continue;
+                    if (!ensure_proc(g_glGetUniformiv, "glGetUniformiv")) break;
+                    GLint samplerUnit = 0;
+                    g_glGetUniformiv(g_currentProgram, location, &samplerUnit);
+                    snapshot.samplerUnit = samplerUnit;
+                    const auto textureIt = g_boundTextures2D.find(samplerUnit);
+                    if (textureIt != g_boundTextures2D.end()) {
+                        snapshot.texture = textureIt->second;
+                    }
+                    break;
                 }
-                break;
+            } else {
+                snapshot.label = g_currentProgram == 0 ? "program-0" : "untracked";
+                snapshot.interesting = false;
             }
 
+            return snapshot;
+        }
+
+        bool should_emit_runtime_summary(std::size_t total, std::size_t lastLoggedTotal) noexcept {
+            if (total <= lastLoggedTotal) return false;
+            return total == 1 || total == 4 || total == 16 || (total % 64) == 0;
+        }
+
+        void reset_batch_capture(BatchCapture &capture) noexcept {
+            capture = BatchCapture{};
+        }
+
+        void update_int_bounds(bool &hasBounds, int value, int &minValue, int &maxValue) noexcept {
+            if (!hasBounds) {
+                hasBounds = true;
+                minValue = value;
+                maxValue = value;
+                return;
+            }
+
+            minValue = std::min(minValue, value);
+            maxValue = std::max(maxValue, value);
+        }
+
+        void update_2d_bounds(bool &hasBounds,
+                              int x,
+                              int y,
+                              int &minX,
+                              int &maxX,
+                              int &minY,
+                              int &maxY) noexcept {
+            if (!hasBounds) {
+                hasBounds = true;
+                minX = maxX = x;
+                minY = maxY = y;
+                return;
+            }
+
+            minX = std::min(minX, x);
+            maxX = std::max(maxX, x);
+            minY = std::min(minY, y);
+            maxY = std::max(maxY, y);
+        }
+
+        void maybe_highlight_current_batch() {
+            if (!g_batchHighlightEnabled || !g_drawColorApi) return;
+
+            std::string label;
+            int engineTextureId = -1;
+            GLuint program = 0;
+            unsigned long savedColor = 0;
+
+            {
+                std::lock_guard lock(g_mutex);
+                if (!g_currentBatch.active || g_currentBatch.highlightApplied) return;
+                if (g_currentBatch.program != g_batchHighlightProgram) return;
+                if (g_currentBatch.engineTextureId != g_batchHighlightTextureId) return;
+
+                label = g_currentBatch.label;
+                engineTextureId = g_currentBatch.engineTextureId;
+                program = g_currentBatch.program;
+            }
+
+            savedColor = g_drawColorApi(kBatchHighlightColor);
+
+            {
+                std::lock_guard lock(g_mutex);
+                if (!g_currentBatch.active || g_currentBatch.highlightApplied) {
+                    g_drawColorApi(savedColor);
+                    return;
+                }
+                if (g_currentBatch.program != program || g_currentBatch.engineTextureId != engineTextureId) {
+                    g_drawColorApi(savedColor);
+                    return;
+                }
+
+                g_currentBatch.highlightApplied = true;
+                g_currentBatch.savedColor = savedColor;
+            }
+
+            LOG_INFO("ShaderTrace highlightedBatch program={} label={} engineTexId={} color=0x{:08X}",
+                     program,
+                     label,
+                     engineTextureId,
+                     kBatchHighlightColor);
+        }
+
+        bool should_suppress_batch(const BatchCapture &capture) noexcept {
+            if (!g_batchSuppressEnabled) return false;
+            if (!capture.active || capture.program != g_batchHighlightProgram) return false;
+            if (g_batchHighlightTextureId >= 0 && capture.engineTextureId != g_batchHighlightTextureId) return false;
+            if (!capture.hasVertexBounds) return false;
+
+            const auto screenWidth = capture.maxX - capture.minX;
+            const auto screenHeight = capture.maxY - capture.minY;
+            const auto centerX = (capture.minX + capture.maxX) / 2;
+            const auto centerY = (capture.minY + capture.maxY) / 2;
+
+            if (g_batchSuppressMinScreenWidth > 0 && screenWidth < g_batchSuppressMinScreenWidth) return false;
+            if (g_batchSuppressMaxScreenWidth > 0 && screenWidth > g_batchSuppressMaxScreenWidth) return false;
+            if (g_batchSuppressMinScreenHeight > 0 && screenHeight < g_batchSuppressMinScreenHeight) return false;
+            if (g_batchSuppressMaxScreenHeight > 0 && screenHeight > g_batchSuppressMaxScreenHeight) return false;
+            if (g_batchSuppressMinCenterX >= 0 && centerX < g_batchSuppressMinCenterX) return false;
+            if (g_batchSuppressMaxCenterX >= 0 && centerX > g_batchSuppressMaxCenterX) return false;
+            if (g_batchSuppressMinCenterY >= 0 && centerY < g_batchSuppressMinCenterY) return false;
+            if (g_batchSuppressMaxCenterY >= 0 && centerY > g_batchSuppressMaxCenterY) return false;
+
+            return true;
+        }
+
+        void record_runtime_summary(const DrawCallSnapshot &snapshot, bool drawElements) {
+            if (!g_traceEnabled) return;
+            if (snapshot.program == 0) return;
+
+            RuntimeSummaryValue value;
+            {
+                std::lock_guard lock(g_mutex);
+                auto &summary = g_runtimeSummaries[RuntimeSummaryKey{
+                    snapshot.program,
+                    snapshot.framebuffer,
+                    snapshot.engineTextureId,
+                }];
+
+                if (summary.label.empty()) summary.label = snapshot.label;
+                summary.samplerUnit = snapshot.samplerUnit;
+                summary.texture = snapshot.texture;
+                if (drawElements) {
+                    ++summary.drawElements;
+                } else {
+                    ++summary.drawArrays;
+                }
+
+                const auto total = summary.drawArrays + summary.drawElements + summary.drawEnds;
+                if (!should_emit_runtime_summary(total, summary.lastLoggedTotal)) return;
+                summary.lastLoggedTotal = total;
+                value = summary;
+            }
+
+            LOG_INFO(
+                "ShaderTrace runtimeSummary program={} label={} framebuffer={} engineTexId={} drawArrays={} drawElements={} drawEnds={} samplerUnit={} texture={}",
+                snapshot.program,
+                snapshot.label,
+                snapshot.framebuffer,
+                snapshot.engineTextureId,
+                value.drawArrays,
+                value.drawElements,
+                value.drawEnds,
+                value.samplerUnit,
+                value.texture);
+        }
+
+        bool should_suppress_gl_program(const DrawCallSnapshot &snapshot) noexcept {
+            return g_glProgramSuppressEnabled && snapshot.program == g_glProgramSuppress;
+        }
+
+        void record_runtime_summary(const EngineBatchSnapshot &snapshot) {
+            if (!g_traceEnabled) return;
+            if (snapshot.program == 0) return;
+
+            RuntimeSummaryValue value;
+            {
+                std::lock_guard lock(g_mutex);
+                auto &summary = g_runtimeSummaries[RuntimeSummaryKey{
+                    snapshot.program,
+                    snapshot.framebuffer,
+                    snapshot.engineTextureId,
+                }];
+
+                if (summary.label.empty()) summary.label = snapshot.label;
+                ++summary.drawEnds;
+
+                const auto total = summary.drawArrays + summary.drawElements + summary.drawEnds;
+                if (!should_emit_runtime_summary(total, summary.lastLoggedTotal)) return;
+                summary.lastLoggedTotal = total;
+                value = summary;
+            }
+
+            LOG_INFO(
+                "ShaderTrace runtimeSummary program={} label={} framebuffer={} engineTexId={} drawArrays={} drawElements={} drawEnds={} samplerUnit={} texture={}",
+                snapshot.program,
+                snapshot.label,
+                snapshot.framebuffer,
+                snapshot.engineTextureId,
+                value.drawArrays,
+                value.drawElements,
+                value.drawEnds,
+                value.samplerUnit,
+                value.texture);
+        }
+
+        void record_batch_aggregate(const BatchCapture &capture) {
+            if (!g_traceEnabled || !capture.active) return;
+            if (capture.program == 0 || capture.engineTextureId < 0) return;
+
+            const auto screenWidth = capture.hasVertexBounds ? capture.maxX - capture.minX : 0;
+            const auto screenHeight = capture.hasVertexBounds ? capture.maxY - capture.minY : 0;
+            const auto uvWidth = capture.hasUvBounds ? capture.maxU - capture.minU : 0;
+            const auto uvHeight = capture.hasUvBounds ? capture.maxV - capture.minV : 0;
+
+            BatchAggregateValue value;
+            {
+                std::lock_guard lock(g_mutex);
+                auto &aggregate = g_batchAggregates[BatchAggregateKey{
+                    capture.program,
+                    capture.engineTextureId,
+                    capture.mode,
+                }];
+
+                if (aggregate.label.empty()) aggregate.label = capture.label;
+                ++aggregate.batchCount;
+                aggregate.minVertexCount = std::min(aggregate.minVertexCount, capture.vertexCount);
+                aggregate.maxVertexCount = std::max(aggregate.maxVertexCount, capture.vertexCount);
+                aggregate.minScreenWidth = std::min(aggregate.minScreenWidth, screenWidth);
+                aggregate.maxScreenWidth = std::max(aggregate.maxScreenWidth, screenWidth);
+                aggregate.minScreenHeight = std::min(aggregate.minScreenHeight, screenHeight);
+                aggregate.maxScreenHeight = std::max(aggregate.maxScreenHeight, screenHeight);
+                aggregate.minUvWidth = std::min(aggregate.minUvWidth, uvWidth);
+                aggregate.maxUvWidth = std::max(aggregate.maxUvWidth, uvWidth);
+                aggregate.minUvHeight = std::min(aggregate.minUvHeight, uvHeight);
+                aggregate.maxUvHeight = std::max(aggregate.maxUvHeight, uvHeight);
+
+                if (!should_emit_runtime_summary(aggregate.batchCount, aggregate.lastLoggedBatchCount)) return;
+                aggregate.lastLoggedBatchCount = aggregate.batchCount;
+                value = aggregate;
+            }
+
+            LOG_INFO(
+                "ShaderTrace batchSummary program={} label={} framebuffer={} engineTexId={} mode={} batches={} verts[min={},max={}] screen[min={}x{},max={}x{}] uv[min={}x{},max={}x{}] sampleVerts={} sampleScreen={}x{} sampleUv={}x{}",
+                capture.program,
+                capture.label,
+                capture.framebuffer,
+                capture.engineTextureId,
+                draw_mode_name(static_cast<GLenum>(capture.mode)),
+                value.batchCount,
+                value.minVertexCount == std::numeric_limits<std::size_t>::max() ? 0 : value.minVertexCount,
+                value.maxVertexCount,
+                value.minScreenWidth == std::numeric_limits<int>::max() ? 0 : value.minScreenWidth,
+                value.minScreenHeight == std::numeric_limits<int>::max() ? 0 : value.minScreenHeight,
+                value.maxScreenWidth,
+                value.maxScreenHeight,
+                value.minUvWidth == std::numeric_limits<int>::max() ? 0 : value.minUvWidth,
+                value.minUvHeight == std::numeric_limits<int>::max() ? 0 : value.minUvHeight,
+                value.maxUvWidth,
+                value.maxUvHeight,
+                capture.vertexCount,
+                screenWidth,
+                screenHeight,
+                uvWidth,
+                uvHeight);
+        }
+
+        std::optional<EngineBatchSnapshot> snapshot_current_engine_batch() {
+            std::lock_guard lock(g_mutex);
+            EngineBatchSnapshot snapshot;
+            snapshot.program = g_currentProgram;
+            snapshot.framebuffer = g_currentFramebuffer;
+            snapshot.engineTextureId = g_lastEngineTextureId;
+            const auto programIt = g_programs.find(g_currentProgram);
+            if (programIt != g_programs.end()) {
+                snapshot.label = programIt->second.label;
+                snapshot.interesting = programIt->second.interesting;
+            } else {
+                snapshot.label = g_currentProgram == 0 ? "program-0" : "untracked";
+                snapshot.interesting = false;
+            }
             return snapshot;
         }
 
@@ -565,13 +977,10 @@ namespace iee::game::shader_trace {
 
         bool begin_draw_log(std::size_t *outDrawIndex = nullptr, bool *outWasSuppressed = nullptr) {
             std::lock_guard lock(g_mutex);
-            const auto programIt = g_programs.find(g_currentProgram);
-            if (programIt == g_programs.end() || !programIt->second.interesting) return false;
-
             if (outDrawIndex) *outDrawIndex = g_loggedDrawCallsForCurrentProgram;
             if (outWasSuppressed) *outWasSuppressed = g_suppressedDrawLogsForCurrentProgram;
 
-            constexpr std::size_t maxLogsPerProgramBind = 8;
+            constexpr std::size_t maxLogsPerProgramBind = 3;
             if (g_loggedDrawCallsForCurrentProgram < maxLogsPerProgramBind) {
                 ++g_loggedDrawCallsForCurrentProgram;
                 return true;
@@ -579,6 +988,25 @@ namespace iee::game::shader_trace {
 
             if (!g_suppressedDrawLogsForCurrentProgram) {
                 g_suppressedDrawLogsForCurrentProgram = true;
+                return true;
+            }
+
+            return false;
+        }
+
+        bool begin_draw_end_log(std::size_t *outDrawIndex = nullptr, bool *outWasSuppressed = nullptr) {
+            std::lock_guard lock(g_mutex);
+            if (outDrawIndex) *outDrawIndex = g_loggedDrawEndsForCurrentProgram;
+            if (outWasSuppressed) *outWasSuppressed = g_suppressedDrawEndLogsForCurrentProgram;
+
+            constexpr std::size_t maxLogsPerProgramBind = 4;
+            if (g_loggedDrawEndsForCurrentProgram < maxLogsPerProgramBind) {
+                ++g_loggedDrawEndsForCurrentProgram;
+                return true;
+            }
+
+            if (!g_suppressedDrawEndLogsForCurrentProgram) {
+                g_suppressedDrawEndLogsForCurrentProgram = true;
                 return true;
             }
 
@@ -826,16 +1254,20 @@ namespace iee::game::shader_trace {
                     g_lastLoggedProgram = program;
                     g_loggedDrawCallsForCurrentProgram = 0;
                     g_suppressedDrawLogsForCurrentProgram = false;
-                    shouldTraceBind = snapshot && snapshot->interesting;
+                    g_loggedDrawEndsForCurrentProgram = 0;
+                    g_suppressedDrawEndLogsForCurrentProgram = false;
+                    shouldTraceBind = true;
                 }
             }
 
-            if (shouldTraceBind && g_traceEnabled && snapshot) {
-                LOG_INFO("ShaderTrace glUseProgram program={} label={}", program, snapshot->label);
+            if (shouldTraceBind && g_traceEnabled) {
+                LOG_INFO("ShaderTrace glUseProgram program={} label={}",
+                         program,
+                         snapshot ? snapshot->label : (program == 0 ? "program-0" : "untracked"));
             }
 
             maybe_inject_sprite_tcscale(program, "use");
-            if (shouldTraceBind) {
+            if (shouldTraceBind && snapshot && snapshot->interesting) {
                 log_current_uniform_values(program);
             }
         }
@@ -863,16 +1295,20 @@ namespace iee::game::shader_trace {
                     g_lastLoggedProgram = program;
                     g_loggedDrawCallsForCurrentProgram = 0;
                     g_suppressedDrawLogsForCurrentProgram = false;
-                    shouldTraceBind = snapshot && snapshot->interesting;
+                    g_loggedDrawEndsForCurrentProgram = 0;
+                    g_suppressedDrawEndLogsForCurrentProgram = false;
+                    shouldTraceBind = true;
                 }
             }
 
-            if (shouldTraceBind && g_traceEnabled && snapshot) {
-                LOG_INFO("ShaderTrace glUseProgramObjectARB program={} label={}", program, snapshot->label);
+            if (shouldTraceBind && g_traceEnabled) {
+                LOG_INFO("ShaderTrace glUseProgramObjectARB program={} label={}",
+                         program,
+                         snapshot ? snapshot->label : (program == 0 ? "program-0" : "untracked"));
             }
 
             maybe_inject_sprite_tcscale(program, "use-arb");
-            if (shouldTraceBind) {
+            if (shouldTraceBind && snapshot && snapshot->interesting) {
                 log_current_uniform_values(program);
             }
         }
@@ -889,6 +1325,142 @@ namespace iee::game::shader_trace {
             }
 
             maybe_inject_sprite_tcscale(currentProgram, "bind");
+        }
+
+        void Detour_DrawBindTexture(int textureId) {
+            H_DrawBindTextureApi.original()(textureId);
+
+            {
+                std::lock_guard lock(g_mutex);
+                g_lastEngineTextureId = textureId;
+                if (g_currentBatch.active) {
+                    g_currentBatch.engineTextureId = textureId;
+                }
+            }
+
+            maybe_highlight_current_batch();
+        }
+
+        void Detour_DrawBegin(int mode) {
+            H_DrawBeginApi.original()(mode);
+
+            if (!g_traceEnabled && !g_batchHighlightEnabled && !g_batchSuppressEnabled) return;
+
+            bool shouldHighlight = false;
+            {
+                std::lock_guard lock(g_mutex);
+                reset_batch_capture(g_currentBatch);
+                g_currentBatch.active = true;
+                g_currentBatch.program = g_currentProgram;
+                g_currentBatch.framebuffer = g_currentFramebuffer;
+                g_currentBatch.engineTextureId = g_lastEngineTextureId;
+                g_currentBatch.mode = mode;
+
+                const auto it = g_programs.find(g_currentProgram);
+                g_currentBatch.label = it != g_programs.end()
+                                           ? it->second.label
+                                           : (g_currentProgram == 0 ? "program-0" : "untracked");
+
+                shouldHighlight = g_batchHighlightEnabled &&
+                                  g_drawColorApi &&
+                                  g_currentProgram == g_batchHighlightProgram &&
+                                  g_lastEngineTextureId == g_batchHighlightTextureId;
+            }
+
+            if (shouldHighlight) {
+                maybe_highlight_current_batch();
+            }
+        }
+
+        void Detour_DrawTexCoord(int u, int v) {
+            H_DrawTexCoordApi.original()(u, v);
+
+            if (!g_traceEnabled) return;
+
+            std::lock_guard lock(g_mutex);
+            if (!g_currentBatch.active) return;
+            ++g_currentBatch.texCoordCount;
+            update_2d_bounds(g_currentBatch.hasUvBounds,
+                             u,
+                             v,
+                             g_currentBatch.minU,
+                             g_currentBatch.maxU,
+                             g_currentBatch.minV,
+                             g_currentBatch.maxV);
+        }
+
+        void Detour_DrawVertex(int x, int y) {
+            H_DrawVertexApi.original()(x, y);
+
+            if (!g_traceEnabled && !g_batchSuppressEnabled) return;
+
+            std::lock_guard lock(g_mutex);
+            if (!g_currentBatch.active) return;
+            ++g_currentBatch.vertexCount;
+            update_2d_bounds(g_currentBatch.hasVertexBounds,
+                             x,
+                             y,
+                             g_currentBatch.minX,
+                             g_currentBatch.maxX,
+                             g_currentBatch.minY,
+                             g_currentBatch.maxY);
+        }
+
+        void Detour_DrawEnd() {
+            BatchCapture capture;
+            {
+                std::lock_guard lock(g_mutex);
+                capture = g_currentBatch;
+                reset_batch_capture(g_currentBatch);
+            }
+
+            const auto suppressBatch = should_suppress_batch(capture);
+            if (!suppressBatch) {
+                H_DrawEndApi.original()();
+            }
+
+            if (capture.highlightApplied && g_drawColorApi) {
+                g_drawColorApi(capture.savedColor);
+            }
+
+            if (suppressBatch) {
+                const auto screenWidth = capture.hasVertexBounds ? capture.maxX - capture.minX : 0;
+                const auto screenHeight = capture.hasVertexBounds ? capture.maxY - capture.minY : 0;
+                LOG_INFO("ShaderTrace suppressedBatch program={} label={} framebuffer={} engineTexId={} screen={}x{} verts={}",
+                         capture.program,
+                         capture.label,
+                         capture.framebuffer,
+                         capture.engineTextureId,
+                         screenWidth,
+                         screenHeight,
+                         capture.vertexCount);
+            }
+
+            if (!g_traceEnabled) return;
+
+            record_batch_aggregate(capture);
+
+            const auto snapshot = snapshot_current_engine_batch();
+            if (!snapshot) return;
+            record_runtime_summary(*snapshot);
+
+            std::size_t drawIndex = 0;
+            bool wasSuppressed = false;
+            if (!begin_draw_end_log(&drawIndex, &wasSuppressed)) return;
+
+            if (wasSuppressed) {
+                LOG_INFO("ShaderTrace DrawEnd logs suppressed for current bind program={} label={}",
+                         snapshot->program,
+                         snapshot->label);
+                return;
+            }
+
+            LOG_INFO("ShaderTrace DrawEnd program={} label={} batch={} framebuffer={} engineTexId={}",
+                     snapshot->program,
+                     snapshot->label,
+                     drawIndex + 1,
+                     snapshot->framebuffer,
+                     snapshot->engineTextureId);
         }
 
         void APIENTRY Detour_glActiveTexture(GLenum texture) {
@@ -954,16 +1526,28 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+            const auto snapshot = snapshot_current_draw_call();
+            if (!snapshot) return;
+
+            if (should_suppress_gl_program(*snapshot)) {
+                LOG_INFO("ShaderTrace suppressedGlDrawArrays program={} label={} mode={} framebuffer={} first={} count={}",
+                         snapshot->program,
+                         snapshot->label,
+                         draw_mode_name(mode),
+                         snapshot->framebuffer,
+                         first,
+                         count);
+                return;
+            }
+
             H_glDrawArrays.original()(mode, first, count);
 
             if (!g_traceEnabled) return;
+            record_runtime_summary(*snapshot, false);
 
             std::size_t drawIndex = 0;
             bool wasSuppressed = false;
             if (!begin_draw_log(&drawIndex, &wasSuppressed)) return;
-
-            const auto snapshot = snapshot_current_draw_call();
-            if (!snapshot || !snapshot->interesting) return;
 
             if (wasSuppressed) {
                 LOG_INFO("ShaderTrace draw logs suppressed for current bind program={} label={}",
@@ -985,16 +1569,28 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
+            const auto snapshot = snapshot_current_draw_call();
+            if (!snapshot) return;
+
+            if (should_suppress_gl_program(*snapshot)) {
+                LOG_INFO("ShaderTrace suppressedGlDrawElements program={} label={} mode={} framebuffer={} count={} type=0x{:X}",
+                         snapshot->program,
+                         snapshot->label,
+                         draw_mode_name(mode),
+                         snapshot->framebuffer,
+                         count,
+                         type);
+                return;
+            }
+
             H_glDrawElements.original()(mode, count, type, indices);
 
             if (!g_traceEnabled) return;
+            record_runtime_summary(*snapshot, true);
 
             std::size_t drawIndex = 0;
             bool wasSuppressed = false;
             if (!begin_draw_log(&drawIndex, &wasSuppressed)) return;
-
-            const auto snapshot = snapshot_current_draw_call();
-            if (!snapshot || !snapshot->interesting) return;
 
             if (wasSuppressed) {
                 LOG_INFO("ShaderTrace draw logs suppressed for current bind program={} label={}",
@@ -1154,7 +1750,25 @@ namespace iee::game::shader_trace {
     bool install(const core::EngineConfig &cfg) {
         g_traceEnabled = cfg.enableShaderTracing;
         g_tcScaleInjectionEnabled = cfg.enableSpriteTcScaleInjection;
-        g_enabled = g_traceEnabled || g_tcScaleInjectionEnabled;
+        g_batchHighlightEnabled = cfg.enableBatchHighlightProbe &&
+                                  cfg.batchHighlightProgram > 0 &&
+                                  cfg.batchHighlightTextureId >= 0;
+        g_batchSuppressEnabled = cfg.enableBatchSuppressProbe &&
+                                 cfg.batchHighlightProgram > 0;
+        g_glProgramSuppressEnabled = cfg.enableGlProgramSuppressProbe && cfg.glProgramSuppress > 0;
+        g_batchHighlightProgram = static_cast<GLuint>(std::max(cfg.batchHighlightProgram, 0));
+        g_batchHighlightTextureId = cfg.batchHighlightTextureId;
+        g_batchSuppressMinScreenWidth = std::max(cfg.batchSuppressMinScreenWidth, 0);
+        g_batchSuppressMaxScreenWidth = std::max(cfg.batchSuppressMaxScreenWidth, 0);
+        g_batchSuppressMinScreenHeight = std::max(cfg.batchSuppressMinScreenHeight, 0);
+        g_batchSuppressMaxScreenHeight = std::max(cfg.batchSuppressMaxScreenHeight, 0);
+        g_batchSuppressMinCenterX = cfg.batchSuppressMinCenterX;
+        g_batchSuppressMaxCenterX = cfg.batchSuppressMaxCenterX;
+        g_batchSuppressMinCenterY = cfg.batchSuppressMinCenterY;
+        g_batchSuppressMaxCenterY = cfg.batchSuppressMaxCenterY;
+        g_glProgramSuppress = static_cast<GLuint>(std::max(cfg.glProgramSuppress, 0));
+        g_enabled = g_traceEnabled || g_tcScaleInjectionEnabled || g_batchHighlightEnabled || g_batchSuppressEnabled ||
+                    g_glProgramSuppressEnabled;
         if (!g_enabled) return true;
         if (g_installed) return true;
 
@@ -1191,7 +1805,7 @@ namespace iee::game::shader_trace {
                 H_glBindTexture.enable();
             }
 
-            if (g_traceEnabled) {
+            if (g_traceEnabled || g_glProgramSuppressEnabled) {
                 auto *drawArraysTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawArrays"));
                 auto *drawElementsTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawElements"));
                 if (!drawArraysTarget || !drawElementsTarget) {
@@ -1214,6 +1828,38 @@ namespace iee::game::shader_trace {
             if (g_tcScaleInjectionEnabled) {
                 LOG_INFO("Sprite tc-scale injection enabled for fpsprite/fpselect programs");
             }
+            if (g_batchHighlightEnabled) {
+                LOG_INFO("Batch highlight probe enabled for program={} engineTexId={} color=0x{:08X}",
+                         g_batchHighlightProgram,
+                         g_batchHighlightTextureId,
+                         kBatchHighlightColor);
+            } else if (cfg.enableBatchHighlightProbe) {
+                LOG_WARN("Batch highlight probe enabled in config but inactive because program={} textureId={}",
+                         cfg.batchHighlightProgram,
+                         cfg.batchHighlightTextureId);
+            }
+            if (g_batchSuppressEnabled) {
+                LOG_INFO("Batch suppress probe enabled for program={} engineTexId={} screen={}..{}x{}..{} center={}..{}x{}..{}",
+                         g_batchHighlightProgram,
+                         g_batchHighlightTextureId,
+                         g_batchSuppressMinScreenWidth,
+                         g_batchSuppressMaxScreenWidth,
+                         g_batchSuppressMinScreenHeight,
+                         g_batchSuppressMaxScreenHeight,
+                         g_batchSuppressMinCenterX,
+                         g_batchSuppressMaxCenterX,
+                         g_batchSuppressMinCenterY,
+                         g_batchSuppressMaxCenterY);
+            } else if (cfg.enableBatchSuppressProbe) {
+                LOG_WARN("Batch suppress probe enabled in config but inactive because program={}",
+                         cfg.batchHighlightProgram);
+            }
+            if (g_glProgramSuppressEnabled) {
+                LOG_INFO("GL program suppress probe enabled for program={}", g_glProgramSuppress);
+            } else if (cfg.enableGlProgramSuppressProbe) {
+                LOG_WARN("GL program suppress probe enabled in config but inactive because program={}",
+                         cfg.glProgramSuppress);
+            }
             return true;
         } catch (const std::exception &e) {
             H_glDrawElements.disable();
@@ -1225,8 +1871,81 @@ namespace iee::game::shader_trace {
         }
     }
 
+    bool attach_draw_api(const DrawApi &draw) {
+        if ((!g_traceEnabled && !g_batchHighlightEnabled && !g_batchSuppressEnabled) || g_drawApiAttached) return true;
+        if (!draw.DrawBegin || !draw.DrawBindTexture || !draw.DrawTexCoord || !draw.DrawVertex || !draw.DrawEnd) {
+            LOG_WARN("ShaderTrace draw API attach skipped: required draw API functions are null");
+            return false;
+        }
+
+        static core::HookInit hookInit;
+
+        try {
+            g_drawColorApi = draw.DrawColor;
+            H_DrawBeginApi.create(reinterpret_cast<void *>(draw.DrawBegin),
+                                  reinterpret_cast<void *>(&Detour_DrawBegin));
+            H_DrawBeginApi.enable();
+
+            H_DrawBindTextureApi.create(reinterpret_cast<void *>(draw.DrawBindTexture),
+                                        reinterpret_cast<void *>(&Detour_DrawBindTexture));
+            H_DrawBindTextureApi.enable();
+
+            H_DrawTexCoordApi.create(reinterpret_cast<void *>(draw.DrawTexCoord),
+                                     reinterpret_cast<void *>(&Detour_DrawTexCoord));
+            H_DrawTexCoordApi.enable();
+
+            H_DrawVertexApi.create(reinterpret_cast<void *>(draw.DrawVertex),
+                                   reinterpret_cast<void *>(&Detour_DrawVertex));
+            H_DrawVertexApi.enable();
+
+            H_DrawEndApi.create(reinterpret_cast<void *>(draw.DrawEnd),
+                                reinterpret_cast<void *>(&Detour_DrawEnd));
+            H_DrawEndApi.enable();
+
+            g_drawApiAttached = true;
+            if (g_batchHighlightEnabled && !g_drawColorApi) {
+                LOG_WARN("Batch highlight probe requested but DrawColor is unavailable; tint override will be inactive");
+            }
+            LOG_INFO("ShaderTrace attached to DrawBegin/DrawBindTexture/DrawTexCoord/DrawVertex/DrawEnd");
+            return true;
+        } catch (const std::exception &e) {
+            H_DrawEndApi.disable();
+            H_DrawVertexApi.disable();
+            H_DrawTexCoordApi.disable();
+            H_DrawBindTextureApi.disable();
+            H_DrawBeginApi.disable();
+            LOG_ERROR("ShaderTrace draw API attach failed: {}", e.what());
+            return false;
+        }
+    }
+
+    void reset_runtime_capture(const char *reason) noexcept {
+        if (!g_enabled) return;
+
+        {
+            std::lock_guard lock(g_mutex);
+            g_runtimeSummaries.clear();
+            g_batchAggregates.clear();
+            g_loggedDrawCallsForCurrentProgram = 0;
+            g_suppressedDrawLogsForCurrentProgram = false;
+            g_loggedDrawEndsForCurrentProgram = 0;
+            g_suppressedDrawEndLogsForCurrentProgram = false;
+            g_lastEngineTextureId = -1;
+            reset_batch_capture(g_currentBatch);
+        }
+
+        if (g_traceEnabled) {
+            LOG_INFO("ShaderTrace runtime capture reset reason={}", reason ? reason : "unspecified");
+        }
+    }
+
     void uninstall() noexcept {
         if (!g_installed) return;
+        H_DrawEndApi.disable();
+        H_DrawVertexApi.disable();
+        H_DrawTexCoordApi.disable();
+        H_DrawBindTextureApi.disable();
+        H_DrawBeginApi.disable();
         H_glDrawElements.disable();
         H_glDrawArrays.disable();
         H_glBindTexture.disable();
@@ -1235,16 +1954,38 @@ namespace iee::game::shader_trace {
         g_enabled = false;
         g_traceEnabled = false;
         g_tcScaleInjectionEnabled = false;
+        g_batchHighlightEnabled = false;
+        g_batchSuppressEnabled = false;
+        g_glProgramSuppressEnabled = false;
+        g_drawApiAttached = false;
+        g_batchHighlightProgram = 0;
+        g_batchHighlightTextureId = -1;
+        g_batchSuppressMinScreenWidth = 0;
+        g_batchSuppressMaxScreenWidth = 0;
+        g_batchSuppressMinScreenHeight = 0;
+        g_batchSuppressMaxScreenHeight = 0;
+        g_batchSuppressMinCenterX = -1;
+        g_batchSuppressMaxCenterX = -1;
+        g_batchSuppressMinCenterY = -1;
+        g_batchSuppressMaxCenterY = -1;
+        g_glProgramSuppress = 0;
+        g_drawColorApi = nullptr;
 
         std::lock_guard lock(g_mutex);
         g_shaders.clear();
         g_programs.clear();
         g_boundTextures2D.clear();
+        g_runtimeSummaries.clear();
+        g_batchAggregates.clear();
         g_currentProgram = 0;
         g_lastLoggedProgram = 0;
         g_currentFramebuffer = 0;
         g_currentActiveTextureUnit = 0;
         g_loggedDrawCallsForCurrentProgram = 0;
         g_suppressedDrawLogsForCurrentProgram = false;
+        g_loggedDrawEndsForCurrentProgram = 0;
+        g_suppressedDrawEndLogsForCurrentProgram = false;
+        g_lastEngineTextureId = -1;
+        reset_batch_capture(g_currentBatch);
     }
 }
