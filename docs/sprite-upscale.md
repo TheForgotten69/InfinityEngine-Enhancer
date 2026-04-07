@@ -78,6 +78,7 @@ The tracer now also logs:
 - engine-side batch geometry through the resolved `DrawBegin`, `DrawBindTexture`, `DrawTexCoord`, `DrawVertex`, and `DrawEnd` wrappers
 - framebuffer binds and framebuffer color attachment updates
 - compact runtime summaries keyed by `{program, framebuffer, engineTexId}`
+- raw GL texture summaries keyed by `{program, framebuffer, samplerUnit, texture}`
 - automatic runtime-summary reset on each `LoadArea`
 - an optional magenta batch-highlight probe keyed by one `{program, engineTexId}` pair
 - an optional batch-suppress probe keyed by one `{program, engineTexId}` pair
@@ -100,6 +101,10 @@ Current runtime conclusion for BGEE `2.6.6.x`:
   - `program 18` removes font/text
   - `program 24` removes map rendering while leaving actors and UI visible
 - therefore the real actor body path is on raw GL `program 3`, but `program 3` is still too broad to use directly because it also carries UI
+- raw GL texture probing on `program 3` now narrows that path further:
+  - `texture 2` is the main character-sprite body path
+  - `texture 1` is the selection/outline path
+  - `texture 2` is still not perfectly sprite-exclusive because some world-map/icon content shares it
 - the RenderTexture-resolved engine draw wrappers are not a sufficient interception point for actor-body work in this build
 - this repo should treat sprite-FBO exploration as the next serious path, not more shader-file-only tuning
 
@@ -142,6 +147,7 @@ The current design choices are:
 - Keep `fpselect` outline logic intact and only upscale solid sprite texels.
 - Use the DLL tracer, not Ghidra alone, to answer live draw-boundary and framebuffer questions for a future sprite-only FBO design.
 - Treat `fpDraw.glsl` as the confirmed live routing probe for actor bodies, but keep actual feature work out of raw `fpDraw` replacement because its scope is broader than sprites.
+- Start the next iteration from [`shaders/sprite/v1/fpdraw.glsl`](../shaders/sprite/v1/fpdraw.glsl), with the shader body gated by `uIeeSpriteBodyMode` so only raw `{program 3, texture 2}` draws take the sprite-body filter path.
 
 Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to answer two runtime questions quickly:
 
@@ -158,6 +164,7 @@ Current recommendation after the `fpDraw` routing probe:
 - do not keep spending time on `fpsprite`/`fpselect` as if they were the main body path
 - do not use RenderTexture-resolved engine wrappers as the primary actor interception point for this build; they miss the in-world actor body path
 - move the real implementation toward DLL-side filtering on raw GL `program 3`, with additional discrimination to exclude UI before any upscale or sharpen filter is applied
+- use `uIeeSpriteBodyMode` as the first concrete implementation seam: the DLL decides when `{program 3, texture 2}` is active, and `fpDraw.glsl` only applies sprite-body filtering for those draws
 
 Targeted runtime confirmation:
 
@@ -174,6 +181,11 @@ Targeted runtime confirmation:
   - `program 18` is text
   - `program 24` is map/background
 - the next discriminator therefore has to split actor draws from UI draws within raw `program 3`
+- the preferred next probe is `glTextureSummary` on raw `program 3`, because brute-forcing wrapper-side engine texture ids is no longer the right search space
+- once candidate raw GL textures are known, use the raw GL texture suppress probe on `program 3` before trying any feature work on that path
+- current validated texture split for BGEE `2.6.6.x`:
+  - `{program 3, texture 2}` = main character sprite body path
+  - `{program 3, texture 1}` = outline/select path
 
 ## Acceptance Criteria
 

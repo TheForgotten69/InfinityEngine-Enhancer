@@ -137,6 +137,37 @@ namespace iee::game::shader_trace {
             std::size_t lastLoggedTotal{};
         };
 
+        struct GlTextureSummaryKey {
+            GLuint program{};
+            GLuint framebuffer{};
+            GLint samplerUnit{-1};
+            GLuint texture{};
+
+            bool operator==(const GlTextureSummaryKey &other) const noexcept {
+                return program == other.program &&
+                       framebuffer == other.framebuffer &&
+                       samplerUnit == other.samplerUnit &&
+                       texture == other.texture;
+            }
+        };
+
+        struct GlTextureSummaryKeyHash {
+            std::size_t operator()(const GlTextureSummaryKey &key) const noexcept {
+                auto hash = static_cast<std::size_t>(key.program);
+                hash ^= static_cast<std::size_t>(key.framebuffer) << 1;
+                hash ^= static_cast<std::size_t>(static_cast<std::uint32_t>(key.samplerUnit)) << 2;
+                hash ^= static_cast<std::size_t>(key.texture) << 3;
+                return hash;
+            }
+        };
+
+        struct GlTextureSummaryValue {
+            std::string label;
+            std::size_t drawArrays{};
+            std::size_t drawElements{};
+            std::size_t lastLoggedTotal{};
+        };
+
         struct BatchAggregateKey {
             GLuint program{};
             int engineTextureId{-1};
@@ -212,6 +243,7 @@ namespace iee::game::shader_trace {
         std::unordered_map<GLuint, ProgramRecord> g_programs;
         std::unordered_map<GLint, GLuint> g_boundTextures2D;
         std::unordered_map<RuntimeSummaryKey, RuntimeSummaryValue, RuntimeSummaryKeyHash> g_runtimeSummaries;
+        std::unordered_map<GlTextureSummaryKey, GlTextureSummaryValue, GlTextureSummaryKeyHash> g_glTextureSummaries;
         std::unordered_map<BatchAggregateKey, BatchAggregateValue, BatchAggregateKeyHash> g_batchAggregates;
         GLuint g_currentProgram = 0;
         GLuint g_lastLoggedProgram = 0;
@@ -227,6 +259,7 @@ namespace iee::game::shader_trace {
         bool g_batchHighlightEnabled = false;
         bool g_batchSuppressEnabled = false;
         bool g_glProgramSuppressEnabled = false;
+        bool g_glTextureSuppressEnabled = false;
         bool g_enabled = false;
         bool g_installed = false;
         bool g_drawApiAttached = false;
@@ -242,6 +275,10 @@ namespace iee::game::shader_trace {
         int g_batchSuppressMinCenterY = -1;
         int g_batchSuppressMaxCenterY = -1;
         GLuint g_glProgramSuppress = 0;
+        GLuint g_glTextureSuppressProgram = 0;
+        GLint g_glTextureSuppressTexture = -1;
+        GLuint g_runtimeTraceProgramFilter = 0;
+        GLint g_runtimeTraceTextureFilter = -1;
         DrawApi::DrawColor_t g_drawColorApi{};
 
         constexpr unsigned long kBatchHighlightColor = 0xFFFF00FF;
@@ -386,26 +423,29 @@ namespace iee::game::shader_trace {
         }
 
         std::string classify_shader_label(const ShaderRecord &record, std::string_view source) {
-            if (contains(source, "ieeDiagFpdrawPathProbeMarker")) return "fpdraw-path-probe";
-            if (contains(source, "ieeDiagFpspriteEasuDeltaMarker")) return "fpsprite-easu-delta";
-            if (contains(source, "ieeDiagFpselectEasuDeltaMarker")) return "fpselect-easu-delta";
-            if (contains(source, "ieeProbeFpspriteMarker")) return "fpsprite-probe";
-            if (contains(source, "ieeProbeFpselectMarker")) return "fpselect-probe";
-            if (contains(source, "ieeV1FpspriteMarker")) return "fpsprite-v1";
-            if (contains(source, "ieeV1FpselectMarker")) return "fpselect-v1";
-            if (contains(source, "IEE_DIAG_FPDRAW_PATH_PROBE")) return "fpdraw-path-probe";
-            if (contains(source, "IEE_DIAG_FPSPRITE_PROBE")) return "fpsprite-probe";
-            if (contains(source, "IEE_DIAG_FPSELECT_PROBE")) return "fpselect-probe";
-            if (contains(source, "IEE_V1_FPSPRITE")) return "fpsprite-v1";
-            if (contains(source, "IEE_V1_FPSELECT")) return "fpselect-v1";
-            if (contains(source, "fpdraw.glsl")) return "fpdraw-like";
-            if (contains(source, "fptone.glsl")) return "fptone-like";
-            if (contains(source, "fpyuvgry.glsl")) return "fpyuvgry-like";
-            if (contains(source, "fpyuv.glsl")) return "fpyuv-like";
-            if (contains(source, "fpfont.glsl")) return "fpfont-like";
-            if (contains(source, "fpseam.glsl")) return "fpseam-like";
-            if (contains(source, "fpsprite.glsl")) return "fpsprite-like";
-            if (contains(source, "fpselect.glsl")) return "fpselect-like";
+            const auto lowerSource = lower_copy(source);
+
+            if (contains(lowerSource, "ieediagfpdrawpathprobemarker")) return "fpdraw-path-probe";
+            if (contains(lowerSource, "ieediagfpspriteeasudeltamarker")) return "fpsprite-easu-delta";
+            if (contains(lowerSource, "ieediagfpselecteasudeltamarker")) return "fpselect-easu-delta";
+            if (contains(lowerSource, "ieeprobefpspritemarker")) return "fpsprite-probe";
+            if (contains(lowerSource, "ieeprobefpselectmarker")) return "fpselect-probe";
+            if (contains(lowerSource, "ieev1fpspritemarker")) return "fpsprite-v1";
+            if (contains(lowerSource, "ieev1fpselectmarker")) return "fpselect-v1";
+            if (contains(lowerSource, "iee_v2_fpdraw_sprite_body")) return "fpdraw-v2-sprite-body";
+            if (contains(lowerSource, "iee_diag_fpdraw_path_probe")) return "fpdraw-path-probe";
+            if (contains(lowerSource, "iee_diag_fpsprite_probe")) return "fpsprite-probe";
+            if (contains(lowerSource, "iee_diag_fpselect_probe")) return "fpselect-probe";
+            if (contains(lowerSource, "iee_v1_fpsprite")) return "fpsprite-v1";
+            if (contains(lowerSource, "iee_v1_fpselect")) return "fpselect-v1";
+            if (contains(lowerSource, "fpdraw.glsl")) return "fpdraw-like";
+            if (contains(lowerSource, "fptone.glsl")) return "fptone-like";
+            if (contains(lowerSource, "fpyuvgry.glsl")) return "fpyuvgry-like";
+            if (contains(lowerSource, "fpyuv.glsl")) return "fpyuv-like";
+            if (contains(lowerSource, "fpfont.glsl")) return "fpfont-like";
+            if (contains(lowerSource, "fpseam.glsl")) return "fpseam-like";
+            if (contains(lowerSource, "fpsprite.glsl")) return "fpsprite-like";
+            if (contains(lowerSource, "fpselect.glsl")) return "fpselect-like";
             if (record.type == GL_FRAGMENT_SHADER && record.hasSolidThreshold) return "fpselect-like";
             if (record.type == GL_FRAGMENT_SHADER && record.hasBlurAmount) return "fpsprite-like";
             if (record.type == GL_VERTEX_SHADER) return "vpdraw-like";
@@ -420,6 +460,17 @@ namespace iee::game::shader_trace {
 
         bool is_tcscale_injectable_label(std::string_view label) {
             return contains(label, "fpsprite") || contains(label, "fpselect");
+        }
+
+        bool runtime_trace_filter_matches(GLuint program, GLuint texture) noexcept {
+            if (g_runtimeTraceProgramFilter > 0 && program != g_runtimeTraceProgramFilter) {
+                return false;
+            }
+            if (g_runtimeTraceTextureFilter >= 0 &&
+                static_cast<GLint>(texture) != g_runtimeTraceTextureFilter) {
+                return false;
+            }
+            return true;
         }
 
         std::string join_shader_labels(const ProgramRecord &program) {
@@ -447,6 +498,7 @@ namespace iee::game::shader_trace {
             GLint tcScaleLocation{-1};
             GLint texLocation{-1};
             GLint blurLocation{-1};
+            GLint spriteBodyModeLocation{-1};
         };
 
         struct DrawCallSnapshot {
@@ -460,6 +512,10 @@ namespace iee::game::shader_trace {
             std::size_t loggedDrawCalls{};
             bool suppressedDrawLogs{};
         };
+
+        bool is_sprite_body_draw(const DrawCallSnapshot &snapshot) noexcept {
+            return snapshot.program == 3 && snapshot.texture == 2;
+        }
 
         struct EngineBatchSnapshot {
             GLuint program{};
@@ -488,6 +544,7 @@ namespace iee::game::shader_trace {
             snapshot.tcScaleLocation = uniform_location_by_name(it->second, "uTcScale");
             snapshot.texLocation = uniform_location_by_name(it->second, "uTex");
             snapshot.blurLocation = uniform_location_by_name(it->second, "uSpriteBlurAmount");
+            snapshot.spriteBodyModeLocation = uniform_location_by_name(it->second, "uIeeSpriteBodyMode");
             return snapshot;
         }
 
@@ -649,6 +706,7 @@ namespace iee::game::shader_trace {
         void record_runtime_summary(const DrawCallSnapshot &snapshot, bool drawElements) {
             if (!g_traceEnabled) return;
             if (snapshot.program == 0) return;
+            if (!runtime_trace_filter_matches(snapshot.program, snapshot.texture)) return;
 
             RuntimeSummaryValue value;
             {
@@ -685,15 +743,58 @@ namespace iee::game::shader_trace {
                 value.drawEnds,
                 value.samplerUnit,
                 value.texture);
+
+            if (snapshot.texture == 0 || snapshot.samplerUnit < 0) return;
+
+            GlTextureSummaryValue glValue;
+            {
+                std::lock_guard lock(g_mutex);
+                auto &summary = g_glTextureSummaries[GlTextureSummaryKey{
+                    snapshot.program,
+                    snapshot.framebuffer,
+                    snapshot.samplerUnit,
+                    snapshot.texture,
+                }];
+
+                if (summary.label.empty()) summary.label = snapshot.label;
+                if (drawElements) {
+                    ++summary.drawElements;
+                } else {
+                    ++summary.drawArrays;
+                }
+
+                const auto total = summary.drawArrays + summary.drawElements;
+                if (!should_emit_runtime_summary(total, summary.lastLoggedTotal)) return;
+                summary.lastLoggedTotal = total;
+                glValue = summary;
+            }
+
+            LOG_INFO(
+                "ShaderTrace glTextureSummary program={} label={} framebuffer={} samplerUnit={} texture={} drawArrays={} drawElements={}",
+                snapshot.program,
+                snapshot.label,
+                snapshot.framebuffer,
+                snapshot.samplerUnit,
+                snapshot.texture,
+                glValue.drawArrays,
+                glValue.drawElements);
         }
 
-        bool should_suppress_gl_program(const DrawCallSnapshot &snapshot) noexcept {
-            return g_glProgramSuppressEnabled && snapshot.program == g_glProgramSuppress;
+        bool should_suppress_gl_draw(const DrawCallSnapshot &snapshot) noexcept {
+            if (g_glProgramSuppressEnabled && snapshot.program == g_glProgramSuppress) {
+                return true;
+            }
+
+            return g_glTextureSuppressEnabled &&
+                   snapshot.program == g_glTextureSuppressProgram &&
+                   snapshot.texture != 0 &&
+                   static_cast<GLint>(snapshot.texture) == g_glTextureSuppressTexture;
         }
 
         void record_runtime_summary(const EngineBatchSnapshot &snapshot) {
             if (!g_traceEnabled) return;
             if (snapshot.program == 0) return;
+            if (!runtime_trace_filter_matches(snapshot.program, 0)) return;
 
             RuntimeSummaryValue value;
             {
@@ -729,6 +830,7 @@ namespace iee::game::shader_trace {
         void record_batch_aggregate(const BatchCapture &capture) {
             if (!g_traceEnabled || !capture.active) return;
             if (capture.program == 0 || capture.engineTextureId < 0) return;
+            if (!runtime_trace_filter_matches(capture.program, 0)) return;
 
             const auto screenWidth = capture.hasVertexBounds ? capture.maxX - capture.minX : 0;
             const auto screenHeight = capture.hasVertexBounds ? capture.maxY - capture.minY : 0;
@@ -849,6 +951,34 @@ namespace iee::game::shader_trace {
                      value);
         }
 
+        void maybe_set_sprite_body_mode(const DrawCallSnapshot &snapshot) {
+            if (!ensure_proc(g_glUniform1f, "glUniform1f") &&
+                !ensure_proc(g_glUniform1fARB, "glUniform1fARB")) {
+                return;
+            }
+
+            const auto programSnapshot = snapshot_program(snapshot.program);
+            if (!programSnapshot || programSnapshot->spriteBodyModeLocation < 0) return;
+
+            const auto mode = is_sprite_body_draw(snapshot) ? 1.0f : 0.0f;
+            const auto value = std::to_string(mode);
+            if (!update_last_uniform_value(snapshot.program, programSnapshot->spriteBodyModeLocation, value)) return;
+
+            if (g_glUniform1f) {
+                g_glUniform1f(programSnapshot->spriteBodyModeLocation, mode);
+            } else {
+                g_glUniform1fARB(programSnapshot->spriteBodyModeLocation, mode);
+            }
+
+            if (g_traceEnabled && runtime_trace_filter_matches(snapshot.program, snapshot.texture)) {
+                LOG_INFO("ShaderTrace spriteBodyMode program={} label={} texture={} value={}",
+                         snapshot.program,
+                         programSnapshot->label,
+                         snapshot.texture,
+                         value);
+            }
+        }
+
         std::optional<std::string> fetch_info_log(GLuint object, bool shaderLog) {
             constexpr GLsizei maxLength = 4096;
 
@@ -891,6 +1021,7 @@ namespace iee::game::shader_trace {
                 "uTcScale",
                 "uTex",
                 "uSpriteBlurAmount",
+                "uIeeSpriteBodyMode",
             };
 
             for (const auto *name: uniforms) {
@@ -916,6 +1047,13 @@ namespace iee::game::shader_trace {
 
         void log_uniform_update(GLint location, const std::string &value) {
             if (!g_traceEnabled) return;
+            if (g_runtimeTraceProgramFilter > 0 || g_runtimeTraceTextureFilter >= 0) {
+                const auto drawSnapshot = snapshot_current_draw_call();
+                if (!drawSnapshot ||
+                    !runtime_trace_filter_matches(drawSnapshot->program, drawSnapshot->texture)) {
+                    return;
+                }
+            }
             std::lock_guard lock(g_mutex);
             const auto programIt = g_programs.find(g_currentProgram);
             if (programIt == g_programs.end() || !programIt->second.interesting) return;
@@ -961,11 +1099,20 @@ namespace iee::game::shader_trace {
                     GLfloat blurAmount = 0.0f;
                     g_glGetUniformfv(program, location, &blurAmount);
                     value = std::to_string(blurAmount);
+                } else if (name == "uIeeSpriteBodyMode") {
+                    GLfloat spriteBodyMode = 0.0f;
+                    g_glGetUniformfv(program, location, &spriteBodyMode);
+                    value = std::to_string(spriteBodyMode);
                 } else {
                     continue;
                 }
 
                 if (!update_last_uniform_value(program, location, value)) continue;
+
+                if ((g_runtimeTraceProgramFilter > 0 || g_runtimeTraceTextureFilter >= 0) &&
+                    !runtime_trace_filter_matches(program, 0)) {
+                    continue;
+                }
 
                 LOG_INFO("ShaderTrace uniformCurrent program={} label={} {}={}",
                          program,
@@ -1248,6 +1395,7 @@ namespace iee::game::shader_trace {
                         uniform_location_by_name(it->second, "uTcScale"),
                         uniform_location_by_name(it->second, "uTex"),
                         uniform_location_by_name(it->second, "uSpriteBlurAmount"),
+                        uniform_location_by_name(it->second, "uIeeSpriteBodyMode"),
                     };
                 }
                 if (program != g_lastLoggedProgram) {
@@ -1289,6 +1437,7 @@ namespace iee::game::shader_trace {
                         uniform_location_by_name(it->second, "uTcScale"),
                         uniform_location_by_name(it->second, "uTex"),
                         uniform_location_by_name(it->second, "uSpriteBlurAmount"),
+                        uniform_location_by_name(it->second, "uIeeSpriteBodyMode"),
                     };
                 }
                 if (program != g_lastLoggedProgram) {
@@ -1529,14 +1678,18 @@ namespace iee::game::shader_trace {
             const auto snapshot = snapshot_current_draw_call();
             if (!snapshot) return;
 
-            if (should_suppress_gl_program(*snapshot)) {
-                LOG_INFO("ShaderTrace suppressedGlDrawArrays program={} label={} mode={} framebuffer={} first={} count={}",
+            maybe_set_sprite_body_mode(*snapshot);
+
+            if (should_suppress_gl_draw(*snapshot)) {
+                LOG_INFO("ShaderTrace suppressedGlDrawArrays program={} label={} mode={} framebuffer={} first={} count={} samplerUnit={} texture={}",
                          snapshot->program,
                          snapshot->label,
                          draw_mode_name(mode),
                          snapshot->framebuffer,
                          first,
-                         count);
+                         count,
+                         snapshot->samplerUnit,
+                         snapshot->texture);
                 return;
             }
 
@@ -1544,6 +1697,7 @@ namespace iee::game::shader_trace {
 
             if (!g_traceEnabled) return;
             record_runtime_summary(*snapshot, false);
+            if (!runtime_trace_filter_matches(snapshot->program, snapshot->texture)) return;
 
             std::size_t drawIndex = 0;
             bool wasSuppressed = false;
@@ -1572,14 +1726,18 @@ namespace iee::game::shader_trace {
             const auto snapshot = snapshot_current_draw_call();
             if (!snapshot) return;
 
-            if (should_suppress_gl_program(*snapshot)) {
-                LOG_INFO("ShaderTrace suppressedGlDrawElements program={} label={} mode={} framebuffer={} count={} type=0x{:X}",
+            maybe_set_sprite_body_mode(*snapshot);
+
+            if (should_suppress_gl_draw(*snapshot)) {
+                LOG_INFO("ShaderTrace suppressedGlDrawElements program={} label={} mode={} framebuffer={} count={} type=0x{:X} samplerUnit={} texture={}",
                          snapshot->program,
                          snapshot->label,
                          draw_mode_name(mode),
                          snapshot->framebuffer,
                          count,
-                         type);
+                         type,
+                         snapshot->samplerUnit,
+                         snapshot->texture);
                 return;
             }
 
@@ -1587,6 +1745,7 @@ namespace iee::game::shader_trace {
 
             if (!g_traceEnabled) return;
             record_runtime_summary(*snapshot, true);
+            if (!runtime_trace_filter_matches(snapshot->program, snapshot->texture)) return;
 
             std::size_t drawIndex = 0;
             bool wasSuppressed = false;
@@ -1756,6 +1915,9 @@ namespace iee::game::shader_trace {
         g_batchSuppressEnabled = cfg.enableBatchSuppressProbe &&
                                  cfg.batchHighlightProgram > 0;
         g_glProgramSuppressEnabled = cfg.enableGlProgramSuppressProbe && cfg.glProgramSuppress > 0;
+        g_glTextureSuppressEnabled = cfg.enableGlTextureSuppressProbe &&
+                                     cfg.glTextureSuppressProgram > 0 &&
+                                     cfg.glTextureSuppressTexture > 0;
         g_batchHighlightProgram = static_cast<GLuint>(std::max(cfg.batchHighlightProgram, 0));
         g_batchHighlightTextureId = cfg.batchHighlightTextureId;
         g_batchSuppressMinScreenWidth = std::max(cfg.batchSuppressMinScreenWidth, 0);
@@ -1767,8 +1929,12 @@ namespace iee::game::shader_trace {
         g_batchSuppressMinCenterY = cfg.batchSuppressMinCenterY;
         g_batchSuppressMaxCenterY = cfg.batchSuppressMaxCenterY;
         g_glProgramSuppress = static_cast<GLuint>(std::max(cfg.glProgramSuppress, 0));
+        g_glTextureSuppressProgram = static_cast<GLuint>(std::max(cfg.glTextureSuppressProgram, 0));
+        g_glTextureSuppressTexture = cfg.glTextureSuppressTexture;
+        g_runtimeTraceProgramFilter = static_cast<GLuint>(std::max(cfg.shaderTraceRuntimeProgramFilter, 0));
+        g_runtimeTraceTextureFilter = cfg.shaderTraceRuntimeTextureFilter;
         g_enabled = g_traceEnabled || g_tcScaleInjectionEnabled || g_batchHighlightEnabled || g_batchSuppressEnabled ||
-                    g_glProgramSuppressEnabled;
+                    g_glProgramSuppressEnabled || g_glTextureSuppressEnabled;
         if (!g_enabled) return true;
         if (g_installed) return true;
 
@@ -1805,7 +1971,7 @@ namespace iee::game::shader_trace {
                 H_glBindTexture.enable();
             }
 
-            if (g_traceEnabled || g_glProgramSuppressEnabled) {
+            if (g_traceEnabled || g_glProgramSuppressEnabled || g_glTextureSuppressEnabled) {
                 auto *drawArraysTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawArrays"));
                 auto *drawElementsTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawElements"));
                 if (!drawArraysTarget || !drawElementsTarget) {
@@ -1859,6 +2025,20 @@ namespace iee::game::shader_trace {
             } else if (cfg.enableGlProgramSuppressProbe) {
                 LOG_WARN("GL program suppress probe enabled in config but inactive because program={}",
                          cfg.glProgramSuppress);
+            }
+            if (g_glTextureSuppressEnabled) {
+                LOG_INFO("GL texture suppress probe enabled for program={} texture={}",
+                         g_glTextureSuppressProgram,
+                         g_glTextureSuppressTexture);
+            } else if (cfg.enableGlTextureSuppressProbe) {
+                LOG_WARN("GL texture suppress probe enabled in config but inactive because program={} texture={}",
+                         cfg.glTextureSuppressProgram,
+                         cfg.glTextureSuppressTexture);
+            }
+            if (g_traceEnabled && (g_runtimeTraceProgramFilter > 0 || g_runtimeTraceTextureFilter >= 0)) {
+                LOG_INFO("ShaderTrace runtime log filter enabled for program={} texture={}",
+                         g_runtimeTraceProgramFilter,
+                         g_runtimeTraceTextureFilter);
             }
             return true;
         } catch (const std::exception &e) {
@@ -1925,6 +2105,7 @@ namespace iee::game::shader_trace {
         {
             std::lock_guard lock(g_mutex);
             g_runtimeSummaries.clear();
+            g_glTextureSummaries.clear();
             g_batchAggregates.clear();
             g_loggedDrawCallsForCurrentProgram = 0;
             g_suppressedDrawLogsForCurrentProgram = false;
@@ -1957,6 +2138,7 @@ namespace iee::game::shader_trace {
         g_batchHighlightEnabled = false;
         g_batchSuppressEnabled = false;
         g_glProgramSuppressEnabled = false;
+        g_glTextureSuppressEnabled = false;
         g_drawApiAttached = false;
         g_batchHighlightProgram = 0;
         g_batchHighlightTextureId = -1;
@@ -1969,6 +2151,10 @@ namespace iee::game::shader_trace {
         g_batchSuppressMinCenterY = -1;
         g_batchSuppressMaxCenterY = -1;
         g_glProgramSuppress = 0;
+        g_glTextureSuppressProgram = 0;
+        g_glTextureSuppressTexture = -1;
+        g_runtimeTraceProgramFilter = 0;
+        g_runtimeTraceTextureFilter = -1;
         g_drawColorApi = nullptr;
 
         std::lock_guard lock(g_mutex);
@@ -1976,6 +2162,7 @@ namespace iee::game::shader_trace {
         g_programs.clear();
         g_boundTextures2D.clear();
         g_runtimeSummaries.clear();
+        g_glTextureSummaries.clear();
         g_batchAggregates.clear();
         g_currentProgram = 0;
         g_lastLoggedProgram = 0;

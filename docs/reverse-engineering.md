@@ -126,6 +126,7 @@ With `EnableShaderTracing = true`, the DLL tracer now logs:
 - engine-side batch geometry through the resolved `DrawBegin`, `DrawBindTexture`, `DrawTexCoord`, `DrawVertex`, and `DrawEnd` wrappers
 - framebuffer binds and color attachment updates around interesting programs
 - compact runtime summaries keyed by `{program, framebuffer, engineTexId}`
+- raw GL texture summaries keyed by `{program, framebuffer, samplerUnit, texture}`
 - an automatic runtime-summary reset on each `LoadArea`
 
 That makes the DLL the preferred source of truth for:
@@ -162,5 +163,15 @@ Current live-trace conclusion:
   - `program 24` removes map rendering while leaving actors and UI visible
 - therefore raw GL `program 3` is the first confirmed coarse entrypoint for actor-body work, but it is too broad on its own because it also carries UI
 - the next useful discriminator must separate in-world actor draws from UI draws within raw GL `program 3`, rather than searching for a different top-level shader program
+- shader filename classification in the tracer must be case-insensitive, otherwise `fpDraw.glsl`/`fpFont.glsl`/`fpSEAM.glsl` can collapse to `fragment-other` and lose the uniform metadata needed for texture-level draw summaries
+- the next live proof step after `glTextureSummary` is raw GL texture suppression keyed by `{program 3, texture}`, which is the narrowest currently proven probe that still sees actor bodies
+- current validated raw GL texture split for BGEE `2.6.6.x`:
+  - `{program 3, texture 2}` suppresses the main in-world character sprite body path
+  - `{program 3, texture 1}` suppresses the selection/outline path
+  - `{program 3, texture 2}` still has some collateral non-character use, notably shared icon-like content outside the core actor path
+- the first concrete implementation seam on top of that split is a shader uniform gate:
+  - `uIeeSpriteBodyMode = 1` only for raw `{program 3, texture 2}`
+  - `uIeeSpriteBodyMode = 0` for every other `fpDraw` draw
+  - this allows `fpDraw.glsl` to carry sprite-body-only filter logic without changing the rest of the `fpDraw` path
 
 Until a sprite-local intermediate is proven, treat full two-pass FSR as unsupported and keep sprite-upscale work in the one-pass shader-replacement bucket.

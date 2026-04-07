@@ -100,6 +100,7 @@ namespace {
             out << "EnableBatchHighlightProbe = true\n";
             out << "EnableBatchSuppressProbe = false\n";
             out << "EnableGlProgramSuppressProbe = true\n";
+            out << "EnableGlTextureSuppressProbe = true\n";
             out << "BatchHighlightProgram = 18\n";
             out << "BatchHighlightTextureId = 20\n\n";
             out << "BatchSuppressMinScreenWidth = 60\n";
@@ -111,6 +112,10 @@ namespace {
             out << "BatchSuppressMinCenterY = 100\n";
             out << "BatchSuppressMaxCenterY = 700\n\n";
             out << "GlProgramSuppress = 18\n\n";
+            out << "GlTextureSuppressProgram = 3\n";
+            out << "GlTextureSuppressTexture = 20\n\n";
+            out << "ShaderTraceRuntimeProgramFilter = 3\n";
+            out << "ShaderTraceRuntimeTextureFilter = 2\n\n";
             out << "[Rendering]\n";
             out << "EnableAnisotropicFiltering = false\n";
             out << "MaxAnisotropy = 4.0\n";
@@ -128,6 +133,7 @@ namespace {
         expect_true(cfg.enableBatchHighlightProbe, "Batch highlight probe flag should parse");
         expect_true(!cfg.enableBatchSuppressProbe, "Batch suppress probe flag should parse");
         expect_true(cfg.enableGlProgramSuppressProbe, "GL program suppress probe flag should parse");
+        expect_true(cfg.enableGlTextureSuppressProbe, "GL texture suppress probe flag should parse");
         expect_eq(cfg.batchHighlightProgram, 18, "Batch highlight program should parse");
         expect_eq(cfg.batchHighlightTextureId, 20, "Batch highlight texture id should parse");
         expect_eq(cfg.batchSuppressMinScreenWidth, 60, "Batch suppress min screen width should parse");
@@ -139,6 +145,10 @@ namespace {
         expect_eq(cfg.batchSuppressMinCenterY, 100, "Batch suppress min center Y should parse");
         expect_eq(cfg.batchSuppressMaxCenterY, 700, "Batch suppress max center Y should parse");
         expect_eq(cfg.glProgramSuppress, 18, "GL program suppress target should parse");
+        expect_eq(cfg.glTextureSuppressProgram, 3, "GL texture suppress program should parse");
+        expect_eq(cfg.glTextureSuppressTexture, 20, "GL texture suppress texture should parse");
+        expect_eq(cfg.shaderTraceRuntimeProgramFilter, 3, "Shader trace runtime program filter should parse");
+        expect_eq(cfg.shaderTraceRuntimeTextureFilter, 2, "Shader trace runtime texture filter should parse");
         expect_true(!cfg.enableAnisotropicFiltering, "Rendering bool should parse");
         expect_eq(cfg.maxAnisotropy, 4.0f, "Floating-point values should parse");
         expect_eq(cfg.lodBias, -0.5f, "Negative float values should parse");

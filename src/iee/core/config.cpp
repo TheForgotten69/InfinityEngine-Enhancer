@@ -91,6 +91,8 @@ namespace iee::core {
                 cfg.enableBatchSuppressProbe = parse_bool(val, cfg.enableBatchSuppressProbe);
             else if (iequals(key, "EnableGlProgramSuppressProbe"))
                 cfg.enableGlProgramSuppressProbe = parse_bool(val, cfg.enableGlProgramSuppressProbe);
+            else if (iequals(key, "EnableGlTextureSuppressProbe"))
+                cfg.enableGlTextureSuppressProbe = parse_bool(val, cfg.enableGlTextureSuppressProbe);
             else if (iequals(key, "BatchHighlightProgram"))
                 cfg.batchHighlightProgram = parse_int(val, cfg.batchHighlightProgram);
             else if (iequals(key, "BatchHighlightTextureId"))
@@ -113,6 +115,14 @@ namespace iee::core {
                 cfg.batchSuppressMaxCenterY = parse_int(val, cfg.batchSuppressMaxCenterY);
             else if (iequals(key, "GlProgramSuppress"))
                 cfg.glProgramSuppress = parse_int(val, cfg.glProgramSuppress);
+            else if (iequals(key, "GlTextureSuppressProgram"))
+                cfg.glTextureSuppressProgram = parse_int(val, cfg.glTextureSuppressProgram);
+            else if (iequals(key, "GlTextureSuppressTexture"))
+                cfg.glTextureSuppressTexture = parse_int(val, cfg.glTextureSuppressTexture);
+            else if (iequals(key, "ShaderTraceRuntimeProgramFilter"))
+                cfg.shaderTraceRuntimeProgramFilter = parse_int(val, cfg.shaderTraceRuntimeProgramFilter);
+            else if (iequals(key, "ShaderTraceRuntimeTextureFilter"))
+                cfg.shaderTraceRuntimeTextureFilter = parse_int(val, cfg.shaderTraceRuntimeTextureFilter);
             return;
         }
 
@@ -220,6 +230,7 @@ namespace iee::core {
         write_bool(f, "EnableBatchHighlightProbe", cfg.enableBatchHighlightProbe);
         write_bool(f, "EnableBatchSuppressProbe", cfg.enableBatchSuppressProbe);
         write_bool(f, "EnableGlProgramSuppressProbe", cfg.enableGlProgramSuppressProbe);
+        write_bool(f, "EnableGlTextureSuppressProbe", cfg.enableGlTextureSuppressProbe);
         f << "BatchHighlightProgram = " << cfg.batchHighlightProgram << "\n";
         f << "BatchHighlightTextureId = " << cfg.batchHighlightTextureId << "\n";
         f << "BatchSuppressMinScreenWidth = " << cfg.batchSuppressMinScreenWidth << "\n";
@@ -231,6 +242,10 @@ namespace iee::core {
         f << "BatchSuppressMinCenterY = " << cfg.batchSuppressMinCenterY << "\n";
         f << "BatchSuppressMaxCenterY = " << cfg.batchSuppressMaxCenterY << "\n";
         f << "GlProgramSuppress = " << cfg.glProgramSuppress << "\n";
+        f << "GlTextureSuppressProgram = " << cfg.glTextureSuppressProgram << "\n";
+        f << "GlTextureSuppressTexture = " << cfg.glTextureSuppressTexture << "\n";
+        f << "ShaderTraceRuntimeProgramFilter = " << cfg.shaderTraceRuntimeProgramFilter << "\n";
+        f << "ShaderTraceRuntimeTextureFilter = " << cfg.shaderTraceRuntimeTextureFilter << "\n";
 
         write_section(f, "Auto-Generated");
         f << "CachedLoadAreaRVA = 0x" << std::hex << cfg.cachedLoadAreaRVA << std::dec << "\n";
