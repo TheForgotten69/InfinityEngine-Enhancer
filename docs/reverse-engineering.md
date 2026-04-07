@@ -172,5 +172,13 @@ Current live-trace conclusion:
 - the current prototype seam on top of that split is the raw GL draw itself:
   - capture only `{program 3, texture 2}` into a sprite-body intermediate
   - leave `{program 3, texture 1}` and every other `program 3` texture on the native path
-  - run DLL-owned EASU/RCAS passes on the captured layer before compositing back to framebuffer `0`
-- `fpDraw.glsl` is now kept at baseline behavior for the two-pass prototype so the quality delta is attributable to the offscreen path rather than stacked shader edits
+  - `SpriteBodyMode = fsr` runs DLL-owned EASU/RCAS-style passes on the captured layer before compositing back to framebuffer `0`
+  - `SpriteBodyMode = supersample` captures the same layer above display resolution and downsamples it back during composite, currently with selectable `linear` or `catmull-rom` filtering
+- the same seam also supports a lighter hybrid path:
+  - `shader_trace` sets `uIeeSpriteBodyMode = 1` only for raw `{program 3, texture 2}` draws
+  - a modified `fpDraw.glsl` can then keep baseline behavior for every other draw while applying sprite-body-only sampling logic on that uniform
+  - if runtime tracing shows additional actor atlases on other raw GL textures, the seam can now be widened with `SpriteBodyExtraTextures`
+  - that same predicate now also supports `EnableSpriteBodySuppressProbe = true`, which skips matching draws entirely for hard visual verification
+- the repo working copy of `fpDraw.glsl` can now be used in two ways:
+  - baseline behavior when validating the offscreen-only prototype
+  - hybrid body-only enhancement when `uIeeSpriteBodyMode` is present and driven by the DLL

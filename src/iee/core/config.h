@@ -2,8 +2,19 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace iee::core {
+    enum class SpriteBodyPrototypeMode {
+        Fsr,
+        Supersample,
+    };
+
+    enum class SpriteBodySupersampleFilter {
+        Linear,
+        CatmullRom,
+    };
+
     struct EngineConfig {
         // region Textures
         bool enableAnisotropicFiltering = true;
@@ -34,9 +45,14 @@ namespace iee::core {
         int shaderTraceRuntimeProgramFilter = 0;
         int shaderTraceRuntimeTextureFilter = -1;
         bool enableSpriteBodyFsrPrototype = false;
+        bool enableSpriteBodySuppressProbe = false;
         int spriteBodyProgram = 3;
         int spriteBodyTexture = 2;
+        std::vector<int> spriteBodyExtraTextures{};
+        SpriteBodyPrototypeMode spriteBodyMode = SpriteBodyPrototypeMode::Fsr;
         float spriteBodyInputScale = 0.667f;
+        float spriteBodySupersampleScale = 2.0f;
+        SpriteBodySupersampleFilter spriteBodySupersampleFilter = SpriteBodySupersampleFilter::Linear;
         bool spriteBodyEnableRcas = true;
         float spriteBodyRcasSharpness = 0.20f;
         int spriteBodyDebugView = 0;

@@ -185,10 +185,24 @@ Targeted runtime confirmation:
   - `{program 3, texture 2}` = main character sprite body path
   - `{program 3, texture 1}` = outline/select path
 - current DLL prototype path:
-  - capture only raw `{program 3, texture 2}` draws into a reduced-resolution transparent FBO
-  - run EASU to full display resolution
-  - optionally run RCAS at display resolution
+  - capture only raw `{program 3, texture 2}` draws into a sprite-body transparent FBO
+  - `SpriteBodyMode = fsr`:
+    - capture below display resolution
+    - run EASU to full display resolution
+    - optionally run RCAS at display resolution
+  - `SpriteBodyMode = supersample`:
+    - capture above display resolution
+    - downsample back to display resolution with either:
+      - `SpriteBodySupersampleFilter = linear`
+      - `SpriteBodySupersampleFilter = catmull-rom`
   - composite back with premultiplied-alpha blending
+- current most promising hybrid path:
+  - keep the DLL seam for raw `{program 3, texture 2}` detection
+  - drive `uIeeSpriteBodyMode` from the DLL on matching draws
+  - keep `fpDraw.glsl` baseline for all other `program 3` content
+  - apply a modest texel-aware sprite-body reconstruction only when `uIeeSpriteBodyMode > 0.5`
+  - if different actors land on different raw GL texture objects, widen the body seam with `SpriteBodyExtraTextures = ...` rather than broadening all of `program 3`
+  - if coverage is still uncertain, enable `EnableSpriteBodySuppressProbe = true`; every configured sprite-body draw is skipped instead of being captured, so matching actors disappear immediately
 
 ## Acceptance Criteria
 
@@ -216,3 +230,4 @@ If the v1 shader does not beat the Catmull-Rom baseline, keep the docs and basel
 - One-pass reconstruction can improve sampling but cannot invent missing detail from low-quality sprite art.
 - Transparent sprite edges are the highest-risk area for halos and black fringe artifacts.
 - If the replacement shader does not compile or the injected texel scale is unavailable for the currently bound sprite texture, fall back to the baseline shader source rather than widening the runtime hook scope.
+- If `SpriteBodyMode = supersample` does not visibly beat the best FSR setting, the current post-raster seam is likely the limiting factor rather than the specific upscale kernel.

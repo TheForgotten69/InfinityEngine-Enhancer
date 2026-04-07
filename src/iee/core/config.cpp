@@ -4,6 +4,7 @@
 #include <charconv>
 #include <fstream>
 #include <optional>
+#include <sstream>
 #ifdef _WIN64
 #include <windows.h>
 #endif
@@ -46,6 +47,64 @@ namespace iee::core {
             return consumed > 0 ? value : def;
         } catch (...) {
             return def;
+        }
+    }
+
+    static std::vector<int> parse_int_list(const std::string &s) {
+        std::vector<int> values;
+        std::stringstream ss(s);
+        std::string item;
+        while (std::getline(ss, item, ',')) {
+            item = trim(item);
+            if (item.empty()) continue;
+            values.push_back(parse_int(item, -1));
+        }
+        values.erase(std::remove_if(values.begin(), values.end(), [](int value) { return value < 0; }), values.end());
+        std::sort(values.begin(), values.end());
+        values.erase(std::unique(values.begin(), values.end()), values.end());
+        return values;
+    }
+
+    static std::string join_int_list(const std::vector<int> &values) {
+        std::string out;
+        for (std::size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) out += ", ";
+            out += std::to_string(values[i]);
+        }
+        return out;
+    }
+
+    static SpriteBodyPrototypeMode parse_sprite_body_mode(const std::string &s, SpriteBodyPrototypeMode def) {
+        if (iequals(s, "fsr")) return SpriteBodyPrototypeMode::Fsr;
+        if (iequals(s, "supersample")) return SpriteBodyPrototypeMode::Supersample;
+        return def;
+    }
+
+    static const char *sprite_body_mode_name(SpriteBodyPrototypeMode mode) {
+        switch (mode) {
+            case SpriteBodyPrototypeMode::Supersample:
+                return "supersample";
+            case SpriteBodyPrototypeMode::Fsr:
+            default:
+                return "fsr";
+        }
+    }
+
+    static SpriteBodySupersampleFilter parse_sprite_body_supersample_filter(const std::string &s,
+                                                                            SpriteBodySupersampleFilter def) {
+        if (iequals(s, "linear")) return SpriteBodySupersampleFilter::Linear;
+        if (iequals(s, "catmull-rom") || iequals(s, "catmullrom") || iequals(s, "catrom"))
+            return SpriteBodySupersampleFilter::CatmullRom;
+        return def;
+    }
+
+    static const char *sprite_body_supersample_filter_name(SpriteBodySupersampleFilter filter) {
+        switch (filter) {
+            case SpriteBodySupersampleFilter::CatmullRom:
+                return "catmull-rom";
+            case SpriteBodySupersampleFilter::Linear:
+            default:
+                return "linear";
         }
     }
 
@@ -125,12 +184,23 @@ namespace iee::core {
                 cfg.shaderTraceRuntimeTextureFilter = parse_int(val, cfg.shaderTraceRuntimeTextureFilter);
             else if (iequals(key, "EnableSpriteBodyFsrPrototype"))
                 cfg.enableSpriteBodyFsrPrototype = parse_bool(val, cfg.enableSpriteBodyFsrPrototype);
+            else if (iequals(key, "EnableSpriteBodySuppressProbe"))
+                cfg.enableSpriteBodySuppressProbe = parse_bool(val, cfg.enableSpriteBodySuppressProbe);
             else if (iequals(key, "SpriteBodyProgram"))
                 cfg.spriteBodyProgram = parse_int(val, cfg.spriteBodyProgram);
             else if (iequals(key, "SpriteBodyTexture"))
                 cfg.spriteBodyTexture = parse_int(val, cfg.spriteBodyTexture);
+            else if (iequals(key, "SpriteBodyExtraTextures"))
+                cfg.spriteBodyExtraTextures = parse_int_list(val);
+            else if (iequals(key, "SpriteBodyMode"))
+                cfg.spriteBodyMode = parse_sprite_body_mode(val, cfg.spriteBodyMode);
             else if (iequals(key, "SpriteBodyInputScale"))
                 cfg.spriteBodyInputScale = parse_float(val, cfg.spriteBodyInputScale);
+            else if (iequals(key, "SpriteBodySupersampleScale"))
+                cfg.spriteBodySupersampleScale = parse_float(val, cfg.spriteBodySupersampleScale);
+            else if (iequals(key, "SpriteBodySupersampleFilter"))
+                cfg.spriteBodySupersampleFilter = parse_sprite_body_supersample_filter(
+                    val, cfg.spriteBodySupersampleFilter);
             else if (iequals(key, "SpriteBodyEnableRcas"))
                 cfg.spriteBodyEnableRcas = parse_bool(val, cfg.spriteBodyEnableRcas);
             else if (iequals(key, "SpriteBodyRcasSharpness"))
@@ -261,9 +331,15 @@ namespace iee::core {
         f << "ShaderTraceRuntimeProgramFilter = " << cfg.shaderTraceRuntimeProgramFilter << "\n";
         f << "ShaderTraceRuntimeTextureFilter = " << cfg.shaderTraceRuntimeTextureFilter << "\n";
         write_bool(f, "EnableSpriteBodyFsrPrototype", cfg.enableSpriteBodyFsrPrototype);
+        write_bool(f, "EnableSpriteBodySuppressProbe", cfg.enableSpriteBodySuppressProbe);
         f << "SpriteBodyProgram = " << cfg.spriteBodyProgram << "\n";
         f << "SpriteBodyTexture = " << cfg.spriteBodyTexture << "\n";
+        f << "SpriteBodyExtraTextures = " << join_int_list(cfg.spriteBodyExtraTextures) << "\n";
+        f << "SpriteBodyMode = " << sprite_body_mode_name(cfg.spriteBodyMode) << "\n";
         f << "SpriteBodyInputScale = " << cfg.spriteBodyInputScale << "\n";
+        f << "SpriteBodySupersampleScale = " << cfg.spriteBodySupersampleScale << "\n";
+        f << "SpriteBodySupersampleFilter = "
+          << sprite_body_supersample_filter_name(cfg.spriteBodySupersampleFilter) << "\n";
         write_bool(f, "SpriteBodyEnableRcas", cfg.spriteBodyEnableRcas);
         f << "SpriteBodyRcasSharpness = " << cfg.spriteBodyRcasSharpness << "\n";
         f << "SpriteBodyDebugView = " << cfg.spriteBodyDebugView << "\n";

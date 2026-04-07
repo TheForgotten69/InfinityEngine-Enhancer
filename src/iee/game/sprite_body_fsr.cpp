@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace iee::game::sprite_body_fsr {
     namespace {
@@ -107,9 +108,15 @@ namespace iee::game::sprite_body_fsr {
 
         bool g_enabled = false;
         bool g_installed = false;
+        bool g_suppressProbeEnabled = false;
         GLuint g_targetProgram = 3;
         GLuint g_targetTexture = 2;
+        std::vector<GLuint> g_extraTargetTextures;
+        std::vector<GLuint> g_loggedSuppressedTextures;
+        core::SpriteBodyPrototypeMode g_mode = core::SpriteBodyPrototypeMode::Fsr;
         float g_inputScale = 0.667f;
+        float g_supersampleScale = 2.0f;
+        core::SpriteBodySupersampleFilter g_supersampleFilter = core::SpriteBodySupersampleFilter::Linear;
         bool g_enableRcas = true;
         float g_rcasSharpness = 0.20f;
         int g_debugView = 0;
@@ -145,6 +152,7 @@ namespace iee::game::sprite_body_fsr {
         };
 
         PassProgram g_blitProgram;
+        PassProgram g_catmullRomProgram;
         PassProgram g_easuProgram;
         PassProgram g_rcasProgram;
         bool g_programsReady = false;
@@ -278,6 +286,44 @@ namespace iee::game::sprite_body_fsr {
 
         GLint scaled_dimension(GLint displaySize, float scale) noexcept {
             return clamp_positive(static_cast<GLint>(std::lround(static_cast<double>(displaySize) * scale)));
+        }
+
+        bool is_supersample_mode() noexcept {
+            return g_mode == core::SpriteBodyPrototypeMode::Supersample;
+        }
+
+        float active_capture_scale() noexcept {
+            return is_supersample_mode() ? g_supersampleScale : g_inputScale;
+        }
+
+        bool texture_matches_target(GLuint texture) noexcept {
+            if (texture == g_targetTexture) return true;
+            return std::find(g_extraTargetTextures.begin(), g_extraTargetTextures.end(), texture) !=
+                   g_extraTargetTextures.end();
+        }
+
+        const char *supersample_filter_name() noexcept {
+            switch (g_supersampleFilter) {
+                case core::SpriteBodySupersampleFilter::CatmullRom:
+                    return "catmull-rom";
+                case core::SpriteBodySupersampleFilter::Linear:
+                default:
+                    return "linear";
+            }
+        }
+
+        void log_suppressed_target_once(const DrawCallInfo &info) {
+            if (!g_suppressProbeEnabled) return;
+            if (std::find(g_loggedSuppressedTextures.begin(), g_loggedSuppressedTextures.end(), info.texture) !=
+                g_loggedSuppressedTextures.end()) {
+                return;
+            }
+
+            g_loggedSuppressedTextures.push_back(info.texture);
+            LOG_INFO("SpriteBodyFsr suppress probe matched program={} texture={} framebuffer={}",
+                     info.program,
+                     info.texture,
+                     info.framebuffer);
         }
 
         GLint scale_coord(GLint value, GLint displaySize, GLint targetSize) noexcept {
@@ -477,6 +523,62 @@ varying mediump vec2 vTexCoord;
 void main()
 {
     gl_FragColor = texture2D(uTex, vTexCoord);
+}
+)GLSL";
+
+            static constexpr char kCatmullRomFragmentShader[] = R"GLSL(
+#if !defined(GL_ES)
+#define highp
+#define mediump
+#define lowp
+#else
+precision highp float;
+#endif
+
+uniform lowp sampler2D uTex;
+uniform highp vec2 uInputSize;
+varying mediump vec2 vTexCoord;
+
+lowp vec4 ieeCatmullRom9Tap(in mediump vec2 uv)
+{
+    mediump vec2 samplePos = uv * uInputSize;
+    mediump vec2 texPos1 = floor(samplePos - 0.5) + 0.5;
+    mediump vec2 f = samplePos - texPos1;
+    mediump vec2 f2 = f * f;
+    mediump vec2 f3 = f2 * f;
+
+    mediump vec2 w0 = f2 - 0.5 * (f3 + f);
+    mediump vec2 w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
+    mediump vec2 w3 = 0.5 * (f3 - f2);
+    mediump vec2 w2 = 1.0 - w0 - w1 - w3;
+
+    mediump vec2 w12 = w1 + w2;
+    mediump vec2 offset12 = vec2(
+        w12.x != 0.0 ? w2.x / w12.x : 0.0,
+        w12.y != 0.0 ? w2.y / w12.y : 0.0);
+
+    mediump vec2 texPos0 = (texPos1 - 1.0) / uInputSize;
+    mediump vec2 texPos3 = (texPos1 + 2.0) / uInputSize;
+    mediump vec2 texPos12 = (texPos1 + offset12) / uInputSize;
+
+    lowp vec4 result = vec4(0.0);
+    result += texture2D(uTex, vec2(texPos0.x, texPos0.y)) * (w0.x * w0.y);
+    result += texture2D(uTex, vec2(texPos12.x, texPos0.y)) * (w12.x * w0.y);
+    result += texture2D(uTex, vec2(texPos3.x, texPos0.y)) * (w3.x * w0.y);
+
+    result += texture2D(uTex, vec2(texPos0.x, texPos12.y)) * (w0.x * w12.y);
+    result += texture2D(uTex, vec2(texPos12.x, texPos12.y)) * (w12.x * w12.y);
+    result += texture2D(uTex, vec2(texPos3.x, texPos12.y)) * (w3.x * w12.y);
+
+    result += texture2D(uTex, vec2(texPos0.x, texPos3.y)) * (w0.x * w3.y);
+    result += texture2D(uTex, vec2(texPos12.x, texPos3.y)) * (w12.x * w3.y);
+    result += texture2D(uTex, vec2(texPos3.x, texPos3.y)) * (w3.x * w3.y);
+    return result;
+}
+
+void main()
+{
+    gl_FragColor = ieeCatmullRom9Tap(vTexCoord);
 }
 )GLSL";
 
@@ -690,12 +792,17 @@ void main()
 )GLSL";
 
             g_blitProgram = link_program(kFullscreenVertexShader, kBlitFragmentShader, "blit");
+            g_catmullRomProgram = link_program(kFullscreenVertexShader, kCatmullRomFragmentShader, "catmull-rom");
             g_easuProgram = link_program(kFullscreenVertexShader, kEasuFragmentShader, "easu");
             g_rcasProgram = link_program(kFullscreenVertexShader, kRcasFragmentShader, "rcas");
-            g_programsReady = g_blitProgram.id != 0 && g_easuProgram.id != 0 && g_rcasProgram.id != 0;
+            g_programsReady = g_blitProgram.id != 0 &&
+                              g_catmullRomProgram.id != 0 &&
+                              g_easuProgram.id != 0 &&
+                              g_rcasProgram.id != 0;
             if (!g_programsReady) {
                 LOG_ERROR("SpriteBodyFsr failed to compile internal pass shaders");
                 destroy_pass_program(g_blitProgram);
+                destroy_pass_program(g_catmullRomProgram);
                 destroy_pass_program(g_easuProgram);
                 destroy_pass_program(g_rcasProgram);
             }
@@ -745,8 +852,8 @@ void main()
 
             const auto requestedDisplayWidth = clamp_positive(g_displayViewport[2]);
             const auto requestedDisplayHeight = clamp_positive(g_displayViewport[3]);
-            const auto requestedInputWidth = scaled_dimension(requestedDisplayWidth, g_inputScale);
-            const auto requestedInputHeight = scaled_dimension(requestedDisplayHeight, g_inputScale);
+            const auto requestedInputWidth = scaled_dimension(requestedDisplayWidth, active_capture_scale());
+            const auto requestedInputHeight = scaled_dimension(requestedDisplayHeight, active_capture_scale());
 
             if (g_spriteInputTex != 0 &&
                 g_spriteUpscaleTex != 0 &&
@@ -822,6 +929,12 @@ void main()
             if (program.uSharpness >= 0) g_glUniform1f(program.uSharpness, sharpness);
             g_glActiveTexture(GL_TEXTURE0);
             g_glBindTexture(GL_TEXTURE_2D, texture);
+        }
+
+        const PassProgram &supersample_downsample_program() noexcept {
+            return g_supersampleFilter == core::SpriteBodySupersampleFilter::CatmullRom
+                       ? g_catmullRomProgram
+                       : g_blitProgram;
         }
 
         void bind_display_target_for_composite() {
@@ -904,7 +1017,7 @@ void main()
                     g_glViewport(0, 0, g_displayWidth, g_displayHeight);
                     g_glDisable(GL_SCISSOR_TEST);
                     g_glDisable(GL_BLEND);
-                    set_program_uniforms(g_easuProgram,
+                    set_program_uniforms(is_supersample_mode() ? supersample_downsample_program() : g_easuProgram,
                                          g_spriteInputTex,
                                          static_cast<GLfloat>(g_inputWidth),
                                          static_cast<GLfloat>(g_inputHeight),
@@ -921,7 +1034,7 @@ void main()
                                          static_cast<GLfloat>(g_inputHeight),
                                          static_cast<GLfloat>(g_displayWidth),
                                          static_cast<GLfloat>(g_displayHeight));
-                } else if (g_debugView == 2) {
+                } else if (g_debugView == 2 || is_supersample_mode()) {
                     set_program_uniforms(g_blitProgram,
                                          g_spriteUpscaleTex,
                                          static_cast<GLfloat>(g_displayWidth),
@@ -953,10 +1066,7 @@ void main()
         }
 
         bool matches_target(const DrawCallInfo &info) noexcept {
-            return g_enabled &&
-                   info.program == g_targetProgram &&
-                   info.texture == g_targetTexture &&
-                   info.framebuffer == 0;
+            return g_enabled && matches_configured_target(info.program, info.texture, info.framebuffer);
         }
 
         bool begin_capture_if_needed() {
@@ -1009,6 +1119,11 @@ void main()
                 return false;
             }
 
+            if (g_suppressProbeEnabled) {
+                log_suppressed_target_once(info);
+                return true;
+            }
+
             if (!begin_capture_if_needed()) {
                 return false;
             }
@@ -1028,10 +1143,23 @@ void main()
     }
 
     bool install(const core::EngineConfig &cfg) {
-        g_enabled = cfg.enableSpriteBodyFsrPrototype;
+        g_enabled = cfg.enableSpriteBodyFsrPrototype || cfg.enableSpriteBodySuppressProbe;
+        g_suppressProbeEnabled = cfg.enableSpriteBodySuppressProbe;
         g_targetProgram = static_cast<GLuint>(std::max(cfg.spriteBodyProgram, 0));
         g_targetTexture = static_cast<GLuint>(std::max(cfg.spriteBodyTexture, 0));
+        g_extraTargetTextures.clear();
+        g_loggedSuppressedTextures.clear();
+        g_extraTargetTextures.reserve(cfg.spriteBodyExtraTextures.size());
+        for (const auto texture: cfg.spriteBodyExtraTextures) {
+            if (texture <= 0) continue;
+            const auto glTexture = static_cast<GLuint>(texture);
+            if (glTexture == g_targetTexture) continue;
+            g_extraTargetTextures.push_back(glTexture);
+        }
+        g_mode = cfg.spriteBodyMode;
         g_inputScale = std::clamp(cfg.spriteBodyInputScale, 0.1f, 1.0f);
+        g_supersampleScale = std::clamp(cfg.spriteBodySupersampleScale, 1.0f, 4.0f);
+        g_supersampleFilter = cfg.spriteBodySupersampleFilter;
         g_enableRcas = cfg.spriteBodyEnableRcas;
         g_rcasSharpness = std::clamp(cfg.spriteBodyRcasSharpness, 0.0f, 1.0f);
         g_debugView = std::clamp(cfg.spriteBodyDebugView, 0, 3);
@@ -1060,18 +1188,34 @@ void main()
             H_SwapBuffers.create(swapBuffersTarget, reinterpret_cast<void *>(&Detour_SwapBuffers));
             H_SwapBuffers.enable();
             g_installed = true;
-            LOG_INFO("SpriteBodyFsr prototype enabled for program={} texture={} inputScale={:.3f} rcas={} sharpness={:.2f} debugView={}",
-                     g_targetProgram,
-                     g_targetTexture,
-                     g_inputScale,
-                     g_enableRcas ? "true" : "false",
-                     g_rcasSharpness,
-                     g_debugView);
+            if (cfg.enableSpriteBodyFsrPrototype) {
+                LOG_INFO("SpriteBodyFsr prototype enabled for program={} texture={} mode={} captureScale={:.3f} supersampleFilter={} rcas={} sharpness={:.2f} debugView={}",
+                         g_targetProgram,
+                         g_targetTexture,
+                         is_supersample_mode() ? "supersample" : "fsr",
+                         active_capture_scale(),
+                         supersample_filter_name(),
+                         g_enableRcas ? "true" : "false",
+                         g_rcasSharpness,
+                         g_debugView);
+            }
+            if (g_suppressProbeEnabled) {
+                LOG_INFO("SpriteBodyFsr suppress probe enabled for program={} texture={} extraTextures={}",
+                         g_targetProgram,
+                         g_targetTexture,
+                         g_extraTargetTextures.size());
+            }
             return true;
         } catch (const std::exception &e) {
             LOG_ERROR("SpriteBodyFsr install failed: {}", e.what());
             return false;
         }
+    }
+
+    bool matches_configured_target(GLuint program, GLuint texture, GLuint framebuffer) noexcept {
+        return program == g_targetProgram &&
+               framebuffer == 0 &&
+               texture_matches_target(texture);
     }
 
     bool is_internal_pass_active() noexcept {
@@ -1114,6 +1258,7 @@ void main()
         flush_pending_layer();
         H_SwapBuffers.disable();
         destroy_pass_program(g_blitProgram);
+        destroy_pass_program(g_catmullRomProgram);
         destroy_pass_program(g_easuProgram);
         destroy_pass_program(g_rcasProgram);
         destroy_resources();
@@ -1121,9 +1266,15 @@ void main()
         g_programsReady = false;
         g_installed = false;
         g_enabled = false;
+        g_suppressProbeEnabled = false;
         g_targetProgram = 3;
         g_targetTexture = 2;
+        g_extraTargetTextures.clear();
+        g_loggedSuppressedTextures.clear();
+        g_mode = core::SpriteBodyPrototypeMode::Fsr;
         g_inputScale = 0.667f;
+        g_supersampleScale = 2.0f;
+        g_supersampleFilter = core::SpriteBodySupersampleFilter::Linear;
         g_enableRcas = true;
         g_rcasSharpness = 0.20f;
         g_debugView = 0;

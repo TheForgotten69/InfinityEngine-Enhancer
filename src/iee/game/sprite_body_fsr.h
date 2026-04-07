@@ -24,6 +24,8 @@ namespace iee::game::sprite_body_fsr {
 
     bool install(const core::EngineConfig &cfg);
 
+    bool matches_configured_target(GLuint program, GLuint texture, GLuint framebuffer) noexcept;
+
     bool is_internal_pass_active() noexcept;
 
     void on_external_bind_framebuffer(GLenum target, GLuint framebuffer);

@@ -515,7 +515,9 @@ namespace iee::game::shader_trace {
         };
 
         bool is_sprite_body_draw(const DrawCallSnapshot &snapshot) noexcept {
-            return snapshot.program == 3 && snapshot.texture == 2;
+            return sprite_body_fsr::matches_configured_target(snapshot.program,
+                                                              snapshot.texture,
+                                                              snapshot.framebuffer);
         }
 
         struct EngineBatchSnapshot {

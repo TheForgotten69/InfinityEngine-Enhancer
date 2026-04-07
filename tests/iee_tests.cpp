@@ -117,9 +117,14 @@ namespace {
             out << "ShaderTraceRuntimeProgramFilter = 3\n";
             out << "ShaderTraceRuntimeTextureFilter = 2\n\n";
             out << "EnableSpriteBodyFsrPrototype = true\n";
+            out << "EnableSpriteBodySuppressProbe = true\n";
             out << "SpriteBodyProgram = 3\n";
             out << "SpriteBodyTexture = 2\n";
+            out << "SpriteBodyExtraTextures = 5, 7\n";
+            out << "SpriteBodyMode = supersample\n";
             out << "SpriteBodyInputScale = 0.667\n";
+            out << "SpriteBodySupersampleScale = 2.0\n";
+            out << "SpriteBodySupersampleFilter = catmull-rom\n";
             out << "SpriteBodyEnableRcas = true\n";
             out << "SpriteBodyRcasSharpness = 0.20\n";
             out << "SpriteBodyDebugView = 2\n\n";
@@ -157,9 +162,20 @@ namespace {
         expect_eq(cfg.shaderTraceRuntimeProgramFilter, 3, "Shader trace runtime program filter should parse");
         expect_eq(cfg.shaderTraceRuntimeTextureFilter, 2, "Shader trace runtime texture filter should parse");
         expect_true(cfg.enableSpriteBodyFsrPrototype, "Sprite body FSR prototype flag should parse");
+        expect_true(cfg.enableSpriteBodySuppressProbe, "Sprite body suppress probe flag should parse");
         expect_eq(cfg.spriteBodyProgram, 3, "Sprite body program should parse");
         expect_eq(cfg.spriteBodyTexture, 2, "Sprite body texture should parse");
+        expect_eq(cfg.spriteBodyExtraTextures.size(), std::size_t{2}, "Sprite body extra textures should parse");
+        if (cfg.spriteBodyExtraTextures.size() == 2) {
+            expect_eq(cfg.spriteBodyExtraTextures[0], 5, "First extra sprite body texture should parse");
+            expect_eq(cfg.spriteBodyExtraTextures[1], 7, "Second extra sprite body texture should parse");
+        }
+        expect_true(cfg.spriteBodyMode == iee::core::SpriteBodyPrototypeMode::Supersample,
+                    "Sprite body mode should parse");
         expect_eq(cfg.spriteBodyInputScale, 0.667f, "Sprite body input scale should parse");
+        expect_eq(cfg.spriteBodySupersampleScale, 2.0f, "Sprite body supersample scale should parse");
+        expect_true(cfg.spriteBodySupersampleFilter == iee::core::SpriteBodySupersampleFilter::CatmullRom,
+                    "Sprite body supersample filter should parse");
         expect_true(cfg.spriteBodyEnableRcas, "Sprite body RCAS flag should parse");
         expect_eq(cfg.spriteBodyRcasSharpness, 0.20f, "Sprite body RCAS sharpness should parse");
         expect_eq(cfg.spriteBodyDebugView, 2, "Sprite body debug view should parse");
