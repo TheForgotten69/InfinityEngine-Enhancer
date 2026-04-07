@@ -147,16 +147,14 @@ The current design choices are:
 - Keep `fpselect` outline logic intact and only upscale solid sprite texels.
 - Use the DLL tracer, not Ghidra alone, to answer live draw-boundary and framebuffer questions for a future sprite-only FBO design.
 - Treat `fpDraw.glsl` as the confirmed live routing probe for actor bodies, but keep actual feature work out of raw `fpDraw` replacement because its scope is broader than sprites.
-- Start the next iteration from [`shaders/sprite/v1/fpdraw.glsl`](../shaders/sprite/v1/fpdraw.glsl), with the shader body gated by `uIeeSpriteBodyMode` so only raw `{program 3, texture 2}` draws take the sprite-body filter path.
+- Keep [`shaders/sprite/v1/fpdraw.glsl`](../shaders/sprite/v1/fpdraw.glsl) at baseline behavior for the two-pass prototype, so sprite-body filtering lives in the DLL-owned offscreen path rather than stacking on raw `fpDraw`.
 
 Diagnostic variants are also provided under `shaders/sprite/v1/diagnostics/` to answer two runtime questions quickly:
 
 - Is the game actually loading the replacement sprite shader file.
 - Is `uTcScale` non-zero inside `fpsprite` and `fpselect`.
 
-This is intentionally not a claim that full FSR is integrated. It is a gated one-pass sprite experiment.
-
-The repo now also contains enough tracing to pivot to a sprite-FBO prototype once the engine’s draw-boundary and framebuffer behavior are confirmed from logs.
+The repo now contains enough tracing and runtime discrimination to prototype a sprite-only FBO path on the proven raw GL seam.
 
 Current recommendation after the `fpDraw` routing probe:
 
@@ -164,7 +162,7 @@ Current recommendation after the `fpDraw` routing probe:
 - do not keep spending time on `fpsprite`/`fpselect` as if they were the main body path
 - do not use RenderTexture-resolved engine wrappers as the primary actor interception point for this build; they miss the in-world actor body path
 - move the real implementation toward DLL-side filtering on raw GL `program 3`, with additional discrimination to exclude UI before any upscale or sharpen filter is applied
-- use `uIeeSpriteBodyMode` as the first concrete implementation seam: the DLL decides when `{program 3, texture 2}` is active, and `fpDraw.glsl` only applies sprite-body filtering for those draws
+- prototype two-pass FSR only on raw `{program 3, texture 2}` through a sprite-only offscreen path
 
 Targeted runtime confirmation:
 
@@ -186,6 +184,11 @@ Targeted runtime confirmation:
 - current validated texture split for BGEE `2.6.6.x`:
   - `{program 3, texture 2}` = main character sprite body path
   - `{program 3, texture 1}` = outline/select path
+- current DLL prototype path:
+  - capture only raw `{program 3, texture 2}` draws into a reduced-resolution transparent FBO
+  - run EASU to full display resolution
+  - optionally run RCAS at display resolution
+  - composite back with premultiplied-alpha blending
 
 ## Acceptance Criteria
 

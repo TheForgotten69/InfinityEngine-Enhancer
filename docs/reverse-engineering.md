@@ -169,9 +169,8 @@ Current live-trace conclusion:
   - `{program 3, texture 2}` suppresses the main in-world character sprite body path
   - `{program 3, texture 1}` suppresses the selection/outline path
   - `{program 3, texture 2}` still has some collateral non-character use, notably shared icon-like content outside the core actor path
-- the first concrete implementation seam on top of that split is a shader uniform gate:
-  - `uIeeSpriteBodyMode = 1` only for raw `{program 3, texture 2}`
-  - `uIeeSpriteBodyMode = 0` for every other `fpDraw` draw
-  - this allows `fpDraw.glsl` to carry sprite-body-only filter logic without changing the rest of the `fpDraw` path
-
-Until a sprite-local intermediate is proven, treat full two-pass FSR as unsupported and keep sprite-upscale work in the one-pass shader-replacement bucket.
+- the current prototype seam on top of that split is the raw GL draw itself:
+  - capture only `{program 3, texture 2}` into a sprite-body intermediate
+  - leave `{program 3, texture 1}` and every other `program 3` texture on the native path
+  - run DLL-owned EASU/RCAS passes on the captured layer before compositing back to framebuffer `0`
+- `fpDraw.glsl` is now kept at baseline behavior for the two-pass prototype so the quality delta is attributable to the offscreen path rather than stacked shader edits

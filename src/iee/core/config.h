@@ -33,6 +33,13 @@ namespace iee::core {
         int glTextureSuppressTexture = -1;
         int shaderTraceRuntimeProgramFilter = 0;
         int shaderTraceRuntimeTextureFilter = -1;
+        bool enableSpriteBodyFsrPrototype = false;
+        int spriteBodyProgram = 3;
+        int spriteBodyTexture = 2;
+        float spriteBodyInputScale = 0.667f;
+        bool spriteBodyEnableRcas = true;
+        float spriteBodyRcasSharpness = 0.20f;
+        int spriteBodyDebugView = 0;
 
         // region Cached addresses (auto-generated from pattern scanning)
         std::uintptr_t cachedLoadAreaRVA = 0x27E710;

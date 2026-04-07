@@ -11,6 +11,7 @@
 #include "iee/game/game_addrs.h"
 #include "iee/game/renderer.h"
 #include "iee/game/shader_trace.h"
+#include "iee/game/sprite_body_fsr.h"
 
 namespace iee {
     static std::unique_ptr<AppContext> g_appContext;
@@ -28,6 +29,9 @@ namespace iee {
 
             if (!game::shader_trace::install(cfg)) {
                 LOG_WARN("ShaderTrace was requested but could not be installed");
+            }
+            if (!game::sprite_body_fsr::install(cfg)) {
+                LOG_WARN("SpriteBodyFsr prototype was requested but could not be installed");
             }
 
             g_appContext = std::make_unique<AppContext>();
@@ -101,6 +105,7 @@ namespace iee {
             g_appContext.reset();
         }
         game::shader_trace::uninstall();
+        game::sprite_body_fsr::uninstall();
     }
 }
 

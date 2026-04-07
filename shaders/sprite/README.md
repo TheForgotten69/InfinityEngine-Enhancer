@@ -5,7 +5,7 @@ This directory holds repo-local sprite shader material.
 - `runtime_baseline/`
   - Captured live shader sources from the target BGEE runtime.
 - `v1/`
-  - Repo-owned working copies for the sprite-upscale experiment, including the runtime-gated `fpDraw` sprite-body path.
+  - Repo-owned working copies for sprite-upscale experiments. `fpdraw.glsl` should stay baseline when validating the DLL-owned two-pass prototype.
 - `easu_rcas/`
   - Reference FSR shader material kept for local adaptation.
 

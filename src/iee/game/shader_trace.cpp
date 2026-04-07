@@ -3,6 +3,7 @@
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "renderer.h"
+#include "sprite_body_fsr.h"
 #include <windows.h>
 #include <algorithm>
 #include <cctype>
@@ -1228,6 +1229,9 @@ namespace iee::game::shader_trace {
         }
 
         GLuint APIENTRY Detour_glCreateShader(GLenum type) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                return g_glCreateShader(type);
+            }
             const auto shader = g_glCreateShader(type);
             std::lock_guard lock(g_mutex);
             g_shaders[shader].type = type;
@@ -1238,6 +1242,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDeleteShader(GLuint shader) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glDeleteShader(shader);
+                return;
+            }
             {
                 std::lock_guard lock(g_mutex);
                 g_shaders.erase(shader);
@@ -1249,6 +1257,10 @@ namespace iee::game::shader_trace {
                                             GLsizei count,
                                             const GLchar *const *strings,
                                             const GLint *lengths) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glShaderSource(shader, count, strings, lengths);
+                return;
+            }
             std::string merged;
             for (GLsizei i = 0; i < count; ++i) {
                 if (!strings || !strings[i]) continue;
@@ -1294,6 +1306,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glCompileShader(GLuint shader) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glCompileShader(shader);
+                return;
+            }
             g_glCompileShader(shader);
 
             if (!ensure_proc(g_glGetShaderiv, "glGetShaderiv")) return;
@@ -1314,6 +1330,9 @@ namespace iee::game::shader_trace {
         }
 
         GLuint APIENTRY Detour_glCreateProgram() {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                return g_glCreateProgram();
+            }
             const auto program = g_glCreateProgram();
             std::lock_guard lock(g_mutex);
             g_programs.emplace(program, ProgramRecord{});
@@ -1324,6 +1343,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDeleteProgram(GLuint program) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glDeleteProgram(program);
+                return;
+            }
             {
                 std::lock_guard lock(g_mutex);
                 g_programs.erase(program);
@@ -1332,6 +1355,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glAttachShader(GLuint program, GLuint shader) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glAttachShader(program, shader);
+                return;
+            }
             g_glAttachShader(program, shader);
 
             std::lock_guard lock(g_mutex);
@@ -1349,6 +1376,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glLinkProgram(GLuint program) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glLinkProgram(program);
+                return;
+            }
             g_glLinkProgram(program);
 
             if (!ensure_proc(g_glGetProgramiv, "glGetProgramiv")) return;
@@ -1379,6 +1410,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glUseProgram(GLuint program) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUseProgram(program);
+                return;
+            }
             g_glUseProgram(program);
 
             std::optional<ProgramSnapshot> snapshot;
@@ -1421,6 +1456,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glUseProgramObjectARB(GLuint program) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUseProgramObjectARB(program);
+                return;
+            }
             g_glUseProgramObjectARB(program);
 
             std::optional<ProgramSnapshot> snapshot;
@@ -1463,6 +1502,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glBindTexture(GLenum target, GLuint texture) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                H_glBindTexture.original()(target, texture);
+                return;
+            }
             H_glBindTexture.original()(target, texture);
             if (target != GL_TEXTURE_2D) return;
 
@@ -1613,6 +1656,10 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glActiveTexture(GLenum texture) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glActiveTexture(texture);
+                return;
+            }
             g_glActiveTexture(texture);
             if (texture < GL_TEXTURE0) return;
 
@@ -1621,6 +1668,12 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glBindFramebuffer(GLenum target, GLuint framebuffer) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glBindFramebuffer(target, framebuffer);
+                return;
+            }
+
+            sprite_body_fsr::on_external_bind_framebuffer(target, framebuffer);
             g_glBindFramebuffer(target, framebuffer);
 
             bool changed = false;
@@ -1654,6 +1707,10 @@ namespace iee::game::shader_trace {
                                                     GLenum textarget,
                                                     GLuint texture,
                                                     GLint level) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glFramebufferTexture2D(target, attachment, textarget, texture, level);
+                return;
+            }
             g_glFramebufferTexture2D(target, attachment, textarget, texture, level);
 
             if (!g_traceEnabled) return;
@@ -1675,10 +1732,24 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawArrays(GLenum mode, GLint first, GLsizei count) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                H_glDrawArrays.original()(mode, first, count);
+                return;
+            }
             const auto snapshot = snapshot_current_draw_call();
             if (!snapshot) return;
 
             maybe_set_sprite_body_mode(*snapshot);
+
+            const sprite_body_fsr::DrawCallInfo fsrInfo{
+                snapshot->program,
+                snapshot->framebuffer,
+                snapshot->samplerUnit,
+                snapshot->texture
+            };
+            if (sprite_body_fsr::handle_draw_arrays(fsrInfo, mode, first, count, H_glDrawArrays.original())) {
+                return;
+            }
 
             if (should_suppress_gl_draw(*snapshot)) {
                 LOG_INFO("ShaderTrace suppressedGlDrawArrays program={} label={} mode={} framebuffer={} first={} count={} samplerUnit={} texture={}",
@@ -1723,10 +1794,30 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                H_glDrawElements.original()(mode, count, type, indices);
+                return;
+            }
             const auto snapshot = snapshot_current_draw_call();
             if (!snapshot) return;
 
             maybe_set_sprite_body_mode(*snapshot);
+
+            const sprite_body_fsr::DrawCallInfo fsrInfo{
+                snapshot->program,
+                snapshot->framebuffer,
+                snapshot->samplerUnit,
+                snapshot->texture
+            };
+            if (sprite_body_fsr::handle_draw_elements(
+                fsrInfo,
+                mode,
+                count,
+                type,
+                indices,
+                H_glDrawElements.original())) {
+                return;
+            }
 
             if (should_suppress_gl_draw(*snapshot)) {
                 LOG_INFO("ShaderTrace suppressedGlDrawElements program={} label={} mode={} framebuffer={} count={} type=0x{:X} samplerUnit={} texture={}",
@@ -1771,42 +1862,74 @@ namespace iee::game::shader_trace {
         }
 
         void APIENTRY Detour_glUniform1i(GLint location, GLint v0) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform1i(location, v0);
+                return;
+            }
             g_glUniform1i(location, v0);
             log_uniform_update(location, std::to_string(v0));
         }
 
         void APIENTRY Detour_glUniform1f(GLint location, GLfloat v0) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform1f(location, v0);
+                return;
+            }
             g_glUniform1f(location, v0);
             log_uniform_update(location, std::to_string(v0));
         }
 
         void APIENTRY Detour_glUniform2f(GLint location, GLfloat v0, GLfloat v1) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform2f(location, v0, v1);
+                return;
+            }
             g_glUniform2f(location, v0, v1);
             log_uniform_update(location, std::to_string(v0) + "," + std::to_string(v1));
         }
 
         void APIENTRY Detour_glUniform2fv(GLint location, GLsizei count, const GLfloat *value) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform2fv(location, count, value);
+                return;
+            }
             g_glUniform2fv(location, count, value);
             if (!value || count <= 0) return;
             log_uniform_update(location, std::to_string(value[0]) + "," + std::to_string(value[1]));
         }
 
         void APIENTRY Detour_glUniform1iARB(GLint location, GLint v0) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform1iARB(location, v0);
+                return;
+            }
             g_glUniform1iARB(location, v0);
             log_uniform_update(location, std::to_string(v0));
         }
 
         void APIENTRY Detour_glUniform1fARB(GLint location, GLfloat v0) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform1fARB(location, v0);
+                return;
+            }
             g_glUniform1fARB(location, v0);
             log_uniform_update(location, std::to_string(v0));
         }
 
         void APIENTRY Detour_glUniform2fARB(GLint location, GLfloat v0, GLfloat v1) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform2fARB(location, v0, v1);
+                return;
+            }
             g_glUniform2fARB(location, v0, v1);
             log_uniform_update(location, std::to_string(v0) + "," + std::to_string(v1));
         }
 
         void APIENTRY Detour_glUniform2fvARB(GLint location, GLsizei count, const GLfloat *value) {
+            if (sprite_body_fsr::is_internal_pass_active()) {
+                g_glUniform2fvARB(location, count, value);
+                return;
+            }
             g_glUniform2fvARB(location, count, value);
             if (!value || count <= 0) return;
             log_uniform_update(location, std::to_string(value[0]) + "," + std::to_string(value[1]));
@@ -1933,8 +2056,9 @@ namespace iee::game::shader_trace {
         g_glTextureSuppressTexture = cfg.glTextureSuppressTexture;
         g_runtimeTraceProgramFilter = static_cast<GLuint>(std::max(cfg.shaderTraceRuntimeProgramFilter, 0));
         g_runtimeTraceTextureFilter = cfg.shaderTraceRuntimeTextureFilter;
+        const auto spriteBodyPrototypeEnabled = cfg.enableSpriteBodyFsrPrototype;
         g_enabled = g_traceEnabled || g_tcScaleInjectionEnabled || g_batchHighlightEnabled || g_batchSuppressEnabled ||
-                    g_glProgramSuppressEnabled || g_glTextureSuppressEnabled;
+                    g_glProgramSuppressEnabled || g_glTextureSuppressEnabled || spriteBodyPrototypeEnabled;
         if (!g_enabled) return true;
         if (g_installed) return true;
 
@@ -1959,7 +2083,7 @@ namespace iee::game::shader_trace {
             H_wglGetProcAddress.create(target, reinterpret_cast<void *>(&Detour_wglGetProcAddress));
             H_wglGetProcAddress.enable();
 
-            if (g_tcScaleInjectionEnabled || g_traceEnabled) {
+            if (g_tcScaleInjectionEnabled || g_traceEnabled || spriteBodyPrototypeEnabled) {
                 auto *bindTextureTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glBindTexture"));
                 if (!bindTextureTarget) {
                     LOG_ERROR("ShaderTrace failed to locate glBindTexture for runtime sprite tracing");
@@ -1971,7 +2095,7 @@ namespace iee::game::shader_trace {
                 H_glBindTexture.enable();
             }
 
-            if (g_traceEnabled || g_glProgramSuppressEnabled || g_glTextureSuppressEnabled) {
+            if (g_traceEnabled || g_glProgramSuppressEnabled || g_glTextureSuppressEnabled || spriteBodyPrototypeEnabled) {
                 auto *drawArraysTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawArrays"));
                 auto *drawElementsTarget = reinterpret_cast<void *>(GetProcAddress(opengl32, "glDrawElements"));
                 if (!drawArraysTarget || !drawElementsTarget) {
@@ -2114,6 +2238,8 @@ namespace iee::game::shader_trace {
             g_lastEngineTextureId = -1;
             reset_batch_capture(g_currentBatch);
         }
+
+        sprite_body_fsr::reset_runtime_state(reason);
 
         if (g_traceEnabled) {
             LOG_INFO("ShaderTrace runtime capture reset reason={}", reason ? reason : "unspecified");

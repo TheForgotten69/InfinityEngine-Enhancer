@@ -116,6 +116,13 @@ namespace {
             out << "GlTextureSuppressTexture = 20\n\n";
             out << "ShaderTraceRuntimeProgramFilter = 3\n";
             out << "ShaderTraceRuntimeTextureFilter = 2\n\n";
+            out << "EnableSpriteBodyFsrPrototype = true\n";
+            out << "SpriteBodyProgram = 3\n";
+            out << "SpriteBodyTexture = 2\n";
+            out << "SpriteBodyInputScale = 0.667\n";
+            out << "SpriteBodyEnableRcas = true\n";
+            out << "SpriteBodyRcasSharpness = 0.20\n";
+            out << "SpriteBodyDebugView = 2\n\n";
             out << "[Rendering]\n";
             out << "EnableAnisotropicFiltering = false\n";
             out << "MaxAnisotropy = 4.0\n";
@@ -149,6 +156,13 @@ namespace {
         expect_eq(cfg.glTextureSuppressTexture, 20, "GL texture suppress texture should parse");
         expect_eq(cfg.shaderTraceRuntimeProgramFilter, 3, "Shader trace runtime program filter should parse");
         expect_eq(cfg.shaderTraceRuntimeTextureFilter, 2, "Shader trace runtime texture filter should parse");
+        expect_true(cfg.enableSpriteBodyFsrPrototype, "Sprite body FSR prototype flag should parse");
+        expect_eq(cfg.spriteBodyProgram, 3, "Sprite body program should parse");
+        expect_eq(cfg.spriteBodyTexture, 2, "Sprite body texture should parse");
+        expect_eq(cfg.spriteBodyInputScale, 0.667f, "Sprite body input scale should parse");
+        expect_true(cfg.spriteBodyEnableRcas, "Sprite body RCAS flag should parse");
+        expect_eq(cfg.spriteBodyRcasSharpness, 0.20f, "Sprite body RCAS sharpness should parse");
+        expect_eq(cfg.spriteBodyDebugView, 2, "Sprite body debug view should parse");
         expect_true(!cfg.enableAnisotropicFiltering, "Rendering bool should parse");
         expect_eq(cfg.maxAnisotropy, 4.0f, "Floating-point values should parse");
         expect_eq(cfg.lodBias, -0.5f, "Negative float values should parse");

@@ -123,6 +123,20 @@ namespace iee::core {
                 cfg.shaderTraceRuntimeProgramFilter = parse_int(val, cfg.shaderTraceRuntimeProgramFilter);
             else if (iequals(key, "ShaderTraceRuntimeTextureFilter"))
                 cfg.shaderTraceRuntimeTextureFilter = parse_int(val, cfg.shaderTraceRuntimeTextureFilter);
+            else if (iequals(key, "EnableSpriteBodyFsrPrototype"))
+                cfg.enableSpriteBodyFsrPrototype = parse_bool(val, cfg.enableSpriteBodyFsrPrototype);
+            else if (iequals(key, "SpriteBodyProgram"))
+                cfg.spriteBodyProgram = parse_int(val, cfg.spriteBodyProgram);
+            else if (iequals(key, "SpriteBodyTexture"))
+                cfg.spriteBodyTexture = parse_int(val, cfg.spriteBodyTexture);
+            else if (iequals(key, "SpriteBodyInputScale"))
+                cfg.spriteBodyInputScale = parse_float(val, cfg.spriteBodyInputScale);
+            else if (iequals(key, "SpriteBodyEnableRcas"))
+                cfg.spriteBodyEnableRcas = parse_bool(val, cfg.spriteBodyEnableRcas);
+            else if (iequals(key, "SpriteBodyRcasSharpness"))
+                cfg.spriteBodyRcasSharpness = parse_float(val, cfg.spriteBodyRcasSharpness);
+            else if (iequals(key, "SpriteBodyDebugView"))
+                cfg.spriteBodyDebugView = parse_int(val, cfg.spriteBodyDebugView);
             return;
         }
 
@@ -246,6 +260,13 @@ namespace iee::core {
         f << "GlTextureSuppressTexture = " << cfg.glTextureSuppressTexture << "\n";
         f << "ShaderTraceRuntimeProgramFilter = " << cfg.shaderTraceRuntimeProgramFilter << "\n";
         f << "ShaderTraceRuntimeTextureFilter = " << cfg.shaderTraceRuntimeTextureFilter << "\n";
+        write_bool(f, "EnableSpriteBodyFsrPrototype", cfg.enableSpriteBodyFsrPrototype);
+        f << "SpriteBodyProgram = " << cfg.spriteBodyProgram << "\n";
+        f << "SpriteBodyTexture = " << cfg.spriteBodyTexture << "\n";
+        f << "SpriteBodyInputScale = " << cfg.spriteBodyInputScale << "\n";
+        write_bool(f, "SpriteBodyEnableRcas", cfg.spriteBodyEnableRcas);
+        f << "SpriteBodyRcasSharpness = " << cfg.spriteBodyRcasSharpness << "\n";
+        f << "SpriteBodyDebugView = " << cfg.spriteBodyDebugView << "\n";
 
         write_section(f, "Auto-Generated");
         f << "CachedLoadAreaRVA = 0x" << std::hex << cfg.cachedLoadAreaRVA << std::dec << "\n";
