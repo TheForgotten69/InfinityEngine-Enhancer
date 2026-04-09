@@ -141,6 +141,10 @@ namespace iee::hooks {
     // LoadArea hook - reset area-specific state for new area detection
     static void *Detour_LoadArea(void *thisPtr, void *pAreaNameString, unsigned char a2, unsigned char a3,
                                  unsigned char a4) {
+        if (!g_ctx) {
+            return H_LoadArea.original()(thisPtr, pAreaNameString, a2, a3, a4);
+        }
+
         LOG_DEBUG("LoadArea called - resetting scale detection for new area");
 
         auto &ctx = *g_ctx;
@@ -428,6 +432,11 @@ namespace iee::hooks {
         if (g_ctx) {
             g_ctx->isRenderHookActive = false;
         }
+
+        H_DrawColorTone.disable();
+        H_RenderTexture.disable();
+        H_LoadArea.disable();
+
         g_ctx = nullptr;
     }
 
