@@ -12,6 +12,9 @@
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
 #include "iee/game/build_manifest.h"
+#include "iee/game/eeex_doc_layouts_x64.h"
+#include "iee/game/file_formats.h"
+#include "iee/game/runtime_types_x64.h"
 #include "iee/game/tile_upscale.h"
 
 namespace {
@@ -86,6 +89,153 @@ namespace {
             expect_eq(found->get().offsets.tisHeaderTileDimension, std::uintptr_t{0x14},
                       "Manifest should carry the TIS header tile dimension offset");
         }
+    }
+
+    void test_runtime_type_layouts() {
+        using namespace iee::game;
+
+        expect_eq(sizeof(CRes), std::size_t{0x58}, "CRes should match the curated x64 layout");
+        expect_eq(sizeof(CResWED), std::size_t{0x88}, "CResWED should match the curated x64 layout");
+        expect_eq(sizeof(CVidTile), std::size_t{0x110}, "CVidTile should match the curated x64 layout");
+        expect_eq(sizeof(CVidCell), std::size_t{0x138}, "CVidCell should match the curated x64 layout");
+        expect_eq(sizeof(CVidMode), std::size_t{0x318}, "CVidMode should match the curated x64 layout");
+        expect_eq(sizeof(CVisibilityMap), std::size_t{0x70},
+                  "CVisibilityMap should match the curated x64 layout");
+        expect_eq(sizeof(CInfTileSet), std::size_t{0x138}, "CInfTileSet should match the curated x64 layout");
+        expect_eq(sizeof(CInfGame), std::size_t{0x97F8}, "CInfGame should match the curated x64 layout");
+        expect_eq(sizeof(CInfinity), std::size_t{0x498}, "CInfinity should match the curated x64 layout");
+        expect_eq(sizeof(CGameArea), std::size_t{0x1120}, "CGameArea should match the curated x64 layout");
+        expect_eq(sizeof(CGameSprite), std::size_t{0x5388}, "CGameSprite should match the curated x64 layout");
+
+        expect_eq(offsetof(CRes, pData), std::size_t{0x40}, "CRes::pData offset should match EEex docs");
+        expect_eq(offsetof(CRes, bLoaded), std::size_t{0x51}, "CRes::bLoaded offset should match EEex docs");
+        expect_eq(offsetof(CVidTile, pRes), std::size_t{0x100}, "CVidTile::pRes offset should match EEex docs");
+        expect_eq(offsetof(CInfGame, m_worldTime), std::size_t{0x3FA0},
+                  "CInfGame::m_worldTime offset should match EEex docs");
+        expect_eq(offsetof(CInfGame, m_vcLocator), std::size_t{0x92C0},
+                  "CInfGame::m_vcLocator offset should match EEex docs");
+        expect_eq(offsetof(CInfinity, m_ptCurrentPosExact), std::size_t{0x2F4},
+                  "CInfinity::m_ptCurrentPosExact offset should match EEex docs");
+        expect_eq(offsetof(CInfinity, m_pArea), std::size_t{0x340},
+                  "CInfinity::m_pArea offset should match EEex docs");
+        expect_eq(offsetof(CGameArea, m_resref), std::size_t{0x204},
+                  "CGameArea::m_resref offset should match EEex docs");
+        expect_eq(offsetof(CGameArea, m_cInfinity), std::size_t{0x5C8},
+                  "CGameArea::m_cInfinity offset should match EEex docs");
+        expect_eq(offsetof(CGameArea, m_lTiledObjects), std::size_t{0xED0},
+                  "CGameArea::m_lTiledObjects offset should match EEex docs");
+        expect_eq(offsetof(CGameSprite, m_currentArea), std::size_t{0x3A20},
+                  "CGameSprite::m_currentArea offset should match EEex docs");
+        expect_eq(offsetof(CGameSprite, m_spriteEffectVidCell), std::size_t{0x3C70},
+                  "CGameSprite::m_spriteEffectVidCell offset should match EEex docs");
+        expect_eq(offsetof(CGameSprite, m_posExact), std::size_t{0x4714},
+                  "CGameSprite::m_posExact offset should match EEex docs");
+    }
+
+    void test_file_format_layouts() {
+        using namespace iee::game;
+
+        expect_eq(sizeof(PVRTextureHeaderV3), std::size_t{0x34}, "PVRTextureHeaderV3 should match EEex docs");
+        expect_eq(sizeof(ResFixedHeader_st), std::size_t{0x14}, "ResFixedHeader_st should match EEex docs");
+        expect_eq(sizeof(TisFileHeader), std::size_t{0x18},
+                  "TisFileHeader should carry the locally validated tile-dimension field");
+        expect_eq(sizeof(WED_WedHeader_st), std::size_t{0x2C}, "WED_WedHeader_st should match EEex docs");
+        expect_eq(sizeof(WED_LayerHeader_st), std::size_t{0x18}, "WED_LayerHeader_st should match EEex docs");
+        expect_eq(sizeof(WED_PolyHeader_st), std::size_t{0x14}, "WED_PolyHeader_st should match EEex docs");
+        expect_eq(sizeof(WED_PolyList_st), std::size_t{0x12}, "WED_PolyList_st should match EEex docs");
+        expect_eq(sizeof(WED_PolyPoint_st), std::size_t{0x4}, "WED_PolyPoint_st should match EEex docs");
+        expect_eq(sizeof(WED_ScreenSectionList), std::size_t{0x4},
+                  "WED_ScreenSectionList should match EEex docs");
+        expect_eq(sizeof(WED_TileData_st), std::size_t{0xA}, "WED_TileData_st should match EEex docs");
+        expect_eq(sizeof(WED_TiledObject_st), std::size_t{0x1A}, "WED_TiledObject_st should match EEex docs");
+        expect_eq(sizeof(bamHeader_st), std::size_t{0x18}, "bamHeader_st should match EEex docs");
+        expect_eq(sizeof(BAMHEADERV2), std::size_t{0x20}, "BAMHEADERV2 should match EEex docs");
+        expect_eq(sizeof(frame), std::size_t{0x18}, "frame should match EEex docs");
+        expect_eq(sizeof(frameTableEntry_st), std::size_t{0xC}, "frameTableEntry_st should match EEex docs");
+        expect_eq(sizeof(st_tiledef), std::size_t{0x18}, "st_tiledef should match EEex docs");
+
+        expect_eq(offsetof(PVRTextureHeaderV3, u32MetaDataSize), std::size_t{0x30},
+                  "PVRTextureHeaderV3::u32MetaDataSize offset should match EEex docs");
+        expect_eq(offsetof(TisFileHeader, tileDimension), std::size_t{0x14},
+                  "TisFileHeader::tileDimension offset should match the validated runtime fact");
+        expect_eq(offsetof(WED_WedHeader_st, dwFlags), std::size_t{0x28},
+                  "WED_WedHeader_st::dwFlags offset should match EEex docs");
+        expect_eq(offsetof(WED_LayerHeader_st, nOffsetToTileData), std::size_t{0x10},
+                  "WED_LayerHeader_st::nOffsetToTileData offset should match EEex docs");
+        expect_eq(offsetof(WED_TileData_st, bFlags), std::size_t{0x6},
+                  "WED_TileData_st::bFlags offset should match EEex docs");
+        expect_eq(offsetof(bamHeader_st, nFrameListOffset), std::size_t{0x14},
+                  "bamHeader_st::nFrameListOffset offset should match EEex docs");
+        expect_eq(offsetof(frameTableEntry_st, ___u4), std::size_t{0x8},
+                  "frameTableEntry_st::___u4 offset should match EEex docs");
+    }
+
+    void test_eeex_doc_layout_maps() {
+        using namespace iee::game::eeex_doc;
+        const auto find_field = [](const auto &fields, std::string_view name) -> const FieldDesc * {
+            for (const auto &field: fields) {
+                if (field.name == name) {
+                    return &field;
+                }
+            }
+            return nullptr;
+        };
+
+        expect_eq(CInfGameLayout.size, std::uint32_t{0x97F8}, "CInfGame doc layout size should match EEex docs");
+        expect_eq(CInfGameLayout.fieldCount, std::uint32_t{128},
+                  "CInfGame doc layout should expose every EEex field row");
+        expect_eq(CInfinityLayout.size, std::uint32_t{0x498}, "CInfinity doc layout size should match EEex docs");
+        expect_eq(CInfinityLayout.fieldCount, std::uint32_t{90},
+                  "CInfinity doc layout should expose every EEex field row");
+        expect_eq(CGameAreaLayout.size, std::uint32_t{0x1120}, "CGameArea doc layout size should match EEex docs");
+        expect_eq(CGameAreaLayout.fieldCount, std::uint32_t{105},
+                  "CGameArea doc layout should expose every EEex field row");
+        expect_eq(CGameSpriteLayout.size, std::uint32_t{0x5388},
+                  "CGameSprite doc layout size should match EEex docs");
+        expect_eq(CGameSpriteLayout.fieldCount, std::uint32_t{339},
+                  "CGameSprite doc layout should expose every EEex field row");
+        expect_eq(CGameAnimationTypeLayout.fieldCount, std::uint32_t{24},
+                  "CGameAnimationType doc layout should expose every EEex field row");
+        expect_eq(CGameOptionsLayout.fieldCount, std::uint32_t{153},
+                  "CGameOptions doc layout should expose every EEex field row");
+        expect_eq(CVidModeLayout.fieldCount, std::uint32_t{42},
+                  "CVidMode doc layout should expose every EEex field row");
+
+        const auto *animationShaderField = find_field(CGameAnimationTypeFields, "m_bUseSpriteShader");
+        expect_true(animationShaderField != nullptr,
+                    "CGameAnimationType should expose the sprite-shader field from EEex docs");
+        if (animationShaderField) {
+            expect_eq(animationShaderField->offset, std::uint32_t{0x20},
+                      "CGameAnimationType::m_bUseSpriteShader offset should match EEex docs");
+        }
+
+        const auto *optionShaderField = find_field(CGameOptionsFields, "m_bUseSpriteShader");
+        expect_true(optionShaderField != nullptr,
+                    "CGameOptions should expose the sprite-shader option from EEex docs");
+        if (optionShaderField) {
+            expect_eq(optionShaderField->offset, std::uint32_t{0x238},
+                      "CGameOptions::m_bUseSpriteShader offset should match EEex docs");
+        }
+
+        const auto *areaInfinityField = find_field(CGameAreaFields, "m_cInfinity");
+        expect_true(areaInfinityField != nullptr,
+                    "CGameArea should expose the embedded CInfinity field from EEex docs");
+        if (areaInfinityField) {
+            expect_eq(areaInfinityField->offset, std::uint32_t{0x5C8},
+                      "CGameArea::m_cInfinity offset should match EEex docs");
+        }
+
+        const auto *areaTiledObjectField = find_field(CGameAreaFields, "m_lTiledObjects");
+        expect_true(areaTiledObjectField != nullptr,
+                    "CGameArea should expose the tiled-object list from EEex docs");
+        if (areaTiledObjectField) {
+            expect_eq(areaTiledObjectField->offset, std::uint32_t{0xED0},
+                      "CGameArea::m_lTiledObjects offset should match EEex docs");
+        }
+        expect_true(CGameSpriteFields[0].name == "baseclass_0",
+                    "CGameSprite doc layout should begin at the documented baseclass");
+        expect_true(CGameSpriteFields.back().name == "m_bOutline",
+                    "CGameSprite doc layout should include the final documented field");
     }
 
     void test_config_parsing() {
@@ -243,6 +393,9 @@ int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
     test_manifest_loading();
+    test_runtime_type_layouts();
+    test_file_format_layouts();
+    test_eeex_doc_layout_maps();
     test_config_parsing();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();

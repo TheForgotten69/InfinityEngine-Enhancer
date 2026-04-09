@@ -27,6 +27,20 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - Provides explicit runtime views for `CRes`, `CResTile`, `CResTileSet`, `CResPVR`, and the authored TIS header.
 - Reads build-specific offsets from the manifest instead of hardcoding them throughout hooks.
 
+`src/iee/game/runtime_types_x64.h`
+
+- Holds the curated x64 type surface used for rapid reverse-engineering around tiles, sprites, and renderer-adjacent engine state.
+- Small PODs are modeled directly; larger engine objects keep exact offsets for selected named fields and leave the rest opaque.
+
+`src/iee/game/file_formats.h`
+
+- Holds exact on-disk / loaded resource layout definitions mirrored from EEex docs for `TIS`, `WED`, `BAM`, and `PVRZ`-adjacent structures.
+
+`src/iee/game/eeex_doc_layouts_x64.h`
+
+- Holds exact EEex field maps for large runtime classes where mirroring every nested type as hand-written C++ would be brittle and low signal.
+- This keeps the full documented field surface for `CInfGame`, `CInfinity`, `CGameSprite`, and shader-adjacent types in-repo.
+
 `src/iee/game/tile_upscale.*`
 
 - Encapsulates scale detection.
