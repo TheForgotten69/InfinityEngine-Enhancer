@@ -110,7 +110,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create alpha release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: alpha
           name: "Alpha Build (${{ steps.version.outputs.sha }})"
@@ -136,7 +136,7 @@ jobs:
           path: artifact
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifact/InfinityEngine-Enhancer-bundle.zip
           draft: true
