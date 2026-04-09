@@ -5,6 +5,8 @@
 
 
 namespace iee::game {
+    struct BuildManifest;
+
     struct DrawApi {
         using DrawBegin_t = void(*)(int);
         using DrawEnd_t = void(*)();
@@ -31,7 +33,7 @@ namespace iee::game {
         CRes_Demand_t CRes_Demand{};
     };
 
-    bool resolve_draw_api(DrawApi &out, std::uintptr_t renderTextureVA);
+    bool resolve_draw_api(DrawApi &out, std::uintptr_t renderTextureVA, const BuildManifest &manifest);
 
     bool ensure_texture_params(const core::EngineConfig &cfg, const DrawApi &api, int textureId);
 

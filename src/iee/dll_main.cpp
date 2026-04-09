@@ -4,6 +4,7 @@
 
 #include "app_context.h"
 #include "hooks.h"
+#include "iee/game/build_manifest.h"
 #include "iee/core/logger.h"
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
@@ -27,8 +28,14 @@ namespace iee {
             g_appContext = std::make_unique<AppContext>();
             auto &ctx = *g_appContext;
             ctx.cfg = cfg;
+            ctx.manifest = game::detect_manifest();
 
             LOG_INFO("InfinityEngine-Enhancer loaded (config applied)");
+            if (!ctx.manifest) {
+                LOG_ERROR("Failed to select a build manifest");
+                return 1;
+            }
+            LOG_INFO("Selected build manifest: {}", ctx.manifest->buildId);
 
             if (cfg.enableVerboseLogging) {
                 LOG_INFO("=== DETAILED DIAGNOSTICS ===");
@@ -45,7 +52,7 @@ namespace iee {
             }
 
 
-            if (!game::resolve_addresses(ctx.addrs, ctx.cfg)) {
+            if (!game::resolve_addresses(ctx.addrs, ctx.cfg, *ctx.manifest)) {
                 LOG_ERROR("Critical error: Failed to locate game functions");
                 return 1;
             }
@@ -56,7 +63,7 @@ namespace iee {
                           ctx.addrs.LoadArea, ctx.addrs.RenderTexture);
             }
 
-            if (!game::resolve_draw_api(ctx.draw, ctx.addrs.RenderTexture)) {
+            if (!game::resolve_draw_api(ctx.draw, ctx.addrs.RenderTexture, *ctx.manifest)) {
                 LOG_ERROR("Failed to resolve draw API functions");
                 return 1;
             }
@@ -79,20 +86,17 @@ namespace iee {
     }
 
     static void CleanupHooks() {
-        LOG_INFO("Cleaning up hooks...");
-
         if (g_appContext) {
-            hooks::uninstall_all();
+            hooks::prepare_for_shutdown();
             g_appContext->reset_all_state();
             g_appContext.reset();
         }
-
-        LOG_INFO("Cleanup complete.");
     }
 }
 
 // EEex integration
 extern "C" __declspec(dllexport) void __stdcall InitBindings(void *argSharedState) {
+    (void) argSharedState;
     if (HANDLE th = CreateThread(nullptr, 0, iee::InitThread, nullptr, 0, nullptr)) {
         CloseHandle(th);
     } else {

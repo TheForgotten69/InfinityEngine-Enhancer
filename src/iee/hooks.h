@@ -6,5 +6,7 @@ namespace iee::hooks {
 
     void uninstall_all();
 
+    void prepare_for_shutdown() noexcept;
+
     bool is_active();
 }
