@@ -6,7 +6,7 @@
 namespace iee::core {
     struct EngineConfig {
         // region Textures
-        bool enableAnisotropicFiltering = true;
+        bool enableAnisotropicFiltering = false;
         float maxAnisotropy = 8.0f;
         float lodBias = -0.25f;
 

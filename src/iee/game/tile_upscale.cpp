@@ -42,6 +42,10 @@ namespace iee::game {
                 }
 
                 const auto value = static_cast<std::uint32_t>(candidate);
+                if (value != TisTileDimensions::Standard && value != TisTileDimensions::Upscaled4x) {
+                    return;
+                }
+
                 if (smallestPositiveStep == 0 || value < smallestPositiveStep) {
                     smallestPositiveStep = value;
                 }
