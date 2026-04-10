@@ -16,6 +16,7 @@
 #include "iee/game/file_formats.h"
 #include "iee/game/runtime_types_x64.h"
 #include "iee/game/tile_upscale.h"
+#include "iee/game/wed_runtime.h"
 
 namespace {
     int g_failures = 0;
@@ -232,6 +233,30 @@ namespace {
             expect_eq(areaTiledObjectField->offset, std::uint32_t{0xED0},
                       "CGameArea::m_lTiledObjects offset should match EEex docs");
         }
+
+        const auto *visibleAreaField = find_field(CInfGameFields, "m_visibleArea");
+        expect_true(visibleAreaField != nullptr,
+                    "CInfGame should expose the visible-area selector from EEex docs");
+        if (visibleAreaField) {
+            expect_eq(visibleAreaField->offset, std::uint32_t{0x6590},
+                      "CInfGame::m_visibleArea offset should match EEex docs");
+        }
+
+        const auto *gameAreasField = find_field(CInfGameFields, "m_gameAreas");
+        expect_true(gameAreasField != nullptr,
+                    "CInfGame should expose the loaded area table from EEex docs");
+        if (gameAreasField) {
+            expect_eq(gameAreasField->offset, std::uint32_t{0x6598},
+                      "CInfGame::m_gameAreas offset should match EEex docs");
+        }
+
+        const auto *masterAreaField = find_field(CInfGameFields, "m_pGameAreaMaster");
+        expect_true(masterAreaField != nullptr,
+                    "CInfGame should expose the master area pointer from EEex docs");
+        if (masterAreaField) {
+            expect_eq(masterAreaField->offset, std::uint32_t{0x65F8},
+                      "CInfGame::m_pGameAreaMaster offset should match EEex docs");
+        }
         expect_true(CGameSpriteFields[0].name == "baseclass_0",
                     "CGameSprite doc layout should begin at the documented baseclass");
         expect_true(CGameSpriteFields.back().name == "m_bOutline",
@@ -265,6 +290,113 @@ namespace {
 
         std::error_code ec;
         std::filesystem::remove(tempPath, ec);
+    }
+
+    void write_bytes(std::vector<std::byte> &buffer, std::size_t offset, const void *data, std::size_t size) {
+        if (offset + size > buffer.size()) {
+            buffer.resize(offset + size);
+        }
+        std::memcpy(buffer.data() + offset, data, size);
+    }
+
+    void test_parse_loaded_wed() {
+        using namespace iee::game;
+
+        constexpr std::size_t headerOffset = 0x0;
+        constexpr std::size_t layerOffset = sizeof(WED_WedHeader_st);
+        constexpr std::size_t tilemapOffset = layerOffset + 2 * sizeof(WED_LayerHeader_st);
+
+        std::vector<std::byte> bytes(tilemapOffset + 4 * sizeof(WED_TileData_st));
+
+        WED_WedHeader_st header{};
+        header.nFileType = 0x20444557;
+        header.nFileVersion = 0x332E3156;
+        header.nLayers = 2;
+        header.nOffsetToLayerHeaders = static_cast<std::uint32_t>(layerOffset);
+        write_bytes(bytes, headerOffset, &header, sizeof(header));
+
+        WED_LayerHeader_st baseLayer{};
+        baseLayer.nTilesAcross = 2;
+        baseLayer.nTilesDown = 2;
+        baseLayer.rrTileSet = {'A', 'R', '0', '0', '0', '1', '0', '0'};
+        baseLayer.nNumUniqueTiles = 4;
+        baseLayer.nOffsetToTileData = static_cast<std::uint32_t>(tilemapOffset);
+        write_bytes(bytes, layerOffset, &baseLayer, sizeof(baseLayer));
+
+        WED_LayerHeader_st liquidLayer{};
+        liquidLayer.nTilesAcross = 2;
+        liquidLayer.nTilesDown = 2;
+        liquidLayer.rrTileSet = {'W', 'T', 'W', 'A', 'V', 'E', '0', '1'};
+        liquidLayer.nNumUniqueTiles = 4;
+        liquidLayer.nOffsetToTileData = static_cast<std::uint32_t>(tilemapOffset);
+        write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &liquidLayer, sizeof(liquidLayer));
+
+        std::array<WED_TileData_st, 4> tileData{};
+        tileData[0].bFlags = 0x02;
+        tileData[2].bFlags = 0x02;
+        write_bytes(bytes, tilemapOffset, tileData.data(), sizeof(tileData));
+
+        CRes resource{};
+        resource.pData = bytes.data();
+        resource.nSize = static_cast<std::uint32_t>(bytes.size());
+        resource.bLoaded = true;
+
+        char areaResref[8] = {'A', 'R', '0', '0', '0', '1', '\0', '\0'};
+        resource.resref = areaResref;
+
+        WedAreaInfo wed{};
+        expect_true(parse_loaded_wed(resource, wed), "Loaded WED blob should parse");
+        expect_eq(wed.overlayCount, std::uint32_t{2}, "WED parser should expose overlay count");
+        expect_eq(wed.baseWidth, std::uint16_t{2}, "WED parser should expose base width");
+        expect_eq(wed.baseHeight, std::uint16_t{2}, "WED parser should expose base height");
+        expect_true(wed.overlays.size() == 2, "WED parser should keep both overlays");
+        expect_true(wed.overlays[1].liquidMode == TileLiquidMode::Water,
+                    "Liquid tileset classifier should mark water overlays");
+        expect_eq(wed.overlays[1].coverageCells, std::uint32_t{2},
+                  "Liquid overlay coverage should count flagged base cells");
+        expect_eq(liquid_overlay_mask(wed), std::uint8_t{0x02}, "Liquid overlay mask should expose overlay bit");
+
+        std::uint8_t overlayFlags = 0;
+        expect_true(base_cell_has_liquid_overlay(wed, 0, overlayFlags),
+                    "First base cell should report liquid overlay coverage");
+        expect_eq(overlayFlags, std::uint8_t{0x02}, "Overlay flags should be returned for covered base cells");
+        expect_true(!base_cell_has_liquid_overlay(wed, 1, overlayFlags),
+                    "Second base cell should not report liquid overlay coverage");
+    }
+
+    void test_wed_screen_point_mapping() {
+        using namespace iee::game;
+
+        WedAreaInfo wed{};
+        wed.baseWidth = 4;
+        wed.baseHeight = 3;
+
+        const auto topLeft = base_cell_index_from_screen_point(wed, 0, 0, 0, 0);
+        expect_true(topLeft.has_value() && *topLeft == 0, "Top-left screen point should map to cell 0");
+
+        const auto scrolled = base_cell_index_from_screen_point(wed, 0, 0, 128, 64);
+        expect_true(scrolled.has_value() && *scrolled == 6,
+                    "Scrolled screen point should map using current world offsets");
+
+        const auto outside = base_cell_index_from_screen_point(wed, 0, 0, -64, 0);
+        expect_true(!outside.has_value(), "Negative world coordinates should not map to a WED cell");
+    }
+
+    void test_tile_table_detection_ignores_garbage_steps() {
+        using namespace iee::game;
+
+        TileInfo tileInfo{};
+        std::array<PVRZTileEntry, 3> table{{
+            {17, 2384508, 1854076},
+            {17, 799324, 1333884},
+            {17, 3420796, 805484},
+        }};
+        tileInfo.table = table.data();
+        tileInfo.runtimeTileDimension = static_cast<std::uint32_t>(table.size());
+
+        const auto detection = detect_scale_from_tile_table(tileInfo);
+        expect_true(!detection.has_value(),
+                    "Tile-table detection should ignore garbage UV steps instead of treating them as deterministic scale");
     }
 
     iee::game::TileInfo make_tile_info(std::uint32_t tileDimension,
@@ -397,8 +529,11 @@ int main() {
     test_file_format_layouts();
     test_eeex_doc_layout_maps();
     test_config_parsing();
+    test_parse_loaded_wed();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();
+    test_wed_screen_point_mapping();
+    test_tile_table_detection_ignores_garbage_steps();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

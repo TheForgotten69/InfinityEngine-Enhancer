@@ -65,8 +65,11 @@ add_library(iee_common STATIC
     src/iee/core/pattern_scanner.cpp
     src/iee/game/build_manifest.cpp
     src/iee/game/game_addrs.cpp
+    src/iee/game/resref_runtime.cpp
+    src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
     src/iee/game/tis_runtime.cpp
+    src/iee/game/wed_runtime.cpp
 )
 
 target_include_directories(iee_common
