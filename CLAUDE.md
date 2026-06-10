@@ -10,8 +10,10 @@ Operational instructions for AI coding agents working in this repository.
 
 ## Environment
 
-- Use WSL for analysis, docs, and host-side tests.
-- Use Windows or CI for the final DLL build and runtime validation.
+- macOS (no CMake toolchain installed): analysis, docs, and reverse-engineering work only — rely on CI for build/test verification.
+- WSL: analysis, docs, and host-side tests.
+- Windows or CI: the final DLL build and runtime validation.
+- CI (`.github/workflows/build.yml`) runs the same commands below on every push; a green run is valid build/test evidence when no local toolchain exists.
 - The supported runtime target today is BGEE `2.6.6.x`.
 
 ## Build And Test Commands
