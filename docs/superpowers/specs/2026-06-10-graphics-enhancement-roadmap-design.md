@@ -58,6 +58,14 @@ Key facts this design is built on (validated unless marked otherwise):
 - BAM sprites are paletted and **palettes mutate at runtime** (armor tints, color
   picks, flash affects via `CVidCell::AddRangeAffect`/`AddResPaletteAffect`).
   The same logical frame uploads different RGBA bytes per palette state.
+- **Per-area data planes exist in engine memory** (CGameArea, EEex x64 docs):
+  `+0x260 CVidBitmap m_bmLum` (day lightmap), `+0x380 CVidBitmap* m_pbmLumNight`
+  (night lightmap), `+0x388 CVidBitmap m_bmHeight` (height map),
+  `+0xC20 uint8* m_pDynamicHeight`, `+0xA60 CSearchBitmap m_search`
+  (walkability), `+0x10B4 CSize m_lightmapRatio` (lightmap-to-world scale).
+  "No lighting" means no light *simulation*; per-position light color and a
+  height field are engine data. Offsets to be re-verified by `safe_read`
+  logging before first use (AGENTS.md: runtime questions need DLL-side logging).
 - Ghidra + the game PDB are available. New hook targets are documented symbols and
   enter the codebase as `build_manifest` pattern + fallback-RVA entries, never
   ad-hoc constants.
@@ -292,3 +300,109 @@ are documented; the bracket completeness check folds into V6's methodology.)
 - Replacing engine shaders couples us to their uniform interface per build;
   the archived-original contract check turns silent drift into a loud test
   failure at the next game patch.
+
+## 10. Appendix — full idea ledger from the design exploration
+
+Everything evaluated during design that is not scheduled in P1-P4, recorded so
+the reasoning (and the verification evidence) is not lost. Three statuses:
+**future** (designed-for, architecture keeps it reachable), **dropped** (viable
+but cut from this cycle by review), **rejected** (technically unsound — do not
+revisit without new evidence).
+
+### 10.1 Future: normal-map lighting on tiles
+
+The engine has no light simulation, so the light author is us — but it does
+ship per-position light data (§1 data planes), which upgrades this from "static
+fake sun" to spatially-varying lighting:
+
+- Author companion normal-map PVRZs atlased **identically** to the color pages
+  (same 1024x1024 page layout, same tile placement) so existing UV math works
+  unchanged. Bootstrap generation from upscaled color PVRZs
+  (height-from-luma); quality is mediocre but proves the pipeline.
+- Replacement `fpSEAM` binds the normal page on a reserved unit and shades N.L
+  with: a configurable sun direction (a design choice, not data), and light
+  color/intensity sampled from `m_bmLum` / `m_pbmLumNight` uploaded as a
+  texture (scale via `m_lightmapRatio`). Dynamic day/night response comes from
+  `CInfinity::m_rgbTimeOfDayGlobalLighting` (+0x330, verified in EEex CI docs).
+- `m_bmHeight` can additionally drive terrain-scale shading or slope hints
+  where authored normals do not exist yet.
+- Pre-baked AO maps are a derivative of the normal maps (generate offline,
+  multiply-blend in-shader) — same loading path, near-zero runtime cost.
+- Hard guard: night PVRZs are already darkness-graded; any N.L darkening on
+  night maps double-darkens. Per-area-mode calibration is mandatory.
+
+Preconditions: companion-asset loading (resref -> sibling PVRZ at resource
+demand time, riding the existing `CRes_Demand` path) and an offline generation
+tool. Self-contained; nothing in P1-P4 needs rework to accept it.
+
+### 10.2 Future: sprite-side lighting
+
+`CInfinity::FXLockPrepForLighting(..., rgbIntensities, rgbLocalTint, ...)`
+(signature verified in EEex docs) is the engine's per-sprite tint feed —
+almost certainly sampled from `m_bmLum` at the sprite's position. Intercepting
+or reproducing it in a replacement `fpSprite` would shade sprites consistently
+with 10.1's tile light instead of the flat engine tint. Research until 10.1
+exists.
+
+### 10.3 Future: emissives
+
+Blocked on classification: light sources (torches, windows) are BAM overlays
+mixed with map pixels, no clean mask. Two viable paths, in preference order:
+(a) bright regions of the **night lightmap** (`m_pbmLumNight`) approximate
+artificial light positions — an engine-data-driven emissive proxy worth one
+logging experiment; (b) an authored emissive mask channel (third companion
+PVRZ) riding the 10.1 pipeline. Luminance heuristics on the color texture were
+evaluated and **rejected** (false positives; night maps).
+
+### 10.4 Future: height-map-derived depth effects
+
+`m_bmHeight` + `m_pDynamicHeight` form a coarse per-area height field — a
+poor-man's depth proxy for the post stack (zone depth-of-field around the
+party, height-aware composite effects). Unexplored; record only.
+
+### 10.5 Future: screen-space water reflection
+
+Already a P5 stretch line. Supporting fact found in review: the engine carries
+`m_waterAlpha` (CGameArea and the ARE header) — water overlay transparency is
+an engine-side blend, which the composite pass can read for consistency.
+
+### 10.6 Future: sprite upscaling beyond the runtime kernel
+
+- Async ESRGAN disk cache (spec §4.6 option 2) if v1 kernel quality
+  disappoints.
+- Offline ESRGAN remains valid for **palette-stable** assets only: portraits,
+  UI icons, item BAMs. Out of this cycle; no palette-mutation problem there.
+
+### 10.7 Dropped this cycle (viable, cut by review)
+
+| Item | Evidence | Why dropped |
+|---|---|---|
+| Dawn/dusk transition grading | `ApplyNightGlobalTint`, `SetDawn/SetDusk` family documented | Authored day/night maps cover the need; transitions judged not worth the work |
+| AOE + door/container highlight AA | `CInfinity::RenderAOE`, `AddAOECircle/Cone/Line/Rectangle`, `OutlinePoly`/`FillPoly` documented | Marginal polish |
+| Lightning glow | `CInfinity::RenderLightning`/`CallLightning` documented | Marginal |
+| Weather particle polish | `CRainStorm::Render`/`CSnowStorm::Render`/`CParticle` documented | Low impact |
+| Shadow blobs under actors | `m_search` walkability + `m_cWalkableRenderCache` (CGameArea +0x10C0) make clamping feasible | "Just an image" — no 3D; judged not worth it |
+| Font/text enhancement | `fpFONT` slot + `drawLetter` path researched on `feature/wip` | Users already replace fonts with TTFs via override; filtering adds little |
+| `CVidMode::ApplyBrightnessContrast` GPU migration | Method documented | Only worthwhile if the final blit is already ours (post-V3); revisit then |
+
+### 10.8 Rejected on technical grounds (do not revisit without new evidence)
+
+| Item | Why |
+|---|---|
+| Per-tile uniforms for shader data | Bind-timing + batching (`DrawBeginSort`); the `feature/wip` failure mode. Use §4.1 area-texture channel |
+| Atlas-neighbor sampling for corner AO | Atlas layout has no relation to world layout |
+| Luminance-heuristic emissives | False positives; night maps double-process |
+| Offline ESRGAN for creature sprites | Runtime palette mutation (`AddRangeAffect`/`AddResPaletteAffect`) makes content caches unsound |
+| Detouring `CVisibilityMap::BltFogOWar3d` | Crashes on any modification — confirmed experimentally (stack canary, 144-byte frame) |
+| Parallax overlay scrolling | No separate depth layers exist in the tile data |
+| TAA | Scene is static; no temporal payoff |
+| Time-of-day LUT / global color grading | Two authored, pre-graded PVRZ map sets already cover it; ReShade territory otherwise |
+| In-shader bicubic on area tiles | PVRZ content is already upscaled offline |
+| Frame interpolation (15->60 fps) as a DLL feature | It is a content mod (interpolated BAMs + timing data), not a runtime renderer problem |
+| Bindless textures / multi-draw-indirect | No measured performance problem |
+
+### 10.9 Tooling idea (testing, unscheduled)
+
+`DrawReadPixels` is documented and resolvable — a hotkey-triggered screenshot
+capture would enable before/after regression comparisons of shader changes
+without external tools. Cheap to add to the Phase 0 debug toolkit if wanted.
