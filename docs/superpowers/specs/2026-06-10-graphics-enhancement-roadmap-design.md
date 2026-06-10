@@ -251,6 +251,11 @@ are documented; the bracket completeness check folds into V6's methodology.)
   across tile boundaries — phase from world position, not tile-local UV),
   masked by the WED liquid texture from Phase 0. Distortion clamped to the
   tile's atlas cell to prevent neighbor bleed.
+- Wave source: start procedural (sin-field, zero assets); `feature/wip`
+  already carries texture-driven inputs (`assets/water/`: DuDv map, normal
+  map, height, foam, shore foam) that can upgrade the look later — scrolling
+  DuDv distortion + foam is the classic technique and slots into the same
+  shader without architectural change.
 - Night-map guard: water effect parameters per area mode; no luminance-based
   effects on night maps without per-area calibration.
 - Emissives and corner AO are **out** until a WED-adjacency data path exists
