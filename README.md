@@ -46,7 +46,8 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
 - [docs/reverse-engineering.md](docs/reverse-engineering.md)
 - [docs/build-manifests.md](docs/build-manifests.md)
 - [docs/tile-upscale.md](docs/tile-upscale.md)
-- [AGENTS.md](AGENTS.md)
+- [docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md](docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md) — graphics enhancement roadmap
+- [CLAUDE.md](CLAUDE.md)
 
 ## Notes
 
