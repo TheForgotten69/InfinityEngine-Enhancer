@@ -35,6 +35,12 @@ namespace iee::core {
     // size = full instruction length in bytes.
     void *rel32_target(void *addr, std::size_t disp_offset, std::size_t size);
 
+    // Decode a relative 32-bit displacement target after validating the leading opcode.
+    void *rel32_target_checked(const void *addr,
+                               std::uint8_t expected_opcode,
+                               std::size_t disp_offset,
+                               std::size_t size);
+
     // Best-effort readable check (Windows). Returns false if unreadable.
     bool is_readable(const void *p, std::size_t len);
 

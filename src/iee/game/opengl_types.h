@@ -8,6 +8,10 @@
 namespace iee::game::gl {
 
 // region OpenGL Constants
+constexpr unsigned VENDOR = 0x1F00;
+constexpr unsigned RENDERER = 0x1F01;
+constexpr unsigned VERSION = 0x1F02;
+constexpr unsigned SHADING_LANGUAGE_VERSION = 0x8B8C;
 constexpr unsigned TEXTURE_2D = 0x0DE1;
 constexpr unsigned TEXTURE_WRAP_S = 0x2802;
 constexpr unsigned TEXTURE_WRAP_T = 0x2803;
@@ -31,11 +35,34 @@ constexpr unsigned GL_CONTEXT_LOST = 0x0507;
 // endregion
 
 // region OpenGL Function Pointer Types
+using PFN_glGetString = const unsigned char* (APIENTRY*)(unsigned name);
 using PFN_glTexParameteri = void (APIENTRY*)(unsigned target, unsigned pname, int param);
 using PFN_glTexParameterf = void (APIENTRY*)(unsigned target, unsigned pname, float param);
 using PFN_glGetIntegerv = void (APIENTRY*)(unsigned pname, int* data);
 using PFN_glGetTexParameteriv = void (APIENTRY*)(unsigned target, unsigned pname, int* params);
 using PFN_glGetError = unsigned int (APIENTRY*)();
+using PFN_glCreateShader = unsigned int (APIENTRY*)(unsigned shaderType);
+using PFN_glShaderSource = void (APIENTRY*)(unsigned shader, int count, const char* const* string, const int* length);
+using PFN_glCompileShader = void (APIENTRY*)(unsigned shader);
+using PFN_glDeleteShader = void (APIENTRY*)(unsigned shader);
+using PFN_glGetShaderiv = void (APIENTRY*)(unsigned shader, unsigned pname, int* params);
+using PFN_glGetShaderInfoLog = void (APIENTRY*)(unsigned shader, int maxLength, int* length, char* infoLog);
+using PFN_glCreateProgram = unsigned int (APIENTRY*)();
+using PFN_glAttachShader = void (APIENTRY*)(unsigned program, unsigned shader);
+using PFN_glLinkProgram = void (APIENTRY*)(unsigned program);
+using PFN_glUseProgram = void (APIENTRY*)(unsigned program);
+using PFN_glDeleteProgram = void (APIENTRY*)(unsigned program);
+using PFN_glGetProgramiv = void (APIENTRY*)(unsigned program, unsigned pname, int* params);
+using PFN_glGetProgramInfoLog = void (APIENTRY*)(unsigned program, int maxLength, int* length, char* infoLog);
+using PFN_glGetAttachedShaders = void (APIENTRY*)(unsigned program, int maxCount, int* count, unsigned* shaders);
+using PFN_glGetShaderSource = void (APIENTRY*)(unsigned shader, int bufSize, int* length, char* source);
+using PFN_glGetUniformLocation = int (APIENTRY*)(unsigned program, const char* name);
+using PFN_glUniform1f = void (APIENTRY*)(int location, float v0);
+using PFN_glUniform1i = void (APIENTRY*)(int location, int v0);
+using PFN_glShaderSourceARB = void (APIENTRY*)(unsigned shader, int count, const char* const* string, const int* length);
+using PFN_glCompileShaderARB = void (APIENTRY*)(unsigned shader);
+using PFN_glLinkProgramARB = void (APIENTRY*)(unsigned program);
+using PFN_glUseProgramObjectARB = void (APIENTRY*)(unsigned program);
 // endregion
 
 // region Error Handling Utilities
@@ -45,13 +72,41 @@ bool check_error(const char* operation) noexcept;
 
 // region Function Loading
 struct OpenGLFunctions {
+    PFN_glGetString glGetString{};
     PFN_glTexParameteri glTexParameteri{};
     PFN_glTexParameterf glTexParameterf{};
     PFN_glGetIntegerv glGetIntegerv{};
     PFN_glGetTexParameteriv glGetTexParameteriv{};
     PFN_glGetError glGetError{};
+    PFN_glCreateShader glCreateShader{};
+    PFN_glShaderSource glShaderSource{};
+    PFN_glCompileShader glCompileShader{};
+    PFN_glDeleteShader glDeleteShader{};
+    PFN_glGetShaderiv glGetShaderiv{};
+    PFN_glGetShaderInfoLog glGetShaderInfoLog{};
+    PFN_glCreateProgram glCreateProgram{};
+    PFN_glAttachShader glAttachShader{};
+    PFN_glLinkProgram glLinkProgram{};
+    PFN_glUseProgram glUseProgram{};
+    PFN_glDeleteProgram glDeleteProgram{};
+    PFN_glGetProgramiv glGetProgramiv{};
+    PFN_glGetProgramInfoLog glGetProgramInfoLog{};
+    PFN_glGetAttachedShaders glGetAttachedShaders{};
+    PFN_glGetShaderSource glGetShaderSource{};
+    PFN_glGetUniformLocation glGetUniformLocation{};
+    PFN_glUniform1f glUniform1f{};
+    PFN_glUniform1i glUniform1i{};
+    PFN_glShaderSourceARB glShaderSourceARB{};
+    PFN_glCompileShaderARB glCompileShaderARB{};
+    PFN_glLinkProgramARB glLinkProgramARB{};
+    PFN_glUseProgramObjectARB glUseProgramObjectARB{};
 
     bool valid{false};
+    bool shaderObjectsAvailable{false};
+    bool shaderIntrospectionAvailable{false};
+    bool uniformApiAvailable{false};
+    bool readyForSourcePatching{false};
+    bool arbShaderObjectsAvailable{false};
 
     bool initialize() noexcept;
 };

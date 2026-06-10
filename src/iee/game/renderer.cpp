@@ -1,6 +1,6 @@
 #include "renderer.h"
+#include "build_manifest.h"
 #include "opengl_types.h"
-#include "game_addrs.h"
 #include "iee/core/config.h"
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
@@ -9,46 +9,98 @@
 #include <atomic>
 
 namespace iee::game {
-    bool resolve_draw_api(DrawApi &out, std::uintptr_t renderTextureVA) {
+    namespace {
+        const char *instruction_kind_name(BranchInstructionKind kind) noexcept {
+            switch (kind) {
+                case BranchInstructionKind::CallRel32:
+                    return "call";
+                case BranchInstructionKind::JmpRel32:
+                    return "jmp";
+            }
+            return "unknown";
+        }
+
+        bool is_address_in_module(const core::ModuleSpan &module, const void *address) noexcept {
+            const auto value = reinterpret_cast<std::uintptr_t>(address);
+            const auto start = reinterpret_cast<std::uintptr_t>(module.base);
+            const auto end = start + module.size;
+            return value >= start && value < end;
+        }
+    }
+
+    bool resolve_draw_api(DrawApi &out, std::uintptr_t renderTextureVA, const BuildManifest &manifest) {
         if (!renderTextureVA) {
             LOG_ERROR("RenderTexture address is null");
             return false;
         }
 
+        out = {};
+
         struct APIFunction {
             void **target;
-            const char *name;
-            size_t offset;
+            const BranchInstructionDesc *desc;
         };
 
-        APIFunction functions[] = {
-            {reinterpret_cast<void **>(&out.CRes_Demand), "CRes_Demand", GameOffsets::RT_CRES_DEMAND_OFFSET},
-            {
-                reinterpret_cast<void **>(&out.DrawBindTexture), "DrawBindTexture",
-                GameOffsets::RT_DRAW_BIND_TEXTURE_OFFSET
-            },
-            {reinterpret_cast<void **>(&out.DrawDisable), "DrawDisable", GameOffsets::RT_DRAW_DISABLE_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawColor), "DrawColor", GameOffsets::RT_DRAW_COLOR_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawPushState), "DrawPushState", GameOffsets::RT_DRAW_PUSH_STATE_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawColorTone), "DrawColorTone", GameOffsets::RT_DRAW_COLOR_TONE_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawBegin), "DrawBegin", GameOffsets::RT_DRAW_BEGIN_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawTexCoord), "DrawTexCoord", GameOffsets::RT_DRAW_TEX_COORD_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawVertex), "DrawVertex", GameOffsets::RT_DRAW_VERTEX_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawEnd), "DrawEnd", GameOffsets::RT_DRAW_END_OFFSET},
-            {reinterpret_cast<void **>(&out.DrawPopState), "DrawPopState", GameOffsets::RT_DRAW_POP_STATE_OFFSET}
+        const APIFunction functions[] = {
+            {reinterpret_cast<void **>(&out.CRes_Demand), &manifest.renderTextureCallsites[0]},
+            {reinterpret_cast<void **>(&out.DrawBindTexture), &manifest.renderTextureCallsites[1]},
+            {reinterpret_cast<void **>(&out.DrawDisable), &manifest.renderTextureCallsites[2]},
+            {reinterpret_cast<void **>(&out.DrawColor), &manifest.renderTextureCallsites[3]},
+            {reinterpret_cast<void **>(&out.DrawPushState), &manifest.renderTextureCallsites[4]},
+            {reinterpret_cast<void **>(&out.DrawColorTone), &manifest.renderTextureCallsites[5]},
+            {reinterpret_cast<void **>(&out.DrawBegin), &manifest.renderTextureCallsites[6]},
+            {reinterpret_cast<void **>(&out.DrawTexCoord), &manifest.renderTextureCallsites[7]},
+            {reinterpret_cast<void **>(&out.DrawVertex), &manifest.renderTextureCallsites[8]},
+            {reinterpret_cast<void **>(&out.DrawEnd), &manifest.renderTextureCallsites[9]},
+            {reinterpret_cast<void **>(&out.DrawPopState), &manifest.renderTextureCallsites[10]},
         };
 
+        const auto moduleInfo = core::get_module_span(nullptr);
         bool allResolved = true;
         for (const auto &func: functions) {
-            // Point to the instruction at renderTextureVA + func.offset
-            auto *insn = reinterpret_cast<void *>(renderTextureVA + func.offset);
-            // E8 xx xx xx xx => displacement starts at +1, total size 5
-            if (void *addr = core::rel32_target(insn, 1, 5); !addr) {
-                LOG_ERROR("Failed to resolve {} at offset 0x{:X}", func.name, func.offset);
-                allResolved = false;
+            const auto *desc = func.desc;
+            const auto *insn = reinterpret_cast<const void *>(renderTextureVA + desc->offset);
+
+            void *addr = core::rel32_target_checked(insn,
+                                                    desc->opcode,
+                                                    desc->displacementOffset,
+                                                    desc->instructionSize);
+            if (!addr) {
+                const auto *messageLevel = desc->required ? "Failed" : "Skipped";
+                if (desc->required) {
+                    LOG_ERROR("{} to resolve {} at offset 0x{:X} (expected {} opcode 0x{:02X})",
+                              messageLevel,
+                              desc->name,
+                              desc->offset,
+                              instruction_kind_name(desc->kind),
+                              desc->opcode);
+                    allResolved = false;
+                } else {
+                    LOG_WARN("{} optional {} at offset 0x{:X} (expected {} opcode 0x{:02X})",
+                             messageLevel,
+                             desc->name,
+                             desc->offset,
+                             instruction_kind_name(desc->kind),
+                             desc->opcode);
+                }
+            } else if (moduleInfo && !is_address_in_module(*moduleInfo, addr)) {
+                if (desc->required) {
+                    LOG_ERROR("Resolved {} outside the game module: 0x{:X}",
+                              desc->name,
+                              reinterpret_cast<uintptr_t>(addr));
+                    allResolved = false;
+                } else {
+                    LOG_WARN("Resolved optional {} outside the game module: 0x{:X}",
+                             desc->name,
+                             reinterpret_cast<uintptr_t>(addr));
+                }
             } else {
                 *func.target = addr;
-                LOG_DEBUG("Resolved {}: 0x{:X}", func.name, reinterpret_cast<uintptr_t>(addr));
+                LOG_DEBUG("Resolved {} via {} at 0x{:X}: 0x{:X}",
+                          desc->name,
+                          instruction_kind_name(desc->kind),
+                          renderTextureVA + desc->offset,
+                          reinterpret_cast<uintptr_t>(addr));
             }
         }
 
@@ -120,9 +172,12 @@ namespace iee::game {
 
             // Always use linear filtering
             gl.glTexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR);
-            if (!gl::check_error("glTexParameteri MIN_FILTER linear")) {
+            if (gl::check_error("glTexParameteri MIN_FILTER linear")) {
                 if (logDetails)
                     LOG_INFO("  ✓ Linear filtering enabled");
+            } else {
+                LOG_WARN("  ! Failed to set min filter");
+                return true;
             }
 
             // Apply anisotropic filtering if configured

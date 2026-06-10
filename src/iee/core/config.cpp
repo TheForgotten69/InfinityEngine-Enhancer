@@ -94,6 +94,12 @@ namespace iee::core {
             return;
         }
 
+        // [Debug]
+        if (iequals(section, "debug")) {
+            if (iequals(key, "MagentaShaders")) cfg.debugMagentaShaders = val;
+            return;
+        }
+
         // [Addresses]
         if (iequals(section, "addresses")) {
             if (iequals(key, "FallbackLoadAreaRVA")) {
@@ -188,6 +194,9 @@ namespace iee::core {
                 << static_cast<std::uint32_t>(cfg.cachedLoadAreaRVA) << std::dec << "\n";
         f << "FallbackRenderTextureRVA = 0x" << std::hex << std::uppercase
                 << static_cast<std::uint32_t>(cfg.cachedRenderTextureRVA) << std::dec << "\n";
+
+        write_section(f, "Debug");
+        f << "MagentaShaders = " << cfg.debugMagentaShaders << "\n";
 
         return true;
     }

@@ -108,6 +108,25 @@ namespace iee::core {
         return next + disp;
     }
 
+    void *rel32_target_checked(const void *addr,
+                               std::uint8_t expected_opcode,
+                               std::size_t disp_offset,
+                               std::size_t size) {
+        std::uint8_t opcode = 0;
+        if (!safe_read(addr, opcode) || opcode != expected_opcode) {
+            return nullptr;
+        }
+
+        int32_t displacement = 0;
+        const auto *p = static_cast<const std::byte *>(addr);
+        if (!safe_read(p + disp_offset, displacement)) {
+            return nullptr;
+        }
+
+        const auto *next = p + size;
+        return const_cast<std::byte *>(next + displacement);
+    }
+
     bool is_readable(const void *p, std::size_t len) {
 #ifdef _WIN64
         MEMORY_BASIC_INFORMATION mbi{};
