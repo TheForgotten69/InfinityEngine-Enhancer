@@ -101,10 +101,14 @@ to **replace** them with our own GLSL, not patch around them.
 - Global LUT/sharpening/vignette/grain — ReShade territory, user preference.
 - Animation frame interpolation (15→60 fps) — a content-mod problem
   (interpolated BAMs + timing), not a DLL feature.
-- Bindless textures / multi-draw-indirect — no measured perf problem exists.
+- Bindless textures / multi-draw-indirect / persistent mapped buffers /
+  compute-managed sprite atlases — no measured perf problem exists.
 - Shadow blobs, weather particle polish, AOE/highlight AA, lightning glow,
   dawn/dusk grading — reviewed and dropped for this cycle.
-- Per-VFX bloom isolation — the post-stack bloom covers the bulk of the value.
+- Per-VFX isolation effects (per-spell-school blend modes, heat-haze on
+  fire/steam, mirror-image/selection-glow treatments) — the post-stack bloom
+  covers the bulk of the value; the rest needs per-effect classification work
+  disproportionate to the payoff.
 - Offline ESRGAN for palette-mutable sprites (see §4.6 for what survives).
 - Generalized multi-build support — manifest stays pinned to BGEE 2.6.6.x
   per AGENTS.md.
@@ -173,6 +177,10 @@ Palette mutation kills content-hash offline caches for creatures. The plan:
    FSR1-EASU-style) on the GPU into a 2x/4x texture under the same texture ID.
    No cache needed beyond the texture itself; works for every sprite, tint, and
    flash state. Cost is microseconds per 50x50 frame.
+   **V4-failure fallback**: if the UV convention makes upload-time swapping
+   unsound, the same kernels move into the replacement `fpSprite` as a
+   draw-time sampling shader — lower efficiency (re-runs per draw), identical
+   visual result, no texture identity games.
 2. **Stretch — async ESRGAN cache**: hash-on-upload; miss renders the v1 kernel
    now and queues offline-quality upscaling to a worker; disk cache grows during
    play. Only if v1 quality disappoints.
@@ -182,7 +190,14 @@ Palette mutation kills content-hash offline caches for creatures. The plan:
 Cache/ID correctness: hook `DrawDeleteTexture` and invalidate on VRAM pool swaps
 (`SwapVRamTiles`) — texture IDs are recycled (§1).
 
-### 4.7 Halo fix is a three-part coupling
+### 4.7 Gamma-correct blending in our own passes
+
+Every composite pass **we** add (fog blur/composite, bloom, sprite blend fixes)
+linearizes before blending and re-encodes sRGB after. The engine's own blends
+stay untouched (changing them is out of scope), but our passes do not stack new
+gamma errors on top.
+
+### 4.8 Halo fix is a three-part coupling
 
 Premultiplied alpha requires all of: premultiply pixel data at upload, swap blend
 func to `(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)` for those draws, and sampling-aware
@@ -247,7 +262,7 @@ are documented; the bracket completeness check folds into V6's methodology.)
 ### Phase 3 — Sprites (P2)
 
 - Run V4 first (make-or-break for the pillar).
-- Replacement `fpSprite` + premultiply-at-upload + blend swap (§4.7) behind one
+- Replacement `fpSprite` + premultiply-at-upload + blend swap (§4.8) behind one
   flag.
 - Runtime GPU upscale kernel at upload (§4.6 v1), `DrawDeleteTexture`/pool-swap
   invalidation included.
@@ -389,6 +404,8 @@ an engine-side blend, which the composite pass can read for consistency.
 | Shadow blobs under actors | `m_search` walkability + `m_cWalkableRenderCache` (CGameArea +0x10C0) make clamping feasible | "Just an image" — no 3D; judged not worth it |
 | Font/text enhancement | `fpFONT` slot + `drawLetter` path researched on `feature/wip` | Users already replace fonts with TTFs via override; filtering adds little |
 | `CVidMode::ApplyBrightnessContrast` GPU migration | Method documented | Only worthwhile if the final blit is already ours (post-V3); revisit then |
+| Edge-detection / ink-outline stylization | Sobel/Laplacian on the world FBO is trivial once P4 exists | Changes art direction rather than enhancing it; not this project's goal |
+| Per-VFX polish (heat-haze, per-school blend modes, mirror-image/glow effects) | `CVisualEffect::Render`, projectile `Render` family documented | Per-effect classification work disproportionate to payoff; post-stack bloom covers most of it |
 
 ### 10.8 Rejected on technical grounds (do not revisit without new evidence)
 
