@@ -226,6 +226,28 @@ are documented; the bracket completeness check folds into V6's methodology.)
 
 ### Phase 0 — Foundation
 
+Codebase refactors required before pillar work lands (existing-code debt that
+directly blocks the plan):
+
+- Split `hooks.cpp` (598 lines: lifecycle + area resolution + WED caching +
+  detection + diagnostics + geometry) into a thin detour->dispatch layer plus
+  per-feature modules with a uniform interface (install / area-reset /
+  frame-tick). Pillars plug in as modules, not as more code in the detour.
+- Move the hardcoded `CInfGame` offsets (`hooks.cpp` `kInfGame*Offset`,
+  0x6590/0x6598/0x65F8) into `build_manifest` — existing violation of the
+  manifest rule.
+- Slim `AppContext`: per-feature state lives in the owning feature module;
+  the context keeps only shared infra (cfg, manifest, addrs, draw, area/WED
+  snapshot).
+- Extend `DrawApi` (`DrawEnable` missing on main) and port the modern-GL
+  function table (shader/program/uniform APIs) from `feature/wip` into
+  `opengl_types.*`.
+- The per-draw WED lookup currently logging inside `Detour_RenderTexture`
+  moves to `LoadArea` time as the area-texture builder (§4.1) and leaves the
+  render hot path.
+
+New infrastructure:
+
 - Port + harden the `glShaderSource`/`glUseProgram` probe from `feature/wip`
   (replace-by-name engine per §4.2, original-source archival, fallback compile).
 - GL state guard (§4.3).

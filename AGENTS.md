@@ -34,6 +34,13 @@
   `TIS header -> PVR entry table smallest positive step -> legacy heuristic fallback`
 - `+0x1DC` is only the current linear-tiles tone flag for this build.
 - If you need live runtime facts, add DLL logging. Ghidra is useful for offline layout review but cannot answer live process-state questions on its own.
+- The renderer is an OpenGL 4.6 **compatibility profile** context (legacy `wglCreateContext`; modern GL loads via `wglGetProcAddress`).
+- The engine compiles nine named GLSL programs (`fpSEAM`, `fpSprite`, `fpSELECT`, `fpCatRom`, ...). The verified slot table and shader-replacement strategy live in the graphics roadmap spec (see Docs below).
+- The engine does **zero** lighting work. Day/night is a swap of authored assets. `CGameArea` holds authored per-area bitmaps (`m_bmLum` +0x260, `m_pbmLumNight` +0x380, `m_bmHeight` +0x388) usable as static lookup data only.
+- **Never detour `CVisibilityMap::BltFogOWar3d`** — crashes on any modification (stack canary, confirmed experimentally). `CInfinity::RenderFog` is setup-only but is safe to hook as a bracket around the fog pass.
+- Prefer `SDL_GL_SwapWindow` (SDL2.dll export) over `DrawFlip` patterns for the frame boundary.
+- `feature/wip` is inspiration only, not a base: its shader probe and slot table are valid; its per-tile-uniform feeding design is the documented failure (uniforms were never wired at draw time).
+- Any new hook target RVA/pattern goes through `build_manifest`, never ad-hoc constants. Known existing violation to fix: the `CInfGame` area offsets hardcoded in `hooks.cpp`.
 
 ## Repo Layout
 
@@ -41,6 +48,7 @@
 - `src/iee/game/tis_runtime.*` holds explicit runtime views.
 - `src/iee/game/tile_upscale.*` holds scale selection logic.
 - `docs/` contains the architecture and reverse-engineering notes future agents should read first.
+- `docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md` is the graphics roadmap: four feature pillars, validation gates (V1-V6), and the full evaluated/dropped/rejected idea ledger. Read it before proposing any rendering feature — most ideas have already been evaluated there.
 - `shaders/InfinityEngine-Enhancer.cpp` is archival research code only.
 
 ## Done Means
