@@ -447,7 +447,7 @@ an engine-side blend, which the composite pass can read for consistency.
 | TAA | Scene is static; no temporal payoff |
 | Time-of-day LUT / global color grading | Two authored, pre-graded PVRZ map sets already cover it; ReShade territory otherwise |
 | In-shader bicubic on area tiles | PVRZ content is already upscaled offline |
-| Frame interpolation (15->60 fps) as a DLL feature | It is a content mod (interpolated BAMs + timing data), not a runtime renderer problem |
+| Frame interpolation (15->60 fps) as a DLL feature | It is a content mod, not a runtime renderer problem: sprite loops run off an internal fps number that EEex already patches, so the path is interpolated BAM frames + that existing fps knob — nothing for this DLL to do |
 | Bindless textures / multi-draw-indirect | No measured performance problem |
 
 ### 10.9 Tooling idea (testing, unscheduled)
