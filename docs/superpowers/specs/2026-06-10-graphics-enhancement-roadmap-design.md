@@ -58,14 +58,18 @@ Key facts this design is built on (validated unless marked otherwise):
 - BAM sprites are paletted and **palettes mutate at runtime** (armor tints, color
   picks, flash affects via `CVidCell::AddRangeAffect`/`AddResPaletteAffect`).
   The same logical frame uploads different RGBA bytes per palette state.
-- **Per-area data planes exist in engine memory** (CGameArea, EEex x64 docs):
-  `+0x260 CVidBitmap m_bmLum` (day lightmap), `+0x380 CVidBitmap* m_pbmLumNight`
-  (night lightmap), `+0x388 CVidBitmap m_bmHeight` (height map),
+- **Per-area authored asset planes are held in engine memory** (CGameArea,
+  EEex x64 docs): `+0x260 CVidBitmap m_bmLum` (day lightmap bitmap),
+  `+0x380 CVidBitmap* m_pbmLumNight` (night lightmap bitmap),
+  `+0x388 CVidBitmap m_bmHeight` (height map bitmap),
   `+0xC20 uint8* m_pDynamicHeight`, `+0xA60 CSearchBitmap m_search`
   (walkability), `+0x10B4 CSize m_lightmapRatio` (lightmap-to-world scale).
-  "No lighting" means no light *simulation*; per-position light color and a
-  height field are engine data. Offsets to be re-verified by `safe_read`
-  logging before first use (AGENTS.md: runtime questions need DLL-side logging).
+  These are hand-painted area assets, not computed lighting: the engine does
+  **zero** lighting work — the lightmaps are static lookup bitmaps (used to
+  tint sprites by position), and the day/night switch just loads the night-
+  authored set. They are still usable as per-position data sources for our
+  shaders. Offsets to be re-verified by `safe_read` logging before first use
+  (AGENTS.md: runtime questions need DLL-side logging).
 - Ghidra + the game PDB are available. New hook targets are documented symbols and
   enter the codebase as `build_manifest` pattern + fallback-RVA entries, never
   ad-hoc constants.
@@ -311,19 +315,20 @@ revisit without new evidence).
 
 ### 10.1 Future: normal-map lighting on tiles
 
-The engine has no light simulation, so the light author is us — but it does
-ship per-position light data (§1 data planes), which upgrades this from "static
-fake sun" to spatially-varying lighting:
+The engine does no lighting at all, so the light author is us. The authored
+per-area bitmaps (§1) are usable as static per-position inputs — nothing about
+them is dynamic:
 
 - Author companion normal-map PVRZs atlased **identically** to the color pages
   (same 1024x1024 page layout, same tile placement) so existing UV math works
   unchanged. Bootstrap generation from upscaled color PVRZs
   (height-from-luma); quality is mediocre but proves the pipeline.
 - Replacement `fpSEAM` binds the normal page on a reserved unit and shades N.L
-  with: a configurable sun direction (a design choice, not data), and light
-  color/intensity sampled from `m_bmLum` / `m_pbmLumNight` uploaded as a
-  texture (scale via `m_lightmapRatio`). Dynamic day/night response comes from
-  `CInfinity::m_rgbTimeOfDayGlobalLighting` (+0x330, verified in EEex CI docs).
+  with a configurable sun direction (a design choice, not data). Optionally,
+  light color/intensity can be sampled from the authored `m_bmLum` /
+  `m_pbmLumNight` bitmaps uploaded as a texture (scale via `m_lightmapRatio`)
+  — a hand-painted lookup, consistent with how the engine tints sprites, not
+  any form of computed light.
 - `m_bmHeight` can additionally drive terrain-scale shading or slope hints
   where authored normals do not exist yet.
 - Pre-baked AO maps are a derivative of the normal maps (generate offline,
@@ -339,20 +344,20 @@ tool. Self-contained; nothing in P1-P4 needs rework to accept it.
 
 `CInfinity::FXLockPrepForLighting(..., rgbIntensities, rgbLocalTint, ...)`
 (signature verified in EEex docs) is the engine's per-sprite tint feed —
-almost certainly sampled from `m_bmLum` at the sprite's position. Intercepting
-or reproducing it in a replacement `fpSprite` would shade sprites consistently
-with 10.1's tile light instead of the flat engine tint. Research until 10.1
-exists.
+plausibly a lookup into the authored `m_bmLum` bitmap at the sprite's position
+(to be confirmed by logging). Intercepting or reproducing it in a replacement
+`fpSprite` would shade sprites consistently with 10.1's tile shading instead
+of the flat engine tint. Research until 10.1 exists.
 
 ### 10.3 Future: emissives
 
 Blocked on classification: light sources (torches, windows) are BAM overlays
 mixed with map pixels, no clean mask. Two viable paths, in preference order:
-(a) bright regions of the **night lightmap** (`m_pbmLumNight`) approximate
-artificial light positions — an engine-data-driven emissive proxy worth one
-logging experiment; (b) an authored emissive mask channel (third companion
-PVRZ) riding the 10.1 pipeline. Luminance heuristics on the color texture were
-evaluated and **rejected** (false positives; night maps).
+(a) bright regions of the **authored night lightmap** (`m_pbmLumNight`)
+approximate where artists placed light sources — a baked-asset-driven emissive
+proxy worth one logging experiment; (b) an authored emissive mask channel
+(third companion PVRZ) riding the 10.1 pipeline. Luminance heuristics on the
+color texture were evaluated and **rejected** (false positives; night maps).
 
 ### 10.4 Future: height-map-derived depth effects
 
