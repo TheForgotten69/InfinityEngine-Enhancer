@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -706,6 +707,41 @@ void test_area_liquid_texture_packing_rejects_mismatch() {
     expect_true(!iee::game::pack_area_liquid_texture(empty).has_value(), "empty -> nullopt");
 }
 
+void test_fpseam_override_asset_contract() {
+    namespace fs = std::filesystem;
+    const fs::path assetPath = fs::path("assets") / "game-override" / "fpSEAM.glsl";
+    std::ifstream file(assetPath, std::ios::binary);
+    expect_true(static_cast<bool>(file), "fpSEAM override asset exists (run tests from repo root)");
+    if (!file) return;
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    const std::string source = contents.str();
+
+    // Engine interface (from the live vanilla dump) must be fully preserved.
+    constexpr std::string_view vanillaInterface =
+        "uniform sampler2D uTex;\n"
+        "uniform vec2 uTcScale;\n"
+        "uniform vec4 uColorTone;\n"
+        "varying vec2 vTc;\n"
+        "varying vec2 vRef;\n"
+        "varying vec4 vColor;\n";
+    const auto contract = iee::game::check_interface_contract(vanillaInterface, source);
+    expect_true(contract.ok, "fpSEAM override preserves the engine interface");
+    for (const auto &missing : contract.missingIdentifiers) {
+        std::cerr << "  missing identifier: " << missing << '\n';
+    }
+
+    // Our feed contract.
+    for (const std::string_view name :
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",
+          "uIeeViewport", "uIeeWorldSizeInv", "uIeeAreaMask"}) {
+        expect_true(source.find(name) != std::string::npos,
+                    "fpSEAM override declares feed uniform");
+    }
+    expect_true(source.find("#version") == std::string::npos,
+                "no #version line (engine sources are ARB-era GLSL)");
+}
+
 int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
@@ -732,6 +768,7 @@ int main() {
     test_area_texture_packing_size_mismatch();
     test_area_liquid_texture_packing();
     test_area_liquid_texture_packing_rejects_mismatch();
+    test_fpseam_override_asset_contract();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

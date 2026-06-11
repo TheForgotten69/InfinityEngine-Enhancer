@@ -157,5 +157,5 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(iee_tests PRIVATE iee_common)
-    add_test(NAME iee_tests COMMAND iee_tests)
+    add_test(NAME iee_tests COMMAND iee_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
