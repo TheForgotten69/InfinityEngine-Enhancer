@@ -64,6 +64,11 @@ namespace iee::probe {
             // some installs' game-data fpSEAM (confirmed live 2026-06-11):
             int liquidTime{-2};
             int liquidMode{-2};
+            int scroll{-2};        // uIeeScroll (vec2, world px)
+            int zoom{-2};          // uIeeZoom (float)
+            int viewport{-2};      // uIeeViewport (vec2, physical px)
+            int worldSizeInv{-2};  // uIeeWorldSizeInv (vec2, 1/world px)
+            int areaMask{-2};      // uIeeAreaMask (sampler2D -> unit 2)
         };
         // endregion
 
@@ -118,6 +123,9 @@ namespace iee::probe {
         std::atomic<float> g_uniformTime{0.0f};
         std::atomic<float> g_worldWidthPx{0.0f};
         std::atomic<float> g_worldHeightPx{0.0f};
+        std::atomic<float> g_scrollX{0.0f};
+        std::atomic<float> g_scrollY{0.0f};
+        std::atomic<float> g_zoom{1.0f};
         // Effect gate fed to uIeeEnabled/uIeeTileLiquidMode. Starts OFF: the
         // baseline render must be untouched until F10 explicitly enables it.
         std::atomic<bool>  g_overridesEnabled{false};
@@ -860,6 +868,11 @@ namespace iee::probe {
             if (locs.liquidMode == -2) {
                 locs.liquidMode = gl.glGetUniformLocation(program, "uIeeTileLiquidMode");
             }
+            if (locs.scroll == -2)       locs.scroll       = gl.glGetUniformLocation(program, "uIeeScroll");
+            if (locs.zoom == -2)         locs.zoom         = gl.glGetUniformLocation(program, "uIeeZoom");
+            if (locs.viewport == -2)     locs.viewport     = gl.glGetUniformLocation(program, "uIeeViewport");
+            if (locs.worldSizeInv == -2) locs.worldSizeInv = gl.glGetUniformLocation(program, "uIeeWorldSizeInv");
+            if (locs.areaMask == -2)     locs.areaMask     = gl.glGetUniformLocation(program, "uIeeAreaMask");
 
             // Store back resolved locations
             {
@@ -886,6 +899,29 @@ namespace iee::probe {
                 // F10 doubles as the liquid-mode toggle for the legacy patch
                 // (mode 1 = water styling on every tile — bridge proof, not a feature).
                 gl.glUniform1f(locs.liquidMode, enabledValue);
+            }
+            if (locs.scroll >= 0 && gl.glUniform2f) {
+                gl.glUniform2f(locs.scroll,
+                               g_scrollX.load(std::memory_order_relaxed),
+                               g_scrollY.load(std::memory_order_relaxed));
+            }
+            if (locs.zoom >= 0) {
+                gl.glUniform1f(locs.zoom, g_zoom.load(std::memory_order_relaxed));
+            }
+            if (locs.viewport >= 0 && gl.glUniform2f && gl.glGetIntegerv) {
+                int vp[4] = {0, 0, 0, 0};
+                gl.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
+                gl.glUniform2f(locs.viewport, static_cast<float>(vp[2]), static_cast<float>(vp[3]));
+            }
+            if (locs.worldSizeInv >= 0 && gl.glUniform2f) {
+                const float w = g_worldWidthPx.load(std::memory_order_relaxed);
+                const float h = g_worldHeightPx.load(std::memory_order_relaxed);
+                if (w > 0.0f && h > 0.0f) {
+                    gl.glUniform2f(locs.worldSizeInv, 1.0f / w, 1.0f / h);
+                }
+            }
+            if (locs.areaMask >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.areaMask, 2); // reserved unit (area_state upload)
             }
         }
         // endregion
@@ -1337,6 +1373,12 @@ namespace iee::probe {
     void set_area_world_size(float widthPx, float heightPx) noexcept {
         g_worldWidthPx.store(widthPx, std::memory_order_relaxed);
         g_worldHeightPx.store(heightPx, std::memory_order_relaxed);
+    }
+
+    void set_area_scroll_zoom(float scrollX, float scrollY, float zoom) noexcept {
+        g_scrollX.store(scrollX, std::memory_order_relaxed);
+        g_scrollY.store(scrollY, std::memory_order_relaxed);
+        g_zoom.store(zoom > 0.0f ? zoom : 1.0f, std::memory_order_relaxed);
     }
 
     // endregion
