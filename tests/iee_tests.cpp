@@ -292,6 +292,40 @@ namespace {
         std::filesystem::remove(tempPath, ec);
     }
 
+    void test_config_shader_override_defaults() {
+        iee::core::EngineConfig cfg{};
+        expect_true(!cfg.enableShaderOverrides, "shader overrides default off");
+        expect_true(cfg.dumpEngineShaders, "shader dump defaults on");
+        expect_eq(cfg.shaderOverrideDir, std::string("iee-shaders"), "override dir default");
+        expect_true(cfg.debugMagentaShaders.empty(), "magenta list default empty");
+        expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
+    }
+
+    void test_config_shader_override_roundtrip() {
+        const auto tempPath = std::filesystem::current_path() / "InfinityEngine-Enhancer-shader-test.ini";
+        {
+            iee::core::EngineConfig orig{};
+            orig.enableShaderOverrides = true;
+            orig.dumpEngineShaders = false;
+            orig.shaderOverrideDir = "custom-shaders";
+            orig.debugMagentaShaders = "spell1.glsl,spell2.glsl";
+            orig.enableDebugHotkeys = true;
+
+            expect_true(iee::core::ConfigManager::save(tempPath, orig), "ConfigManager::save should succeed");
+        }
+
+        iee::core::EngineConfig loaded{};
+        expect_true(iee::core::ConfigManager::load(tempPath, loaded), "ConfigManager::load should parse shader config");
+        expect_true(loaded.enableShaderOverrides, "enableShaderOverrides should round-trip as true");
+        expect_true(!loaded.dumpEngineShaders, "dumpEngineShaders should round-trip as false");
+        expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"), "shaderOverrideDir should round-trip");
+        expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"), "debugMagentaShaders should round-trip");
+        expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
+
+        std::error_code ec;
+        std::filesystem::remove(tempPath, ec);
+    }
+
     void write_bytes(std::vector<std::byte> &buffer, std::size_t offset, const void *data, std::size_t size) {
         if (offset + size > buffer.size()) {
             buffer.resize(offset + size);
@@ -529,6 +563,8 @@ int main() {
     test_file_format_layouts();
     test_eeex_doc_layout_maps();
     test_config_parsing();
+    test_config_shader_override_defaults();
+    test_config_shader_override_roundtrip();
     test_parse_loaded_wed();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();
