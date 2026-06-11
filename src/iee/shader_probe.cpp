@@ -1205,6 +1205,20 @@ namespace iee::probe {
 
     void on_frame_tick(float secondsSinceStart) noexcept {
         g_uniformTime.store(secondsSinceStart, std::memory_order_relaxed);
+
+        if (!g_cfg.enableDebugHotkeys) {
+            return;
+        }
+
+        // F10: toggle the visual effect of shader overrides (uIeeEnabled), edge-triggered.
+        static bool f10WasDown = false;
+        const bool f10Down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+        if (f10Down && !f10WasDown) {
+            const bool enabled = !g_overridesEnabled.load(std::memory_order_relaxed);
+            g_overridesEnabled.store(enabled, std::memory_order_relaxed);
+            LOG_INFO("Hotkey F10: shader override effect {}", enabled ? "ON" : "OFF");
+        }
+        f10WasDown = f10Down;
     }
 
     void set_override_effect_enabled(bool enabled) noexcept {
