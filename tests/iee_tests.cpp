@@ -11,6 +11,7 @@
 
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/game/area_texture.h"
 #include "iee/game/build_manifest.h"
 #include "iee/game/eeex_doc_layouts_x64.h"
 #include "iee/game/file_formats.h"
@@ -643,6 +644,31 @@ namespace {
     }
 }
 
+void test_area_texture_packing() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 3;
+    wed.baseHeight = 2;
+    wed.baseOverlayFlags = {0x00, 0x02, 0x00, 0x04, 0x00, 0x06}; // overlay bits per cell
+    const auto packed = iee::game::pack_area_cell_texture(wed);
+    expect_true(packed.has_value(), "packs valid wed");
+    if (packed) {
+        expect_eq(packed->width, 3, "width");
+        expect_eq(packed->height, 2, "height");
+        expect_eq(packed->texels.size(), std::size_t{6}, "one byte per cell");
+        expect_eq(packed->texels[1], std::uint8_t{0x02}, "cell flags preserved");
+    }
+    iee::game::WedAreaInfo empty{};
+    expect_true(!iee::game::pack_area_cell_texture(empty).has_value(), "empty wed -> nullopt");
+}
+
+void test_area_texture_packing_size_mismatch() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 4;
+    wed.baseHeight = 4;
+    wed.baseOverlayFlags = {0x01}; // wrong size
+    expect_true(!iee::game::pack_area_cell_texture(wed).has_value(), "flag/dimension mismatch -> nullopt");
+}
+
 int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
@@ -665,6 +691,8 @@ int main() {
     test_interface_contract();
     test_interface_contract_token_boundary();
     test_override_registry();
+    test_area_texture_packing();
+    test_area_texture_packing_size_mismatch();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";
