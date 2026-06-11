@@ -17,6 +17,8 @@
 #include <windows.h>
 #include <dbghelp.h>
 
+#include <spdlog/fmt/fmt.h>
+
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
@@ -595,6 +597,56 @@ namespace iee::probe {
         }
         // endregion
 
+        // region Helper: retroactive shader dump (called from both use-program and link paths)
+        // Checks g_dumpedShaders under the lock, then releases before all GL/file work,
+        // then re-locks to insert the record — never holds g_probeMutex across GL calls.
+        void maybe_dump_engine_shader(const game::gl::OpenGLFunctions &gl, unsigned shader,
+                                      const std::string &name) {
+            if (!g_cfg.dumpEngineShaders) return;
+            if (name.empty()) return;
+
+            // Check under lock whether already done or override applied
+            bool alreadyDumped = false;
+            bool overrideApplied = false;
+            {
+                std::lock_guard lock(g_probeMutex);
+                alreadyDumped = g_dumpedShaders.contains(name);
+                if (!alreadyDumped) {
+                    auto it = g_shaderRecords.find(shader);
+                    if (it != g_shaderRecords.end()) {
+                        overrideApplied = it->second.overrideApplied;
+                    }
+                }
+            }
+            if (alreadyDumped) return;
+
+            if (overrideApplied) {
+                LOG_INFO("shader dump: skipping {} (override applied — would archive our own source)", name);
+                std::lock_guard lock(g_probeMutex);
+                g_dumpedShaders.insert(name);
+                return;
+            }
+
+            // GL work outside the lock
+            if (gl.glGetShaderiv && gl.glGetShaderSource) {
+                int srcLen = 0;
+                gl.glGetShaderiv(shader, SHADER_SOURCE_LENGTH, &srcLen);
+                if (srcLen > 1) {
+                    std::string fullSrc(static_cast<std::size_t>(srcLen), '\0');
+                    int written = 0;
+                    gl.glGetShaderSource(shader, srcLen, &written, fullSrc.data());
+                    if (written > 0) {
+                        fullSrc.resize(static_cast<std::size_t>(written));
+                        dump_shader_to_disk(name, fullSrc);
+                    }
+                }
+            }
+
+            std::lock_guard lock(g_probeMutex);
+            g_dumpedShaders.insert(name);
+        }
+        // endregion
+
         // region Helper: link program introspection (shader walk + archival + tracking)
         void link_program_introspect(unsigned program, bool isArb) {
             const auto &gl = game::gl::get_gl_functions();
@@ -630,35 +682,7 @@ namespace iee::probe {
                 }
 
                 // Archival: fetch full source and write to disk (engine source only, not our override)
-                if (g_cfg.dumpEngineShaders && !nameForShader.empty()) {
-                    bool alreadyDumped = false;
-                    {
-                        std::lock_guard lock(g_probeMutex);
-                        alreadyDumped = g_dumpedShaders.contains(nameForShader);
-                    }
-                    if (!alreadyDumped) {
-                        if (overrideAppliedForShader) {
-                            LOG_INFO("shader dump: skipping {} (override applied — would archive our own source)",
-                                     nameForShader);
-                            std::lock_guard lock(g_probeMutex);
-                            g_dumpedShaders.insert(nameForShader);
-                        } else if (gl.glGetShaderiv && gl.glGetShaderSource) {
-                            int srcLen = 0;
-                            gl.glGetShaderiv(s, SHADER_SOURCE_LENGTH, &srcLen);
-                            if (srcLen > 1) {
-                                std::string fullSrc(static_cast<std::size_t>(srcLen), '\0');
-                                int written = 0;
-                                gl.glGetShaderSource(s, srcLen, &written, fullSrc.data());
-                                if (written > 0) {
-                                    fullSrc.resize(static_cast<std::size_t>(written));
-                                    dump_shader_to_disk(nameForShader, fullSrc);
-                                }
-                            }
-                            std::lock_guard lock(g_probeMutex);
-                            g_dumpedShaders.insert(nameForShader);
-                        }
-                    }
-                }
+                maybe_dump_engine_shader(gl, s, nameForShader);
 
                 const auto preview = read_shader_source_preview(gl, s);
                 // If we don't have a name from the record, try reading from the GL source preview
@@ -842,7 +866,7 @@ namespace iee::probe {
             }
 
             if (shouldLog) {
-                LOG_INFO("GL program bind: program={} {} source=<outside RenderTexture>",
+                LOG_INFO("GL program bind: program={} {}",
                          program, caller_summary(callerInfo));
 
                 if (program != 0) {
@@ -866,6 +890,9 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
+                                // Retroactive archival: programs compiled before our hooks
+                                // installed only ever pass through here, never the link detours.
+                                maybe_dump_engine_shader(gl, s, sName);
                                 LOG_INFO("GL program attached shader: program={} shader={} type={} preview={}",
                                          program, s, shader_type_name(shaderType), preview);
                             }
@@ -920,7 +947,7 @@ namespace iee::probe {
             }
 
             if (shouldLog) {
-                LOG_INFO("GL program bind (ARB): program={} {} source=<outside RenderTexture>",
+                LOG_INFO("GL program bind (ARB): program={} {}",
                          program, caller_summary(callerInfo));
 
                 if (program != 0) {
@@ -944,6 +971,8 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
+                                // Retroactive archival (see non-ARB path note).
+                                maybe_dump_engine_shader(gl, s, sName);
                                 LOG_INFO("GL program attached shader (ARB): program={} shader={} type={} preview={}",
                                          program, s, shader_type_name(shaderType), preview);
                             }
@@ -1031,7 +1060,12 @@ namespace iee::probe {
 #ifdef _WIN64
         {
             wchar_t wpath[MAX_PATH]{};
-            GetModuleFileNameW(GetModuleHandleW(nullptr), wpath, MAX_PATH);
+            HMODULE selfModule = nullptr;
+            GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&install_shader_probes),
+                               &selfModule);
+            GetModuleFileNameW(selfModule ? selfModule : GetModuleHandleW(nullptr), wpath, MAX_PATH);
             const std::filesystem::path dllPath(wpath);
             const auto dllDir = dllPath.parent_path();
 
