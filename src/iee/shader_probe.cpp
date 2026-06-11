@@ -83,6 +83,7 @@ namespace iee::probe {
         using Fn_glCompileShaderARB    = void (APIENTRY*)(unsigned);
         using Fn_glLinkProgramARB      = void (APIENTRY*)(unsigned);
         using Fn_glUseProgramObjectARB = void (APIENTRY*)(unsigned);
+        using Fn_glBindFramebuffer     = void (APIENTRY*)(unsigned, unsigned);
         // endregion
 
         // region Hook objects
@@ -94,6 +95,7 @@ namespace iee::probe {
         core::Hook<Fn_glCompileShaderARB>    g_glCompileShaderARBHook;
         core::Hook<Fn_glLinkProgramARB>      g_glLinkProgramARBHook;
         core::Hook<Fn_glUseProgramObjectARB> g_glUseProgramObjectARBHook;
+        core::Hook<Fn_glBindFramebuffer>     g_glBindFramebufferHook;
         // endregion
 
         // region Module-level state
@@ -1040,6 +1042,27 @@ namespace iee::probe {
         if (!caps.glRenderer.empty())  LOG_INFO("  GL renderer: {}", caps.glRenderer);
     }
 
+    namespace {
+        // region V5 gate probe: does the engine ever bind FBOs itself?
+        std::set<unsigned long long> g_fboBindsLogged;
+
+        void APIENTRY detour_glBindFramebuffer(unsigned target, unsigned framebuffer) {
+            if (framebuffer != 0) {
+                const auto key = (static_cast<unsigned long long>(target) << 32) | framebuffer;
+                bool shouldLog = false;
+                {
+                    std::lock_guard lock(g_probeMutex);
+                    shouldLog = g_fboBindsLogged.insert(key).second;
+                }
+                if (shouldLog) {
+                    LOG_WARN("V5: engine bound FBO {} on target 0x{:X}", framebuffer, target);
+                }
+            }
+            g_glBindFramebufferHook.original()(target, framebuffer);
+        }
+        // endregion
+    }
+
     bool install_shader_probes(const core::EngineConfig &cfg) noexcept {
         std::lock_guard lock(g_probeMutex);
         if (g_shaderProbesInstalled) return true;
@@ -1136,8 +1159,14 @@ namespace iee::probe {
                                                    reinterpret_cast<void *>(&detour_glUseProgramObjectARB));
                 g_glUseProgramObjectARBHook.enable();
             }
+            if (gl.glBindFramebuffer) {
+                g_glBindFramebufferHook.create(reinterpret_cast<void *>(gl.glBindFramebuffer),
+                                               reinterpret_cast<void *>(&detour_glBindFramebuffer));
+                g_glBindFramebufferHook.enable();
+            }
         } catch (const std::exception &e) {
             LOG_WARN("Failed to install GL shader probes: {}", e.what());
+            g_glBindFramebufferHook.disable();
             g_glUseProgramObjectARBHook.disable();
             g_glLinkProgramARBHook.disable();
             g_glCompileShaderARBHook.disable();
@@ -1156,6 +1185,7 @@ namespace iee::probe {
 
     void uninstall_shader_probes() noexcept {
         std::lock_guard lock(g_probeMutex);
+        g_glBindFramebufferHook.disable();
         g_glUseProgramObjectARBHook.disable();
         g_glLinkProgramARBHook.disable();
         g_glCompileShaderARBHook.disable();
@@ -1169,6 +1199,7 @@ namespace iee::probe {
         g_overriddenPrograms.clear();
         g_pendingFallback.clear();
         g_dumpedShaders.clear();
+        g_fboBindsLogged.clear();
         g_shaderProbesInstalled = false;
     }
 

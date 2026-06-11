@@ -5,8 +5,11 @@
 #include <string_view>
 
 #include "app_context.h"
+#include "iee/core/gl_state_guard.h"
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/game/area_texture.h"
+#include "iee/game/opengl_types.h"
 #include "iee/game/resref_runtime.h"
 #include "iee/game/tile_liquid.h"
 #include "iee/game/wed_runtime.h"
@@ -135,6 +138,33 @@ namespace iee::area {
                       cachedWed->baseWidth,
                       cachedWed->baseHeight,
                       liquidMask);
+        }
+
+        // Upload the per-cell overlay flags as an R8 texture on reserved unit 2.
+        // CAVEAT: this runs on the LoadArea thread, which may not own the GL
+        // context. If in-game logs show GL errors here, move the upload to a
+        // pending-work flag consumed by the frame hook (render thread).
+        if (const auto packed = game::pack_area_cell_texture(*cachedWed)) {
+            auto &gl = game::gl::get_gl_functions();
+            if (gl.textureUploadAvailable) {
+                core::GlStateGuard guard;
+                static unsigned s_areaTexture = 0;
+                if (s_areaTexture == 0) gl.glGenTextures(1, &s_areaTexture);
+                gl.glActiveTexture(game::gl::TEXTURE0 + 2);
+                gl.glBindTexture(game::gl::TEXTURE_2D, s_areaTexture);
+                gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
+                gl.glTexImage2D(game::gl::TEXTURE_2D, 0, game::gl::R8,
+                                packed->width, packed->height, 0,
+                                game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
+                if (game::gl::check_error("area cell texture upload")) {
+                    LOG_INFO("Area cell texture uploaded: {}x{} (unit 2, tex {})",
+                             packed->width, packed->height, s_areaTexture);
+                } else {
+                    LOG_WARN("Area cell texture upload reported a GL error (likely wrong thread; see caveat)");
+                }
+            }
         }
     }
 }
