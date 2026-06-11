@@ -710,15 +710,17 @@ namespace iee::probe {
                     }
                 }
 
-                // Archival: fetch full source and write to disk (engine source only, not our override)
-                maybe_dump_engine_shader(gl, s, nameForShader);
-
                 const auto preview = read_shader_source_preview(gl, s);
                 // If we don't have a name from the record, try reading from the GL source preview
                 if (nameForShader.empty()) {
                     nameForShader = game::extract_shader_name(preview,
                         shaderType == VERTEX_SHADER ? "vp" : "fp");
                 }
+
+                // Archival: fetch full source and write to disk (engine source only,
+                // not our override). Must run AFTER the name fallback — swept programs
+                // have no shader records, so the record name is always empty here.
+                maybe_dump_engine_shader(gl, s, nameForShader);
 
                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = nameForShader;
                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = nameForShader;
