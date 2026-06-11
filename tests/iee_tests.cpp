@@ -669,6 +669,43 @@ void test_area_texture_packing_size_mismatch() {
     expect_true(!iee::game::pack_area_cell_texture(wed).has_value(), "flag/dimension mismatch -> nullopt");
 }
 
+void test_area_liquid_texture_packing() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 2;
+    wed.baseHeight = 2;
+    wed.overlays.resize(3);
+    wed.overlays[1].liquidMode = iee::game::TileLiquidMode::Water;
+    wed.overlays[2].liquidMode = iee::game::TileLiquidMode::Lava;
+    // cell flags: bit N set = overlay N covers the cell
+    wed.baseOverlayFlags = {
+        0x00,        // no overlays -> mode 0
+        0x02,        // overlay 1 (water) -> mode 1
+        0x04,        // overlay 2 (lava) -> mode 2
+        0x06,        // overlays 1+2 -> lowest overlay index wins -> mode 1
+    };
+    const auto packed = iee::game::pack_area_liquid_texture(wed);
+    expect_true(packed.has_value(), "packs valid wed");
+    if (packed) {
+        expect_eq(packed->width, 2, "liquid width");
+        expect_eq(packed->height, 2, "liquid height");
+        expect_eq(packed->texels[0], std::uint8_t{0}, "no overlay -> 0");
+        expect_eq(packed->texels[1], std::uint8_t{1}, "water overlay -> 1");
+        expect_eq(packed->texels[2], std::uint8_t{2}, "lava overlay -> 2");
+        expect_eq(packed->texels[3], std::uint8_t{1}, "first liquid overlay wins");
+    }
+}
+
+void test_area_liquid_texture_packing_rejects_mismatch() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 3;
+    wed.baseHeight = 1;
+    wed.baseOverlayFlags = {0x00}; // wrong size
+    expect_true(!iee::game::pack_area_liquid_texture(wed).has_value(),
+                "flag/dimension mismatch -> nullopt");
+    iee::game::WedAreaInfo empty{};
+    expect_true(!iee::game::pack_area_liquid_texture(empty).has_value(), "empty -> nullopt");
+}
+
 int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
@@ -693,6 +730,8 @@ int main() {
     test_override_registry();
     test_area_texture_packing();
     test_area_texture_packing_size_mismatch();
+    test_area_liquid_texture_packing();
+    test_area_liquid_texture_packing_rejects_mismatch();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";
