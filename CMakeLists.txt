@@ -95,8 +95,11 @@ if(IEE_BUILD_WINDOWS_DLL)
     FetchContent_MakeAvailable(minhook)
 
     add_library(InfinityEngine-Enhancer SHARED
+        src/iee/area_state.cpp
+        src/iee/diagnostics.cpp
         src/iee/dll_main.cpp
         src/iee/exports.cpp
+        src/iee/features/tile_render.cpp
         src/iee/hooks.cpp
         src/iee/shader_probe.cpp
         src/iee/game/opengl_types.cpp
