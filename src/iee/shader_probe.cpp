@@ -1139,22 +1139,29 @@ namespace iee::probe {
                                           reinterpret_cast<void *>(&detour_glUseProgram));
                 g_glUseProgramHook.enable();
             }
-            if (gl.glShaderSourceARB) {
+            // Some ICDs return the same dispatch address for promoted ARB/core
+            // pairs; a second MH_CreateHook on the same target would throw and
+            // roll back everything. Hook ARB entry points only when distinct.
+            if (gl.glShaderSourceARB &&
+                reinterpret_cast<void *>(gl.glShaderSourceARB) != reinterpret_cast<void *>(gl.glShaderSource)) {
                 g_glShaderSourceARBHook.create(reinterpret_cast<void *>(gl.glShaderSourceARB),
                                                reinterpret_cast<void *>(&detour_glShaderSourceARB));
                 g_glShaderSourceARBHook.enable();
             }
-            if (gl.glCompileShaderARB) {
+            if (gl.glCompileShaderARB &&
+                reinterpret_cast<void *>(gl.glCompileShaderARB) != reinterpret_cast<void *>(gl.glCompileShader)) {
                 g_glCompileShaderARBHook.create(reinterpret_cast<void *>(gl.glCompileShaderARB),
                                                 reinterpret_cast<void *>(&detour_glCompileShaderARB));
                 g_glCompileShaderARBHook.enable();
             }
-            if (gl.glLinkProgramARB) {
+            if (gl.glLinkProgramARB &&
+                reinterpret_cast<void *>(gl.glLinkProgramARB) != reinterpret_cast<void *>(gl.glLinkProgram)) {
                 g_glLinkProgramARBHook.create(reinterpret_cast<void *>(gl.glLinkProgramARB),
                                               reinterpret_cast<void *>(&detour_glLinkProgramARB));
                 g_glLinkProgramARBHook.enable();
             }
-            if (gl.glUseProgramObjectARB) {
+            if (gl.glUseProgramObjectARB &&
+                reinterpret_cast<void *>(gl.glUseProgramObjectARB) != reinterpret_cast<void *>(gl.glUseProgram)) {
                 g_glUseProgramObjectARBHook.create(reinterpret_cast<void *>(gl.glUseProgramObjectARB),
                                                    reinterpret_cast<void *>(&detour_glUseProgramObjectARB));
                 g_glUseProgramObjectARBHook.enable();
@@ -1205,6 +1212,25 @@ namespace iee::probe {
 
     void on_frame_tick(float secondsSinceStart) noexcept {
         g_uniformTime.store(secondsSinceStart, std::memory_order_relaxed);
+
+        // The bind-time feed misses programs the engine keeps bound across
+        // frames; refresh the currently-bound program here (render thread,
+        // context current — we are inside the SDL swap detour).
+        const auto &gl = game::gl::get_gl_functions();
+        if (gl.glGetIntegerv) {
+            int currentProgram = 0;
+            gl.glGetIntegerv(0x8B8D /*CURRENT_PROGRAM*/, &currentProgram);
+            if (currentProgram > 0) {
+                bool isOverridden = false;
+                {
+                    std::lock_guard lock(g_probeMutex);
+                    isOverridden = g_overriddenPrograms.contains(static_cast<unsigned>(currentProgram));
+                }
+                if (isOverridden) {
+                    feed_uniforms_to_program(static_cast<unsigned>(currentProgram));
+                }
+            }
+        }
 
         if (!g_cfg.enableDebugHotkeys) {
             return;

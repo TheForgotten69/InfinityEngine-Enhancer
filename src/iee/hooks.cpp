@@ -26,13 +26,22 @@ namespace iee::hooks {
 
     namespace {
         void install_shader_probes_once() {
-            static std::atomic<bool> done{false};
-            bool expected = false;
-            if (done.compare_exchange_strong(expected, true)) {
+            // Latch only on success: a transient first-frame failure (partial GL
+            // table) must not permanently suppress the probes. Runs on the render
+            // thread only, so plain statics are safe.
+            static bool installed = false;
+            static bool warnedOnce = false;
+            if (installed) {
+                return;
+            }
+            if (!warnedOnce) {
                 probe::log_shader_runtime_capabilities();
-                if (!probe::install_shader_probes(g_ctx->cfg)) {
-                    LOG_WARN("GL shader probes were not installed");
-                }
+            }
+            if (probe::install_shader_probes(g_ctx->cfg)) {
+                installed = true;
+            } else if (!warnedOnce) {
+                warnedOnce = true;
+                LOG_WARN("GL shader probes were not installed; will retry on subsequent frames");
             }
         }
     }
@@ -87,7 +96,10 @@ namespace iee::hooks {
         }
 
         // Feature modules request hook disable (e.g. standard tiles detected);
-        // the dispatcher owns the hook objects and performs it.
+        // the dispatcher owns the hook objects and performs it. Ordering note:
+        // pre-split code disabled before calling the original; calling through
+        // original() uses the MinHook trampoline (never re-enters this detour),
+        // and rendering is single-threaded, so disabling after is equivalent.
         if (features::should_disable_render_hook()) {
             features::clear_disable_request();
             try {
