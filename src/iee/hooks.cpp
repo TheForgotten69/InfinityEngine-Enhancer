@@ -2,6 +2,7 @@
 #include "app_context.h"
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
+#include "iee/shader_probe.h"
 #include "iee/game/build_manifest.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
@@ -37,6 +38,17 @@ namespace iee::hooks {
     using game::ShaderTone;
 
     namespace {
+        void install_shader_probes_once() {
+            static std::atomic<bool> done{false};
+            bool expected = false;
+            if (done.compare_exchange_strong(expected, true)) {
+                probe::log_shader_runtime_capabilities();
+                if (!probe::install_shader_probes(g_ctx->cfg)) {
+                    LOG_WARN("GL shader probes were not installed");
+                }
+            }
+        }
+
         bool same_resref(std::string_view lhs, const game::ResrefBuffer &rhs) noexcept {
             return lhs == game::resref_view(rhs);
         }
@@ -312,6 +324,7 @@ namespace iee::hooks {
         if (!g_ctx || !g_ctx->manifest) {
             return; // Context destroyed, don't process
         }
+        install_shader_probes_once();
 
         auto &ctx = *g_ctx;
 

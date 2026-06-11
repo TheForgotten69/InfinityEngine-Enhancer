@@ -4,6 +4,7 @@
 
 #include "app_context.h"
 #include "hooks.h"
+#include "iee/shader_probe.h"
 #include "iee/game/build_manifest.h"
 #include "iee/core/logger.h"
 #include "iee/core/config.h"
@@ -87,6 +88,7 @@ namespace iee {
 
     static void CleanupHooks() {
         if (g_appContext) {
+            probe::uninstall_shader_probes();
             hooks::prepare_for_shutdown();
             g_appContext->reset_all_state();
             g_appContext.reset();

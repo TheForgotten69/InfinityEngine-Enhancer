@@ -98,6 +98,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/dll_main.cpp
         src/iee/exports.cpp
         src/iee/hooks.cpp
+        src/iee/shader_probe.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
     )
@@ -108,6 +109,7 @@ if(IEE_BUILD_WINDOWS_DLL)
             minhook
             psapi
             opengl32
+            dbghelp
     )
 
     target_compile_definitions(InfinityEngine-Enhancer
