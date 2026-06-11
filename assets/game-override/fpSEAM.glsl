@@ -104,6 +104,18 @@ void main()
 		cellMode = floor(texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0 + 0.5);
 	}
 
+	// Alignment debug: uIeeEnabled fed as 2.0 tints liquid cells red instead of
+	// styling them — shoreline must hug the WED water edge exactly.
+	if (uIeeEnabled > 1.5)
+	{
+		vec4 base = seamSample(vTc);
+		base = base * vColor;
+		if (cellMode > 0.5) { base.rgb = mix(base.rgb, vec3(1.0, 0.1, 0.1), 0.5); }
+		float dbgGrey = dot(base.rgb, vec3(0.299, 0.587, 0.114));
+		gl_FragColor = vec4(mix(base.rgb, dbgGrey * uColorTone.rgb, uColorTone.a), base.a);
+		return;
+	}
+
 	vec2 sampleTc = vTc;
 	if (cellMode > 0.5)
 	{

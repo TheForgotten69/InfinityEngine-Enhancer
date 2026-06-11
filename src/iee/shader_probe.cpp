@@ -126,9 +126,9 @@ namespace iee::probe {
         std::atomic<float> g_scrollX{0.0f};
         std::atomic<float> g_scrollY{0.0f};
         std::atomic<float> g_zoom{1.0f};
-        // Effect gate fed to uIeeEnabled/uIeeTileLiquidMode. Starts OFF: the
-        // baseline render must be untouched until F10 explicitly enables it.
-        std::atomic<bool>  g_overridesEnabled{false};
+        // Effect gate fed to uIeeEnabled (0=off, 1=on, 2=alignment debug) and,
+        // thresholded, to the legacy liquid uniforms. Starts OFF.
+        std::atomic<float> g_overrideEffectValue{0.0f};
         // Set by install; consumed by the first frame tick (sweep runs at the
         // frame boundary, never mid-draw).
         std::atomic<bool>  g_sweepPending{false};
@@ -885,7 +885,7 @@ namespace iee::probe {
 
             // Feed values — program is currently bound (we are post-original in glUseProgram)
             const float timeValue = g_uniformTime.load(std::memory_order_relaxed);
-            const float enabledValue = g_overridesEnabled.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+            const float enabledValue = g_overrideEffectValue.load(std::memory_order_relaxed);
             if (locs.time >= 0) {
                 gl.glUniform1f(locs.time, timeValue);
             }
@@ -898,7 +898,8 @@ namespace iee::probe {
             if (locs.liquidMode >= 0) {
                 // F10 doubles as the liquid-mode toggle for the legacy patch
                 // (mode 1 = water styling on every tile — bridge proof, not a feature).
-                gl.glUniform1f(locs.liquidMode, enabledValue);
+                // Legacy patch only understands 0/1; threshold the tri-state value.
+                gl.glUniform1f(locs.liquidMode, enabledValue >= 0.5f ? 1.0f : 0.0f);
             }
             if (locs.scroll >= 0 && gl.glUniform2f) {
                 gl.glUniform2f(locs.scroll,
@@ -1351,23 +1352,24 @@ namespace iee::probe {
             return;
         }
 
-        // F10: toggle the visual effect of shader overrides (uIeeEnabled), edge-triggered.
+        // F10: cycle the visual effect gate OFF(0) -> WATER(1) -> ALIGN(2) -> OFF.
         static bool f10WasDown = false;
         const bool f10Down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (f10Down && !f10WasDown) {
-            const bool enabled = !g_overridesEnabled.load(std::memory_order_relaxed);
-            g_overridesEnabled.store(enabled, std::memory_order_relaxed);
-            LOG_INFO("Hotkey F10: shader override effect {}", enabled ? "ON" : "OFF");
+            const float current = g_overrideEffectValue.load(std::memory_order_relaxed);
+            const float next = current < 0.5f ? 1.0f : (current < 1.5f ? 2.0f : 0.0f);
+            g_overrideEffectValue.store(next, std::memory_order_relaxed);
+            LOG_INFO("Hotkey F10: override effect value {}", next);
         }
         f10WasDown = f10Down;
     }
 
     void set_override_effect_enabled(bool enabled) noexcept {
-        g_overridesEnabled.store(enabled, std::memory_order_relaxed);
+        g_overrideEffectValue.store(enabled ? 1.0f : 0.0f, std::memory_order_relaxed);
     }
 
     bool override_effect_enabled() noexcept {
-        return g_overridesEnabled.load(std::memory_order_relaxed);
+        return g_overrideEffectValue.load(std::memory_order_relaxed) >= 0.5f;
     }
 
     void set_area_world_size(float widthPx, float heightPx) noexcept {
