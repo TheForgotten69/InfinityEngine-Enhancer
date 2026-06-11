@@ -433,6 +433,15 @@ namespace {
                     "Tile-table detection should ignore garbage UV steps instead of treating them as deterministic scale");
     }
 
+    void test_manifest_infgame_offsets() {
+        const auto &m = iee::game::current_manifest();
+        expect_eq(m.offsets.infGameVisibleArea, std::uintptr_t{0x6590}, "visible area offset");
+        expect_eq(m.offsets.infGameAreas, std::uintptr_t{0x6598}, "areas array offset");
+        expect_eq(m.offsets.infGameAreaMaster, std::uintptr_t{0x65F8}, "master area offset");
+        expect_eq(m.offsets.infinityZoom, std::uintptr_t{0x484}, "CInfinity zoom offset");
+        expect_true(m.validate(), "manifest still validates");
+    }
+
     iee::game::TileInfo make_tile_info(std::uint32_t tileDimension,
                                        int texId,
                                        int u,
@@ -570,6 +579,7 @@ int main() {
     test_scale_selection_precedence();
     test_wed_screen_point_mapping();
     test_tile_table_detection_ignores_garbage_steps();
+    test_manifest_infgame_offsets();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

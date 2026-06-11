@@ -2,6 +2,7 @@
 #include "app_context.h"
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
+#include "iee/game/build_manifest.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
 #include "iee/game/tile_liquid.h"
@@ -40,10 +41,6 @@ namespace iee::hooks {
             return lhs == game::resref_view(rhs);
         }
 
-        constexpr std::size_t kInfGameVisibleAreaOffset = 0x6590;
-        constexpr std::size_t kInfGameAreasOffset = 0x6598;
-        constexpr std::size_t kInfGameAreaMasterOffset = 0x65F8;
-
         const game::CGameArea *read_loaded_area_candidate(const game::CGameArea *candidate) {
             if (!candidate) {
                 return nullptr;
@@ -57,7 +54,7 @@ namespace iee::hooks {
             return candidate;
         }
 
-        const game::CGameArea *resolve_active_area(void *infGame) {
+        const game::CGameArea *resolve_active_area(void *infGame, const game::BuildManifest &manifest) {
             if (!infGame) {
                 return nullptr;
             }
@@ -66,8 +63,8 @@ namespace iee::hooks {
 
             std::uint8_t visibleArea = 0;
             std::array<game::CGameArea *, 12> areas{};
-            if (!core::safe_read(gameBytes + kInfGameVisibleAreaOffset, visibleArea) ||
-                !core::safe_read(gameBytes + kInfGameAreasOffset, areas) ||
+            if (!core::safe_read(gameBytes + manifest.offsets.infGameVisibleArea, visibleArea) ||
+                !core::safe_read(gameBytes + manifest.offsets.infGameAreas, areas) ||
                 visibleArea >= areas.size()) {
                 visibleArea = 0xFF;
             } else if (const auto *visible = read_loaded_area_candidate(areas[visibleArea])) {
@@ -75,7 +72,7 @@ namespace iee::hooks {
             }
 
             game::CGameArea *masterArea = nullptr;
-            if (core::safe_read(gameBytes + kInfGameAreaMasterOffset, masterArea)) {
+            if (core::safe_read(gameBytes + manifest.offsets.infGameAreaMaster, masterArea)) {
                 if (const auto *master = read_loaded_area_candidate(masterArea)) {
                     return master;
                 }
@@ -106,7 +103,7 @@ namespace iee::hooks {
             ctx.activeArea.store(nullptr);
             std::atomic_store(&ctx.wed, std::shared_ptr<const game::WedAreaInfo>{});
 
-            const auto *area = resolve_active_area(infGame);
+            const auto *area = resolve_active_area(infGame, *ctx.manifest);
             if (!area) {
                 LOG_DEBUG("LoadArea: could not resolve active CGameArea for WED caching");
                 return;
