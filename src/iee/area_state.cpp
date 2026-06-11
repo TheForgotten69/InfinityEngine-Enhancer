@@ -168,6 +168,8 @@ namespace iee::area {
                                 game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
                 if (game::gl::check_error("area liquid texture upload")) {
                     LOG_INFO("Area liquid texture uploaded: {}x{} (unit 2, tex {})",
                              packed->width, packed->height, s_areaTexture);

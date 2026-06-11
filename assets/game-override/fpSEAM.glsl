@@ -113,9 +113,15 @@ void main()
 		vec2 distort;
 		distort.x = sin(w.y * 1.7 + t * 1.1) + 0.5 * sin(w.x * 2.3 - t * 0.7);
 		distort.y = cos(w.x * 1.9 - t * 0.9) + 0.5 * cos(w.y * 2.9 + t * 1.3);
-		// Distortion in atlas texels, clamped well inside the 64px tile cell
-		// so neighbor tiles never bleed in.
-		sampleTc = vTc + distort * uTcScale * 1.5;
+		// Damp the distortion to zero near tile edges: |distort| reaches 1.5,
+		// times the 1.5 texel factor = 2.25 texels, which would cross into a
+		// neighboring (non-adjacent-in-world) atlas tile. The envelope is
+		// symmetric at every boundary, so the wave field stays continuous.
+		vec2 unb     = vTc / uTcScale;
+		vec2 tileLoc = mod(unb - vRef / uTcScale, 64.0);
+		vec2 edge    = min(tileLoc, 64.0 - tileLoc);
+		float damp   = smoothstep(0.0, 3.5, min(edge.x, edge.y));
+		sampleTc = vTc + distort * uTcScale * 1.5 * damp;
 	}
 
 	vec4 texColor = seamSample(sampleTc);
