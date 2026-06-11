@@ -85,11 +85,7 @@ namespace iee::game::gl {
         glDeleteTextures  = reinterpret_cast<PFN_glDeleteTextures> (get_gl1_proc_address(opengl32, "glDeleteTextures"));
         glPixelStorei     = reinterpret_cast<PFN_glPixelStorei>    (get_gl1_proc_address(opengl32, "glPixelStorei"));
 
-        // glGetString is GL1.1, but try wglGetProcAddress first (some drivers
-        // export it there); fall back to the opengl32.dll direct export.
-        glGetString = reinterpret_cast<PFN_glGetString>(get_ext_proc_address(opengl32, "glGetString"));
-        if (!glGetString)
-            glGetString = reinterpret_cast<PFN_glGetString>(get_gl1_proc_address(opengl32, "glGetString"));
+        glGetString       = reinterpret_cast<PFN_glGetString>      (get_gl1_proc_address(opengl32, "glGetString"));
 
         // --- Extensions: load via wglGetProcAddress ---
         glCreateShader    = reinterpret_cast<PFN_glCreateShader>   (get_ext_proc_address(opengl32, "glCreateShader"));
@@ -199,6 +195,8 @@ namespace iee::game::gl {
         static std::mutex mutex;
         static HGLRC lastContext = nullptr;
 
+        // Context read happens before the lock: a context switch in that window only
+        // costs one spurious re-init on the next call (single render thread in practice).
         const auto context = current_context();
         std::lock_guard lock(mutex);
         if (!instance.valid || context != lastContext) {
