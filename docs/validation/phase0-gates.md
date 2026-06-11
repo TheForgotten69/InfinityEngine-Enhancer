@@ -43,7 +43,28 @@ Build: `2eae2e4`   Date: 2026-06-11   Game: BGEE 2.6.6.x (Steam)
 - Vanilla dumps confirmed: fpSEAM is 2.1K vanilla vs 8.3K patched. Full
   vanilla set still pending (sweep needs the working frame hook).
 
-## Session 3 procedure — uniform-bridge proof (retry)
+## Session 3 verdicts (2026-06-11, build 6cec961) — UNIFORM BRIDGE PROVEN
+
+- **Frame hook: PASS** — `Frame hook installed on gdi32!SwapBuffers`.
+- **Program sweep: PASS** — 8 pre-existing programs introspected; slot
+  inference confirmed the spec table for slots 0,1,3,4,5,6,7,8 (programs
+  3,6,9,12,15,18,21,24). Slot 2 (vpBlit/fpCatRom) does not exist at sweep
+  time — the engine creates it on demand; post-install compile interception
+  will catch it live when it appears.
+- **Registration: PASS** — `Program 24 registered for uniform feed (declares
+  uIee uniforms)` with the controlled game-override fpSEAM in place.
+- **F10 bridge proof: PASS** — toggle ON/OFF logged and visually confirmed
+  (screenshot: entire ground renders the animated liquid style; OFF restores
+  baseline). The uniform feed pipeline — identification, registration,
+  per-frame time, live toggle — works end to end.
+- Dump coverage bug found and fixed (d96635e): swept programs dumped nothing
+  because the name fallback ran after the dump call. Next session should
+  dump all 8 shader pairs.
+- Confirmed delivery mechanism: engine loads GLSL from the game `override/`
+  folder (user-verified). Production shader delivery = override files +
+  DLL uniform feeding.
+
+## Superseded: original Session 3 procedure
 
 The game-data `fpSEAM` already contains the liquid patch gated on
 `uIeeTileLiquidMode`. The probe now registers any program declaring `uIee*`
