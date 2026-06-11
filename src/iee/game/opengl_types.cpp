@@ -53,7 +53,13 @@ namespace iee::game::gl {
         );
 
         if (wglGetProcAddr) {
-            if (void *proc = wglGetProcAddr(name)) return proc;
+            void *proc = wglGetProcAddr(name);
+            // Some drivers return small sentinel values (1, 2, 3, -1) instead of
+            // null for unavailable functions; calling through them crashes.
+            const auto raw = reinterpret_cast<std::intptr_t>(proc);
+            if (raw != 0 && raw != 1 && raw != 2 && raw != 3 && raw != -1) {
+                return proc;
+            }
         }
         return GetProcAddress(opengl32, name);
     }

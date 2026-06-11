@@ -135,6 +135,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/shaders" "${IEE_RELEASE_BUNDLE_DIR}/iee-shaders"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-override" "${IEE_RELEASE_BUNDLE_DIR}/game-override"
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )

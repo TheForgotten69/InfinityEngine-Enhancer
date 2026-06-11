@@ -116,7 +116,12 @@ namespace iee::probe {
         std::filesystem::path                        g_dumpDir;
 
         std::atomic<float> g_uniformTime{0.0f};
-        std::atomic<bool>  g_overridesEnabled{true};
+        // Effect gate fed to uIeeEnabled/uIeeTileLiquidMode. Starts OFF: the
+        // baseline render must be untouched until F10 explicitly enables it.
+        std::atomic<bool>  g_overridesEnabled{false};
+        // Set by install; consumed by the first frame tick (sweep runs at the
+        // frame boundary, never mid-draw).
+        std::atomic<bool>  g_sweepPending{false};
         // endregion
 
         // region String helpers
@@ -1220,22 +1225,8 @@ namespace iee::probe {
         }
 
         g_shaderProbesInstalled = true;
+        g_sweepPending.store(true, std::memory_order_relaxed);
         LOG_INFO("Installed GL shader probes");
-
-        // Sweep all pre-existing program objects (boot-compiled, before our
-        // hooks): introspect, dump, and register every one without waiting for
-        // the engine to bind it. GL handles are small sequential ints here.
-        if (gl.glIsProgram) {
-            int sweptCount = 0;
-            for (unsigned id = 1; id <= 512; ++id) {
-                if (gl.glIsProgram(id)) {
-                    link_program_introspect(id, false);
-                    ++sweptCount;
-                }
-            }
-            LOG_INFO("Program sweep: introspected {} pre-existing GL programs", sweptCount);
-        }
-
         return true;
     }
 
@@ -1261,6 +1252,23 @@ namespace iee::probe {
 
     void on_frame_tick(float secondsSinceStart) noexcept {
         g_uniformTime.store(secondsSinceStart, std::memory_order_relaxed);
+
+        // Deferred program sweep: runs at the frame boundary (SDL swap detour)
+        // instead of mid-draw inside RenderTexture — no open engine batch, clean
+        // GL state for the introspection queries and dump file I/O.
+        if (g_sweepPending.exchange(false, std::memory_order_relaxed)) {
+            const auto &glSweep = game::gl::get_gl_functions();
+            if (glSweep.glIsProgram) {
+                int sweptCount = 0;
+                for (unsigned id = 1; id <= 512; ++id) {
+                    if (glSweep.glIsProgram(id)) {
+                        link_program_introspect(id, false);
+                        ++sweptCount;
+                    }
+                }
+                LOG_INFO("Program sweep: introspected {} pre-existing GL programs", sweptCount);
+            }
+        }
 
         // The bind-time feed misses programs the engine keeps bound across
         // frames; refresh the currently-bound program here (render thread,
