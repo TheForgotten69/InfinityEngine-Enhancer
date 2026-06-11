@@ -24,4 +24,7 @@ namespace iee::probe {
     // Hotkey toggle target (Task 9): flips the value fed to uIeeEnabled.
     void set_override_effect_enabled(bool enabled) noexcept;
     [[nodiscard]] bool override_effect_enabled() noexcept;
+
+    // Published by area_state at area load; consumed by the uniform feed.
+    void set_area_world_size(float widthPx, float heightPx) noexcept;
 }

@@ -15,6 +15,9 @@ namespace iee::area {
     // Reads the area's CInfinity scroll offsets via safe_read.
     bool read_area_scroll(const game::CGameArea *area, int &outOffsetX, int &outOffsetY);
 
+    // Reads CInfinity::m_fZoom via the manifest offset (EEex docs +0x484).
+    bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom);
+
     // Re-resolves the active area after LoadArea and caches its parsed WED into ctx.
     void refresh_wed_cache(AppContext &ctx, void *infGame);
 }

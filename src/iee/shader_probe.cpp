@@ -116,6 +116,8 @@ namespace iee::probe {
         std::filesystem::path                        g_dumpDir;
 
         std::atomic<float> g_uniformTime{0.0f};
+        std::atomic<float> g_worldWidthPx{0.0f};
+        std::atomic<float> g_worldHeightPx{0.0f};
         // Effect gate fed to uIeeEnabled/uIeeTileLiquidMode. Starts OFF: the
         // baseline render must be untouched until F10 explicitly enables it.
         std::atomic<bool>  g_overridesEnabled{false};
@@ -1330,6 +1332,11 @@ namespace iee::probe {
 
     bool override_effect_enabled() noexcept {
         return g_overridesEnabled.load(std::memory_order_relaxed);
+    }
+
+    void set_area_world_size(float widthPx, float heightPx) noexcept {
+        g_worldWidthPx.store(widthPx, std::memory_order_relaxed);
+        g_worldHeightPx.store(heightPx, std::memory_order_relaxed);
     }
 
     // endregion

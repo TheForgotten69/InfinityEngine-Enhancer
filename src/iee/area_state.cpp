@@ -13,6 +13,7 @@
 #include "iee/game/resref_runtime.h"
 #include "iee/game/tile_liquid.h"
 #include "iee/game/wed_runtime.h"
+#include "iee/shader_probe.h"
 
 namespace iee::area {
     namespace {
@@ -77,6 +78,15 @@ namespace iee::area {
         const auto *offsetXAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetX);
         const auto *offsetYAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetY);
         return core::safe_read(offsetXAddr, outOffsetX) && core::safe_read(offsetYAddr, outOffsetY);
+    }
+
+    bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom) {
+        if (!area) {
+            return false;
+        }
+        const auto *base = reinterpret_cast<const std::byte *>(area);
+        const auto *zoomAddr = base + offsetof(game::CGameArea, m_cInfinity) + manifest.offsets.infinityZoom;
+        return core::safe_read(zoomAddr, outZoom);
     }
 
     void refresh_wed_cache(AppContext &ctx, void *infGame) {
@@ -144,7 +154,7 @@ namespace iee::area {
         // CAVEAT: this runs on the LoadArea thread, which may not own the GL
         // context. If in-game logs show GL errors here, move the upload to a
         // pending-work flag consumed by the frame hook (render thread).
-        if (const auto packed = game::pack_area_cell_texture(*cachedWed)) {
+        if (const auto packed = game::pack_area_liquid_texture(*cachedWed)) {
             auto &gl = game::gl::get_gl_functions();
             if (gl.textureUploadAvailable) {
                 core::GlStateGuard guard;
@@ -158,11 +168,13 @@ namespace iee::area {
                                 game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
-                if (game::gl::check_error("area cell texture upload")) {
-                    LOG_INFO("Area cell texture uploaded: {}x{} (unit 2, tex {})",
+                if (game::gl::check_error("area liquid texture upload")) {
+                    LOG_INFO("Area liquid texture uploaded: {}x{} (unit 2, tex {})",
                              packed->width, packed->height, s_areaTexture);
+                    probe::set_area_world_size(static_cast<float>(packed->width) * 64.0f,
+                                              static_cast<float>(packed->height) * 64.0f);
                 } else {
-                    LOG_WARN("Area cell texture upload reported a GL error (likely wrong thread; see caveat)");
+                    LOG_WARN("Area liquid texture upload reported a GL error (likely wrong thread; see caveat)");
                 }
             }
         }
