@@ -66,6 +66,7 @@ add_library(iee_common STATIC
     src/iee/game/build_manifest.cpp
     src/iee/game/game_addrs.cpp
     src/iee/game/resref_runtime.cpp
+    src/iee/game/shader_override.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
     src/iee/game/tis_runtime.cpp

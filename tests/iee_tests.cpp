@@ -15,6 +15,7 @@
 #include "iee/game/eeex_doc_layouts_x64.h"
 #include "iee/game/file_formats.h"
 #include "iee/game/runtime_types_x64.h"
+#include "iee/game/shader_override.h"
 #include "iee/game/tile_upscale.h"
 #include "iee/game/wed_runtime.h"
 
@@ -562,6 +563,64 @@ namespace {
         expect_true(iee::game::get_tis_linear_tiles_flag(linearInfo.tileset, manifest),
                     "The manifest linear-tiles offset should be readable from synthetic data");
     }
+
+
+    void test_shader_name_extraction() {
+        using iee::game::extract_shader_name;
+        expect_eq(extract_shader_name("// fpSEAM.glsl\nuniform float uTcScale;", "fp"),
+                  std::string("fpSEAM"), "extracts fp name");
+        expect_eq(extract_shader_name("// vpDraw.glsl\nvoid main(){}", "vp"),
+                  std::string("vpDraw"), "extracts vp name");
+        expect_true(extract_shader_name("// vpDraw.glsl\n", "fp").empty(), "prefix filter rejects vp");
+        expect_true(extract_shader_name("no comment here", "fp").empty(), "no name -> empty");
+    }
+
+    void test_find_main_body_open() {
+        using iee::game::find_main_body_open;
+        const std::string_view src = "uniform float x;\nvoid main() {\n  gl_FragColor = vec4(x);\n}";
+        const auto pos = find_main_body_open(src);
+        expect_true(pos != std::string_view::npos, "finds main body");
+        expect_eq(src[pos], '{', "offset points at brace");
+        expect_true(find_main_body_open("float f(){}") == std::string_view::npos, "no main -> npos");
+    }
+
+    void test_magenta_variant() {
+        const std::string_view src = "// fpSELECT.glsl\nvoid main() {\n  gl_FragColor = vec4(1.0);\n}";
+        const auto patched = iee::game::make_magenta_variant(src);
+        expect_true(!patched.empty(), "patchable source produces variant");
+        expect_true(patched.find("vec4(1.0, 0.0, 1.0, 1.0)") != std::string::npos, "magenta color present");
+        expect_true(patched.find("IEE_DEBUG_MAGENTA") != std::string::npos, "marker present");
+        expect_true(iee::game::make_magenta_variant("no main here").empty(), "unpatchable -> empty");
+    }
+
+    void test_interface_contract() {
+        const std::string_view original =
+            "// fpSEAM.glsl\nuniform sampler2D sTex;\nuniform float uTcScale;\nvarying vec2 vTc;\nvoid main(){}";
+        const std::string_view good =
+            "#version 460 compatibility\nuniform sampler2D sTex;\nuniform float uTcScale;\nvarying vec2 vTc;\nvoid main(){}";
+        const std::string_view bad =
+            "#version 460 compatibility\nuniform sampler2D sTex;\nvoid main(){}";
+        expect_true(iee::game::check_interface_contract(original, good).ok, "matching interface passes");
+        const auto failed = iee::game::check_interface_contract(original, bad);
+        expect_true(!failed.ok, "missing identifiers fail");
+        expect_eq(failed.missingIdentifiers.size(), std::size_t{2}, "uTcScale and vTc reported");
+    }
+
+    void test_override_registry() {
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / "iee_override_test";
+        fs::create_directories(dir);
+        { std::ofstream f(dir / "fpSELECT.glsl"); f << "void main(){}"; }
+        iee::game::ShaderOverrideRegistry reg;
+        reg.load_from_directory(dir);
+        expect_eq(reg.size(), std::size_t{1}, "one override loaded");
+        expect_true(reg.find("fpSELECT").has_value(), "finds by name");
+        expect_true(!reg.find("fpSEAM").has_value(), "unknown name -> nullopt");
+        iee::game::ShaderOverrideRegistry empty;
+        empty.load_from_directory(dir / "does-not-exist");
+        expect_eq(empty.size(), std::size_t{0}, "missing dir -> empty registry");
+        fs::remove_all(dir);
+    }
 }
 
 int main() {
@@ -580,6 +639,11 @@ int main() {
     test_wed_screen_point_mapping();
     test_tile_table_detection_ignores_garbage_steps();
     test_manifest_infgame_offsets();
+    test_shader_name_extraction();
+    test_find_main_body_open();
+    test_magenta_variant();
+    test_interface_contract();
+    test_override_registry();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";
