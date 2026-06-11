@@ -109,6 +109,7 @@ namespace iee::game::gl {
         glUniform2f       = reinterpret_cast<PFN_glUniform2f>      (get_ext_proc_address(opengl32, "glUniform2f"));
         glActiveTexture   = reinterpret_cast<PFN_glActiveTexture>  (get_ext_proc_address(opengl32, "glActiveTexture"));
         glBindFramebuffer = reinterpret_cast<PFN_glBindFramebuffer>(get_ext_proc_address(opengl32, "glBindFramebuffer"));
+        glIsProgram       = reinterpret_cast<PFN_glIsProgram>      (get_ext_proc_address(opengl32, "glIsProgram"));
         glShaderSourceARB = reinterpret_cast<PFN_glShaderSourceARB>(get_ext_proc_address(opengl32, "glShaderSourceARB"));
         glCompileShaderARB = reinterpret_cast<PFN_glCompileShaderARB>(get_ext_proc_address(opengl32, "glCompileShaderARB"));
         glLinkProgramARB  = reinterpret_cast<PFN_glLinkProgramARB> (get_ext_proc_address(opengl32, "glLinkProgramARB"));

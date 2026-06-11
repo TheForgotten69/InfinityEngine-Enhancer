@@ -1,6 +1,46 @@
 # Phase 0 Gate Evidence
 
-Build: `<git sha>`   Date: `<date>`   Game: BGEE 2.6.6.x
+Build: `2eae2e4`   Date: 2026-06-11   Game: BGEE 2.6.6.x (Steam)
+
+## Session 1 verdicts (recorded from live logs)
+
+- **V2: no compile interception at boot** — zero `glShaderSource` captures; the
+  engine compiled everything before probe install. BUT the dumped `fpSEAM`
+  contains the WIP-era `IEE_V1_FPSEAM_LIQUID` patch (`uIeeTileLiquidMode`,
+  `uIeeLiquidTime`) — meaning **the engine reads GLSL source from game-data
+  files** where that patch still lives. Shader replacement is therefore a
+  game-data/override file mechanism, not (only) a compile-interception one.
+  TODO: locate the shader files in the install (`dir /s *.glsl` in the game
+  root, then check inside data BIFs) to confirm the load path.
+- **V5: PASS** — no engine FBO binds over a full session. Our post stack can
+  own FBO state.
+- **Programs used in normal play: exactly three** — `fpDraw` (3, slot 0),
+  `fpSEAM` (24, slot 8), `fpFONT` (18, slot 6). `fpSELECT`, `fpSprite`,
+  `fpTone`, `fpCatRom` never bound. The fpSELECT proof target was therefore
+  wrong; the proof retargets the fpSEAM liquid patch already in the game data.
+- **V1 (partial): `uColorTone` is a vec4 uniform on `fpSEAM`** — tones look
+  like uniform values, not program switches. Hypothesis "DrawColorTone selects
+  programs" is likely REJECTED; confirm with bind-frequency logging.
+- **Dump coverage**: retroactive introspection only reaches programs the engine
+  binds. Fixed: the probe now sweeps all existing program objects at install,
+  so the next session dumps everything (fpCatRom, fpSprite, fpSELECT, ...).
+- Caller attribution in bind logs resolves to our own DLL (`IsActive+0xE5F0`)
+  — the known `_ReturnAddress` quirk; cosmetic, fix deferred.
+
+## Session 2 procedure — uniform-bridge proof (replaces the fpSELECT proof)
+
+The game-data `fpSEAM` already contains the liquid patch gated on
+`uIeeTileLiquidMode`. The probe now registers any program declaring `uIee*`
+uniforms and feeds: `uIeeLiquidTime` = seconds, `uIeeTileLiquidMode` = F10
+state (1 = on).
+
+1. Install the new build; `EnableDebugHotkeys = true` (overrides may stay off —
+   no compile interception is involved).
+2. Load an area. Expect log: `Program 24 registered for uniform feed`.
+3. Press F10: **the entire ground should switch to animated stylized water**;
+   F10 again returns to normal. That is the end-to-end uniform bridge proof
+   (slot identification + registration + per-frame time + toggle).
+4. Record: log lines + short clip/screenshots ON/OFF.
 
 Setup for all gates: install the release bundle, set in `InfinityEngine-Enhancer.ini`:
 

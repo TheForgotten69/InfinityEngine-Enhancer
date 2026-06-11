@@ -78,6 +78,7 @@ using PFN_glUniform1i = void (APIENTRY*)(int location, int v0);
 using PFN_glUniform2f = void (APIENTRY*)(int location, float v0, float v1);
 using PFN_glActiveTexture = void (APIENTRY*)(unsigned texture);
 using PFN_glBindFramebuffer = void (APIENTRY*)(unsigned target, unsigned framebuffer);
+using PFN_glIsProgram = unsigned char (APIENTRY*)(unsigned program);
 using PFN_glShaderSourceARB = void (APIENTRY*)(unsigned shader, int count, const char* const* string, const int* length);
 using PFN_glCompileShaderARB = void (APIENTRY*)(unsigned shader);
 using PFN_glLinkProgramARB = void (APIENTRY*)(unsigned program);
@@ -125,6 +126,7 @@ struct OpenGLFunctions {
     PFN_glUniform2f glUniform2f{};
     PFN_glActiveTexture glActiveTexture{};
     PFN_glBindFramebuffer glBindFramebuffer{};
+    PFN_glIsProgram glIsProgram{};
     PFN_glShaderSourceARB glShaderSourceARB{};
     PFN_glCompileShaderARB glCompileShaderARB{};
     PFN_glLinkProgramARB glLinkProgramARB{};

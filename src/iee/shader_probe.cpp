@@ -60,6 +60,10 @@ namespace iee::probe {
         struct UniformLocations {
             int time{-2};    // -2 = not yet queried; -1 = queried, not found
             int enabled{-2};
+            // Legacy names used by the WIP-era liquid patch already present in
+            // some installs' game-data fpSEAM (confirmed live 2026-06-11):
+            int liquidTime{-2};
+            int liquidMode{-2};
         };
         // endregion
 
@@ -697,6 +701,9 @@ namespace iee::probe {
                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = nameForShader;
 
                 if (overrideAppliedForShader) anyOverride = true;
+                // Shaders declaring uIee* uniforms (our overrides, or patched
+                // game-data sources from earlier experiments) get the uniform feed.
+                if (preview.find("uIee") != std::string::npos) anyOverride = true;
 
                 LOG_INFO("GL program attached shader{}: program={} shader={} type={} preview={}",
                          isArb ? " (ARB)" : "",
@@ -715,7 +722,7 @@ namespace iee::probe {
 
                 // Program tracking for uniform feed
                 if (anyOverride) {
-                    g_overriddenPrograms[program] = UniformLocations{-2, -2};
+                    g_overriddenPrograms[program] = UniformLocations{};
                 }
             }
 
@@ -751,7 +758,7 @@ namespace iee::probe {
                 record.linkLogged = true;
                 // Reset uniform locations on relink
                 if (g_overriddenPrograms.contains(program)) {
-                    g_overriddenPrograms[program] = UniformLocations{-2, -2};
+                    g_overriddenPrograms[program] = UniformLocations{};
                 }
             }
 
@@ -783,7 +790,7 @@ namespace iee::probe {
                 shouldLog = !record.linkLogged;
                 record.linkLogged = true;
                 if (g_overriddenPrograms.contains(program)) {
-                    g_overriddenPrograms[program] = UniformLocations{-2, -2};
+                    g_overriddenPrograms[program] = UniformLocations{};
                 }
             }
 
@@ -820,6 +827,12 @@ namespace iee::probe {
             if (locs.enabled == -2) {
                 locs.enabled = gl.glGetUniformLocation(program, "uIeeEnabled");
             }
+            if (locs.liquidTime == -2) {
+                locs.liquidTime = gl.glGetUniformLocation(program, "uIeeLiquidTime");
+            }
+            if (locs.liquidMode == -2) {
+                locs.liquidMode = gl.glGetUniformLocation(program, "uIeeTileLiquidMode");
+            }
 
             // Store back resolved locations
             {
@@ -831,12 +844,21 @@ namespace iee::probe {
             }
 
             // Feed values — program is currently bound (we are post-original in glUseProgram)
+            const float timeValue = g_uniformTime.load(std::memory_order_relaxed);
+            const float enabledValue = g_overridesEnabled.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
             if (locs.time >= 0) {
-                gl.glUniform1f(locs.time, g_uniformTime.load(std::memory_order_relaxed));
+                gl.glUniform1f(locs.time, timeValue);
             }
             if (locs.enabled >= 0) {
-                gl.glUniform1f(locs.enabled,
-                               g_overridesEnabled.load(std::memory_order_relaxed) ? 1.0f : 0.0f);
+                gl.glUniform1f(locs.enabled, enabledValue);
+            }
+            if (locs.liquidTime >= 0) {
+                gl.glUniform1f(locs.liquidTime, timeValue);
+            }
+            if (locs.liquidMode >= 0) {
+                // F10 doubles as the liquid-mode toggle for the legacy patch
+                // (mode 1 = water styling on every tile — bridge proof, not a feature).
+                gl.glUniform1f(locs.liquidMode, enabledValue);
             }
         }
         // endregion
@@ -883,6 +905,7 @@ namespace iee::probe {
                                                     &actualShaderCount, shaders.data());
                             std::string vertexShaderName;
                             std::string fragmentShaderName;
+                            bool anyIeeUniforms = false;
                             for (int idx = 0; idx < actualShaderCount; ++idx) {
                                 const unsigned s = shaders[static_cast<std::size_t>(idx)];
                                 int shaderType = 0;
@@ -892,6 +915,7 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
+                                if (preview.find("uIee") != std::string::npos) anyIeeUniforms = true;
                                 // Retroactive archival: programs compiled before our hooks
                                 // installed only ever pass through here, never the link detours.
                                 maybe_dump_engine_shader(gl, s, sName);
@@ -906,6 +930,10 @@ namespace iee::probe {
                                     record.inferredSlot       = inferredSlot;
                                     record.vertexShaderName   = vertexShaderName;
                                     record.fragmentShaderName = fragmentShaderName;
+                                    if (anyIeeUniforms && !g_overriddenPrograms.contains(program)) {
+                                        g_overriddenPrograms[program] = UniformLocations{};
+                                        LOG_INFO("Program {} registered for uniform feed (declares uIee uniforms)", program);
+                                    }
                                 }
                                 if (inferredSlot) {
                                     LOG_INFO("GL program slot inference: program={} slot={} vertex={} fragment={}",
@@ -964,6 +992,7 @@ namespace iee::probe {
                                                     &actualShaderCount, shaders.data());
                             std::string vertexShaderName;
                             std::string fragmentShaderName;
+                            bool anyIeeUniforms = false;
                             for (int idx = 0; idx < actualShaderCount; ++idx) {
                                 const unsigned s = shaders[static_cast<std::size_t>(idx)];
                                 int shaderType = 0;
@@ -973,6 +1002,7 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
+                                if (preview.find("uIee") != std::string::npos) anyIeeUniforms = true;
                                 // Retroactive archival (see non-ARB path note).
                                 maybe_dump_engine_shader(gl, s, sName);
                                 LOG_INFO("GL program attached shader (ARB): program={} shader={} type={} preview={}",
@@ -986,6 +1016,10 @@ namespace iee::probe {
                                     record.inferredSlot       = inferredSlot;
                                     record.vertexShaderName   = vertexShaderName;
                                     record.fragmentShaderName = fragmentShaderName;
+                                    if (anyIeeUniforms && !g_overriddenPrograms.contains(program)) {
+                                        g_overriddenPrograms[program] = UniformLocations{};
+                                        LOG_INFO("Program {} registered for uniform feed (declares uIee uniforms, ARB)", program);
+                                    }
                                 }
                                 if (inferredSlot) {
                                     LOG_INFO("GL program slot inference (ARB): program={} slot={} vertex={} fragment={}",
@@ -1187,6 +1221,21 @@ namespace iee::probe {
 
         g_shaderProbesInstalled = true;
         LOG_INFO("Installed GL shader probes");
+
+        // Sweep all pre-existing program objects (boot-compiled, before our
+        // hooks): introspect, dump, and register every one without waiting for
+        // the engine to bind it. GL handles are small sequential ints here.
+        if (gl.glIsProgram) {
+            int sweptCount = 0;
+            for (unsigned id = 1; id <= 512; ++id) {
+                if (gl.glIsProgram(id)) {
+                    link_program_introspect(id, false);
+                    ++sweptCount;
+                }
+            }
+            LOG_INFO("Program sweep: introspected {} pre-existing GL programs", sweptCount);
+        }
+
         return true;
     }
 

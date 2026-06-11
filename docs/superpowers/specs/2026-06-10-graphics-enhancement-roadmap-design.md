@@ -450,7 +450,27 @@ an engine-side blend, which the composite pass can read for consistency.
 | Frame interpolation (15->60 fps) as a DLL feature | It is a content mod, not a runtime renderer problem: sprite loops run off an internal fps number that EEex already patches, so the path is interpolated BAM frames + that existing fps knob — nothing for this DLL to do |
 | Bindless textures / multi-draw-indirect | No measured performance problem |
 
-### 10.9 Tooling idea (testing, unscheduled)
+### 10.9 Future: own GL programs / engine slot reuse
+
+Two delivery mechanisms beyond source replacement, enabled by the loaded
+program API (validated 2026-06-11 session findings):
+
+- **Own programs**: compile and link our own GLSL programs outright
+  (glCreateProgram et al. are loaded) and bind them inside our draw hooks with
+  the state guard. No engine slot involvement; the engine's vertex attribute
+  streams still flow when pairing with the engine's `vpDraw` conventions.
+- **Slot reuse**: normal gameplay binds only three programs (fpDraw, fpSEAM,
+  fpFONT — confirmed live); rarely-bound slots (fpSELECT, fpTone, fpCatRom,
+  fpSprite under default settings) are candidates for repurposing if engine-side
+  binding of a custom program is ever needed. Riskier (a slot may bind in
+  untested game states); own-programs is the default choice.
+
+Also confirmed live: the engine reads shader source from game-data files (the
+WIP-era fpSEAM liquid patch was still compiled in from the user's install),
+so file-level replacement through the game's resource system is a third,
+DLL-free delivery path for shader source.
+
+### 10.10 Tooling idea (testing, unscheduled)
 
 `DrawReadPixels` is documented and resolvable — a hotkey-triggered screenshot
 capture would enable before/after regression comparisons of shader changes
