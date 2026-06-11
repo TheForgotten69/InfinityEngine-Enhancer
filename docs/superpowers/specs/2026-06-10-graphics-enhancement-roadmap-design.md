@@ -266,6 +266,11 @@ New infrastructure:
   proves identify→replace→render end-to-end. This is the pipeline's smoke test.
 - Run V3; if slot 2 is the screen blit, replace `fpCatRom` with a correct
   bicubic/Lanczos kernel — global quality win at near-zero incremental cost.
+  **V3 verdict (2026-06-11): fpCatRom is dead in 2.6.6** — present in game
+  data, never compiled at runtime (scaling options are nearest/linear only).
+  Superseded by own-program upscaling (§10.9) and the P4 post stack. Related
+  find: `FPCRSPRT.GLSL` in game data is a sprite zoom filter containing the
+  developers' own abandoned xBR attempt — the reference for Pillar 2.
 
 ### Phase 2 — Tiles (P1)
 

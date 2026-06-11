@@ -64,6 +64,28 @@ Build: `2eae2e4`   Date: 2026-06-11   Game: BGEE 2.6.6.x (Steam)
   folder (user-verified). Production shader delivery = override files +
   DLL uniform feeding.
 
+## Session 4 verdicts (2026-06-11, build d96635e) — census complete
+
+- **Dump harvest: PASS** — all 10 runtime shaders dumped by the sweep
+  (fpDraw, fpFONT, fpSEAM, fpSELECT, fpSprite, fpTone, fpYUV, fpYUVGRY,
+  vpDraw, vpYUV).
+- **V3 verdict: fpCatRom is DEAD in 2.6.6** — `fpCatRom.GLSL` and
+  `vpBlit.GLSL` exist in the game data (manually extracted) but the engine
+  never compiles them: no program creation and zero compile events across a
+  session with graphics options toggling, zooming, and a movie. The available
+  scaling options are nearest/linear only. The planned fpCatRom replacement is
+  superseded: the final-blit upgrade path is our own program + post stack (P4).
+- **Bind census: all 8 runtime programs bind in normal use** — fpTone on
+  pause (grey), fpYUV/fpYUVGRY in movies, fpSprite and fpSELECT during play.
+  Session 1's three-program list was just a short session, not engine policy.
+- **Discovery: `FPCRSPRT.GLSL` (8.6K) in game data** — a sprite zoom filter
+  (gaussian via uSpriteBlurAmount/uZoomStrength) containing a **commented-out
+  xBR upscaler attempt** by the engine's own developers. Never compiled at
+  runtime in this session. Prime reference for Pillar 2 sprite work: the
+  interface contract and the abandoned approach are both documented in it.
+- Engine shader sources are Beamdog content: dumps and extractions stay in
+  local reference dirs, not in this repository.
+
 ## Superseded: original Session 3 procedure
 
 The game-data `fpSEAM` already contains the liquid patch gated on
