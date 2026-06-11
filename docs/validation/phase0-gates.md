@@ -27,7 +27,23 @@ Build: `2eae2e4`   Date: 2026-06-11   Game: BGEE 2.6.6.x (Steam)
 - Caller attribution in bind logs resolves to our own DLL (`IsActive+0xE5F0`)
   — the known `_ReturnAddress` quirk; cosmetic, fix deferred.
 
-## Session 2 procedure — uniform-bridge proof (replaces the fpSELECT proof)
+## Session 2 findings (2026-06-11, builds 75318e8/c18ddf5)
+
+- **Crash on save load (75318e8)**: not reproduced on c18ddf5 after the effect
+  gate defaulted OFF, the sweep moved to the frame boundary, and the legacy
+  override shader was removed. Attributed to feeding liquid mode=1 on load
+  into the legacy override variant; not investigated further.
+- **BGEE statically links SDL** — `SDL2.dll not loaded`, so the frame hook
+  never installed: no frame tick, no sweep, no F10 polling, frozen uniform
+  time. Fixed: fallback hook on `gdi32!SwapBuffers` (universal WGL boundary).
+- **uIee detection read the 240-byte sanitized log preview** — the engine
+  prepends its header block, pushing uniform declarations past the cap, so
+  registration never fired. Fixed: detection reads a 4KB un-truncated source
+  prefix.
+- Vanilla dumps confirmed: fpSEAM is 2.1K vanilla vs 8.3K patched. Full
+  vanilla set still pending (sweep needs the working frame hook).
+
+## Session 3 procedure — uniform-bridge proof (retry)
 
 The game-data `fpSEAM` already contains the liquid patch gated on
 `uIeeTileLiquidMode`. The probe now registers any program declaring `uIee*`

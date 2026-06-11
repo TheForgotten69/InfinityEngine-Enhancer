@@ -228,6 +228,24 @@ namespace iee::probe {
             return sanitize_preview(std::string(buffer.data(), static_cast<std::size_t>(written)));
         }
 
+        // Un-truncated source prefix for content checks (the 240-byte sanitized
+        // preview is for logs only — uniform declarations sit past it when the
+        // engine prepends its header block; confirmed live 2026-06-11).
+        std::string read_shader_source_prefix(const game::gl::OpenGLFunctions &gl, unsigned shader,
+                                              int maxBytes = 4096) {
+            if (!gl.glGetShaderiv || !gl.glGetShaderSource) return {};
+            int sourceLength = 0;
+            gl.glGetShaderiv(shader, SHADER_SOURCE_LENGTH, &sourceLength);
+            if (sourceLength <= 1) return {};
+            const int cap = sourceLength < maxBytes ? sourceLength : maxBytes;
+            std::string buffer(static_cast<std::size_t>(cap), '\0');
+            int written = 0;
+            gl.glGetShaderSource(shader, cap, &written, buffer.data());
+            if (written <= 0) return {};
+            buffer.resize(static_cast<std::size_t>(written));
+            return buffer;
+        }
+
         std::string_view get_gl_string(const game::gl::OpenGLFunctions &gl, unsigned name) noexcept {
             if (!gl.glGetString) return {};
             const auto *value = gl.glGetString(name);
@@ -708,7 +726,7 @@ namespace iee::probe {
                 if (overrideAppliedForShader) anyOverride = true;
                 // Shaders declaring uIee* uniforms (our overrides, or patched
                 // game-data sources from earlier experiments) get the uniform feed.
-                if (preview.find("uIee") != std::string::npos) anyOverride = true;
+                if (read_shader_source_prefix(gl, s).find("uIee") != std::string::npos) anyOverride = true;
 
                 LOG_INFO("GL program attached shader{}: program={} shader={} type={} preview={}",
                          isArb ? " (ARB)" : "",
@@ -920,7 +938,7 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
-                                if (preview.find("uIee") != std::string::npos) anyIeeUniforms = true;
+                                if (read_shader_source_prefix(gl, s).find("uIee") != std::string::npos) anyIeeUniforms = true;
                                 // Retroactive archival: programs compiled before our hooks
                                 // installed only ever pass through here, never the link detours.
                                 maybe_dump_engine_shader(gl, s, sName);
@@ -1007,7 +1025,7 @@ namespace iee::probe {
                                     preview, shaderType == VERTEX_SHADER ? "vp" : "fp");
                                 if (shaderType == VERTEX_SHADER)        vertexShaderName   = sName;
                                 else if (shaderType == FRAGMENT_SHADER) fragmentShaderName = sName;
-                                if (preview.find("uIee") != std::string::npos) anyIeeUniforms = true;
+                                if (read_shader_source_prefix(gl, s).find("uIee") != std::string::npos) anyIeeUniforms = true;
                                 // Retroactive archival (see non-ARB path note).
                                 maybe_dump_engine_shader(gl, s, sName);
                                 LOG_INFO("GL program attached shader (ARB): program={} shader={} type={} preview={}",
