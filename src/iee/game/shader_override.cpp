@@ -57,13 +57,31 @@ namespace iee::game {
             }
             return names;
         }
+
+        // Returns true if `needle` appears in `haystack` as a complete GLSL identifier token
+        // (not as a substring of a longer identifier). This prevents sTex from matching
+        // sTex1, or uTc from matching uTcScale, when checking replacement sources.
+        bool contains_as_identifier(std::string_view haystack, std::string_view needle) {
+            const auto is_id_char = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            };
+            std::size_t pos = 0;
+            while (true) {
+                pos = haystack.find(needle, pos);
+                if (pos == std::string_view::npos) return false;
+                if (pos > 0 && is_id_char(haystack[pos - 1])) { pos += needle.size(); continue; }
+                const std::size_t end = pos + needle.size();
+                if (end < haystack.size() && is_id_char(haystack[end])) { pos += needle.size(); continue; }
+                return true;
+            }
+        }
     }
 
     OverrideCheck check_interface_contract(std::string_view originalSource,
                                            std::string_view replacementSource) {
         OverrideCheck result{.ok = true};
         for (const auto &name : declared_interface_identifiers(originalSource)) {
-            if (replacementSource.find(name) == std::string_view::npos) {
+            if (!contains_as_identifier(replacementSource, name)) {
                 result.ok = false;
                 result.missingIdentifiers.push_back(name);
             }

@@ -606,6 +606,26 @@ namespace {
         expect_eq(failed.missingIdentifiers.size(), std::size_t{2}, "uTcScale and vTc reported");
     }
 
+    // Regression: sTex is a substring of sTex1; a replacement declaring only sTex1 must NOT
+    // satisfy the sTex contract check (multi-texture blend shaders use both samplers).
+    void test_interface_contract_token_boundary() {
+        const std::string_view original =
+            "// fpBLEND.glsl\nuniform sampler2D sTex;\nuniform sampler2D sTex1;\nvoid main(){}";
+        // Replacement that correctly declares both:
+        const std::string_view good =
+            "uniform sampler2D sTex;\nuniform sampler2D sTex1;\nvoid main(){}";
+        // Replacement that omits sTex (only has sTex1 — which contains "sTex" as substring):
+        const std::string_view bad_stex_only1 =
+            "uniform sampler2D sTex1;\nvoid main(){}";
+        expect_true(iee::game::check_interface_contract(original, good).ok,
+                    "both sTex and sTex1 present -> passes");
+        const auto failed = iee::game::check_interface_contract(original, bad_stex_only1);
+        expect_true(!failed.ok,
+                    "sTex1 must not satisfy sTex contract (token-boundary check)");
+        expect_eq(failed.missingIdentifiers.size(), std::size_t{1}, "only sTex missing");
+        expect_eq(failed.missingIdentifiers[0], std::string("sTex"), "missing identifier is sTex");
+    }
+
     void test_override_registry() {
         namespace fs = std::filesystem;
         const auto dir = fs::temp_directory_path() / "iee_override_test";
@@ -643,6 +663,7 @@ int main() {
     test_find_main_body_open();
     test_magenta_variant();
     test_interface_contract();
+    test_interface_contract_token_boundary();
     test_override_registry();
 
     if (g_failures != 0) {
