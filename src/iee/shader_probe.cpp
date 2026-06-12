@@ -898,8 +898,10 @@ namespace iee::probe {
             if (locs.liquidMode >= 0) {
                 // F10 doubles as the liquid-mode toggle for the legacy patch
                 // (mode 1 = water styling on every tile — bridge proof, not a feature).
-                // Legacy patch only understands 0/1; threshold the tri-state value.
-                gl.glUniform1f(locs.liquidMode, enabledValue >= 0.5f ? 1.0f : 0.0f);
+                // Legacy patch only understands 0/1, and has no ALIGN branch: keep it
+                // OFF at effect value 2.0 so alignment debugging stays unambiguous.
+                gl.glUniform1f(locs.liquidMode,
+                               (enabledValue >= 0.5f && enabledValue < 1.5f) ? 1.0f : 0.0f);
             }
             if (locs.scroll >= 0 && gl.glUniform2f) {
                 gl.glUniform2f(locs.scroll,

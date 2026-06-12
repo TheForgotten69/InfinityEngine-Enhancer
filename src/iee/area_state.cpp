@@ -1,6 +1,7 @@
 #include "area_state.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string_view>
 
@@ -150,11 +151,11 @@ namespace iee::area {
                       liquidMask);
         }
 
-        // Upload the per-cell overlay flags as an R8 texture on reserved unit 2.
+        // Upload the per-cell liquid modes as an R8 texture on reserved unit 2.
         // CAVEAT: this runs on the LoadArea thread, which may not own the GL
         // context. If in-game logs show GL errors here, move the upload to a
         // pending-work flag consumed by the frame hook (render thread).
-        if (const auto packed = game::pack_area_liquid_texture(*cachedWed)) {
+        {
             auto &gl = game::gl::get_gl_functions();
             if (gl.textureUploadAvailable) {
                 core::GlStateGuard guard;
@@ -163,18 +164,30 @@ namespace iee::area {
                 gl.glActiveTexture(game::gl::TEXTURE0 + 2);
                 gl.glBindTexture(game::gl::TEXTURE_2D, s_areaTexture);
                 gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
+
+                // On any failure the previous area's mask must not survive the
+                // transition: fall back to a 1x1 zero texel (mode 0 everywhere).
+                static const std::uint8_t kNoLiquid = 0;
+                const auto packed = game::pack_area_liquid_texture(*cachedWed);
+                const void *texels = packed ? static_cast<const void *>(packed->texels.data())
+                                            : static_cast<const void *>(&kNoLiquid);
+                const int width = packed ? packed->width : 1;
+                const int height = packed ? packed->height : 1;
+
                 gl.glTexImage2D(game::gl::TEXTURE_2D, 0, game::gl::R8,
-                                packed->width, packed->height, 0,
-                                game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
+                                width, height, 0,
+                                game::gl::RED, game::gl::UNSIGNED_BYTE, texels);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
-                if (game::gl::check_error("area liquid texture upload")) {
+                if (packed && game::gl::check_error("area liquid texture upload")) {
                     LOG_INFO("Area liquid texture uploaded: {}x{} (unit 2, tex {})",
-                             packed->width, packed->height, s_areaTexture);
-                    probe::set_area_world_size(static_cast<float>(packed->width) * 64.0f,
-                                              static_cast<float>(packed->height) * 64.0f);
+                             width, height, s_areaTexture);
+                    probe::set_area_world_size(static_cast<float>(width) * 64.0f,
+                                               static_cast<float>(height) * 64.0f);
+                } else if (!packed) {
+                    LOG_WARN("Area liquid pack failed; uploaded 1x1 no-liquid mask");
                 } else {
                     LOG_WARN("Area liquid texture upload reported a GL error (likely wrong thread; see caveat)");
                 }
