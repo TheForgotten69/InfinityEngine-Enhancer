@@ -11,10 +11,12 @@
 
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/game/area_texture.h"
 #include "iee/game/build_manifest.h"
 #include "iee/game/eeex_doc_layouts_x64.h"
 #include "iee/game/file_formats.h"
 #include "iee/game/runtime_types_x64.h"
+#include "iee/game/shader_override.h"
 #include "iee/game/tile_upscale.h"
 #include "iee/game/wed_runtime.h"
 
@@ -292,6 +294,40 @@ namespace {
         std::filesystem::remove(tempPath, ec);
     }
 
+    void test_config_shader_override_defaults() {
+        iee::core::EngineConfig cfg{};
+        expect_true(!cfg.enableShaderOverrides, "shader overrides default off");
+        expect_true(cfg.dumpEngineShaders, "shader dump defaults on");
+        expect_eq(cfg.shaderOverrideDir, std::string("iee-shaders"), "override dir default");
+        expect_true(cfg.debugMagentaShaders.empty(), "magenta list default empty");
+        expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
+    }
+
+    void test_config_shader_override_roundtrip() {
+        const auto tempPath = std::filesystem::current_path() / "InfinityEngine-Enhancer-shader-test.ini";
+        {
+            iee::core::EngineConfig orig{};
+            orig.enableShaderOverrides = true;
+            orig.dumpEngineShaders = false;
+            orig.shaderOverrideDir = "custom-shaders";
+            orig.debugMagentaShaders = "spell1.glsl,spell2.glsl";
+            orig.enableDebugHotkeys = true;
+
+            expect_true(iee::core::ConfigManager::save(tempPath, orig), "ConfigManager::save should succeed");
+        }
+
+        iee::core::EngineConfig loaded{};
+        expect_true(iee::core::ConfigManager::load(tempPath, loaded), "ConfigManager::load should parse shader config");
+        expect_true(loaded.enableShaderOverrides, "enableShaderOverrides should round-trip as true");
+        expect_true(!loaded.dumpEngineShaders, "dumpEngineShaders should round-trip as false");
+        expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"), "shaderOverrideDir should round-trip");
+        expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"), "debugMagentaShaders should round-trip");
+        expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
+
+        std::error_code ec;
+        std::filesystem::remove(tempPath, ec);
+    }
+
     void write_bytes(std::vector<std::byte> &buffer, std::size_t offset, const void *data, std::size_t size) {
         if (offset + size > buffer.size()) {
             buffer.resize(offset + size);
@@ -397,6 +433,15 @@ namespace {
         const auto detection = detect_scale_from_tile_table(tileInfo);
         expect_true(!detection.has_value(),
                     "Tile-table detection should ignore garbage UV steps instead of treating them as deterministic scale");
+    }
+
+    void test_manifest_infgame_offsets() {
+        const auto &m = iee::game::current_manifest();
+        expect_eq(m.offsets.infGameVisibleArea, std::uintptr_t{0x6590}, "visible area offset");
+        expect_eq(m.offsets.infGameAreas, std::uintptr_t{0x6598}, "areas array offset");
+        expect_eq(m.offsets.infGameAreaMaster, std::uintptr_t{0x65F8}, "master area offset");
+        expect_eq(m.offsets.infinityZoom, std::uintptr_t{0x484}, "CInfinity zoom offset");
+        expect_true(m.validate(), "manifest still validates");
     }
 
     iee::game::TileInfo make_tile_info(std::uint32_t tileDimension,
@@ -519,6 +564,109 @@ namespace {
         expect_true(iee::game::get_tis_linear_tiles_flag(linearInfo.tileset, manifest),
                     "The manifest linear-tiles offset should be readable from synthetic data");
     }
+
+
+    void test_shader_name_extraction() {
+        using iee::game::extract_shader_name;
+        expect_eq(extract_shader_name("// fpSEAM.glsl\nuniform float uTcScale;", "fp"),
+                  std::string("fpSEAM"), "extracts fp name");
+        expect_eq(extract_shader_name("// vpDraw.glsl\nvoid main(){}", "vp"),
+                  std::string("vpDraw"), "extracts vp name");
+        expect_true(extract_shader_name("// vpDraw.glsl\n", "fp").empty(), "prefix filter rejects vp");
+        expect_true(extract_shader_name("no comment here", "fp").empty(), "no name -> empty");
+    }
+
+    void test_find_main_body_open() {
+        using iee::game::find_main_body_open;
+        const std::string_view src = "uniform float x;\nvoid main() {\n  gl_FragColor = vec4(x);\n}";
+        const auto pos = find_main_body_open(src);
+        expect_true(pos != std::string_view::npos, "finds main body");
+        expect_eq(src[pos], '{', "offset points at brace");
+        expect_true(find_main_body_open("float f(){}") == std::string_view::npos, "no main -> npos");
+    }
+
+    void test_magenta_variant() {
+        const std::string_view src = "// fpSELECT.glsl\nvoid main() {\n  gl_FragColor = vec4(1.0);\n}";
+        const auto patched = iee::game::make_magenta_variant(src);
+        expect_true(!patched.empty(), "patchable source produces variant");
+        expect_true(patched.find("vec4(1.0, 0.0, 1.0, 1.0)") != std::string::npos, "magenta color present");
+        expect_true(patched.find("IEE_DEBUG_MAGENTA") != std::string::npos, "marker present");
+        expect_true(iee::game::make_magenta_variant("no main here").empty(), "unpatchable -> empty");
+    }
+
+    void test_interface_contract() {
+        const std::string_view original =
+            "// fpSEAM.glsl\nuniform sampler2D sTex;\nuniform float uTcScale;\nvarying vec2 vTc;\nvoid main(){}";
+        const std::string_view good =
+            "#version 460 compatibility\nuniform sampler2D sTex;\nuniform float uTcScale;\nvarying vec2 vTc;\nvoid main(){}";
+        const std::string_view bad =
+            "#version 460 compatibility\nuniform sampler2D sTex;\nvoid main(){}";
+        expect_true(iee::game::check_interface_contract(original, good).ok, "matching interface passes");
+        const auto failed = iee::game::check_interface_contract(original, bad);
+        expect_true(!failed.ok, "missing identifiers fail");
+        expect_eq(failed.missingIdentifiers.size(), std::size_t{2}, "uTcScale and vTc reported");
+    }
+
+    // Regression: sTex is a substring of sTex1; a replacement declaring only sTex1 must NOT
+    // satisfy the sTex contract check (multi-texture blend shaders use both samplers).
+    void test_interface_contract_token_boundary() {
+        const std::string_view original =
+            "// fpBLEND.glsl\nuniform sampler2D sTex;\nuniform sampler2D sTex1;\nvoid main(){}";
+        // Replacement that correctly declares both:
+        const std::string_view good =
+            "uniform sampler2D sTex;\nuniform sampler2D sTex1;\nvoid main(){}";
+        // Replacement that omits sTex (only has sTex1 — which contains "sTex" as substring):
+        const std::string_view bad_stex_only1 =
+            "uniform sampler2D sTex1;\nvoid main(){}";
+        expect_true(iee::game::check_interface_contract(original, good).ok,
+                    "both sTex and sTex1 present -> passes");
+        const auto failed = iee::game::check_interface_contract(original, bad_stex_only1);
+        expect_true(!failed.ok,
+                    "sTex1 must not satisfy sTex contract (token-boundary check)");
+        expect_eq(failed.missingIdentifiers.size(), std::size_t{1}, "only sTex missing");
+        expect_eq(failed.missingIdentifiers[0], std::string("sTex"), "missing identifier is sTex");
+    }
+
+    void test_override_registry() {
+        namespace fs = std::filesystem;
+        const auto dir = fs::temp_directory_path() / "iee_override_test";
+        fs::create_directories(dir);
+        { std::ofstream f(dir / "fpSELECT.glsl"); f << "void main(){}"; }
+        iee::game::ShaderOverrideRegistry reg;
+        reg.load_from_directory(dir);
+        expect_eq(reg.size(), std::size_t{1}, "one override loaded");
+        expect_true(reg.find("fpSELECT").has_value(), "finds by name");
+        expect_true(!reg.find("fpSEAM").has_value(), "unknown name -> nullopt");
+        iee::game::ShaderOverrideRegistry empty;
+        empty.load_from_directory(dir / "does-not-exist");
+        expect_eq(empty.size(), std::size_t{0}, "missing dir -> empty registry");
+        fs::remove_all(dir);
+    }
+}
+
+void test_area_texture_packing() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 3;
+    wed.baseHeight = 2;
+    wed.baseOverlayFlags = {0x00, 0x02, 0x00, 0x04, 0x00, 0x06}; // overlay bits per cell
+    const auto packed = iee::game::pack_area_cell_texture(wed);
+    expect_true(packed.has_value(), "packs valid wed");
+    if (packed) {
+        expect_eq(packed->width, 3, "width");
+        expect_eq(packed->height, 2, "height");
+        expect_eq(packed->texels.size(), std::size_t{6}, "one byte per cell");
+        expect_eq(packed->texels[1], std::uint8_t{0x02}, "cell flags preserved");
+    }
+    iee::game::WedAreaInfo empty{};
+    expect_true(!iee::game::pack_area_cell_texture(empty).has_value(), "empty wed -> nullopt");
+}
+
+void test_area_texture_packing_size_mismatch() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 4;
+    wed.baseHeight = 4;
+    wed.baseOverlayFlags = {0x01}; // wrong size
+    expect_true(!iee::game::pack_area_cell_texture(wed).has_value(), "flag/dimension mismatch -> nullopt");
 }
 
 int main() {
@@ -529,11 +677,22 @@ int main() {
     test_file_format_layouts();
     test_eeex_doc_layout_maps();
     test_config_parsing();
+    test_config_shader_override_defaults();
+    test_config_shader_override_roundtrip();
     test_parse_loaded_wed();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();
     test_wed_screen_point_mapping();
     test_tile_table_detection_ignores_garbage_steps();
+    test_manifest_infgame_offsets();
+    test_shader_name_extraction();
+    test_find_main_body_open();
+    test_magenta_variant();
+    test_interface_contract();
+    test_interface_contract_token_boundary();
+    test_override_registry();
+    test_area_texture_packing();
+    test_area_texture_packing_size_mismatch();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

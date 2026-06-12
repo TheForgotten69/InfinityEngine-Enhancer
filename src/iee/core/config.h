@@ -18,6 +18,14 @@ namespace iee::core {
 
         //endregion
 
+        // region Shader overrides (Phase 0)
+        bool enableShaderOverrides = false;     // master switch for source replacement
+        bool dumpEngineShaders = true;          // archive originals to <dll dir>/iee-shader-dumps/
+        std::string shaderOverrideDir = "iee-shaders"; // relative to DLL dir
+        std::string debugMagentaShaders;        // comma-separated fp names to flood magenta
+        bool enableDebugHotkeys = false;        // F10 toggles uIeeEnabled on overridden programs
+        // endregion
+
         bool enableVerboseLogging = false;
     };
 

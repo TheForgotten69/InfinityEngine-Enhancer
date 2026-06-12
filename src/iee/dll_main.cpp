@@ -3,7 +3,9 @@
 #include <thread>
 
 #include "app_context.h"
+#include "frame_hook.h"
 #include "hooks.h"
+#include "iee/shader_probe.h"
 #include "iee/game/build_manifest.h"
 #include "iee/core/logger.h"
 #include "iee/core/config.h"
@@ -73,6 +75,10 @@ namespace iee {
                 return 1;
             }
 
+            // Frame boundary: SDL2 export, available without a GL context.
+            // Failure is non-fatal (time-driven shader effects stay at t=0).
+            (void) frame::install();
+
             LOG_DEBUG("Installation complete");
 
             return 0;
@@ -87,6 +93,8 @@ namespace iee {
 
     static void CleanupHooks() {
         if (g_appContext) {
+            frame::uninstall();
+            probe::uninstall_shader_probes();
             hooks::prepare_for_shutdown();
             g_appContext->reset_all_state();
             g_appContext.reset();

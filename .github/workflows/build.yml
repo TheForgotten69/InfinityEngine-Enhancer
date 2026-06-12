@@ -29,7 +29,9 @@ jobs:
 
   windows-build:
     needs: host-tests
-    runs-on: windows-latest
+    # Pinned: windows-latest rolled over to the VS2026 image, which no longer
+    # ships VS2022 — the validated toolchain for this project's generator.
+    runs-on: windows-2022
 
     steps:
       - name: Checkout code

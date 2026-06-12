@@ -41,6 +41,10 @@ namespace iee::game {
         std::uintptr_t vidTileResource{};
         std::uintptr_t tisLinearTilesFlag{};
         std::uintptr_t tisHeaderTileDimension{};
+        std::uintptr_t infGameVisibleArea{};
+        std::uintptr_t infGameAreas{};
+        std::uintptr_t infGameAreaMaster{};
+        std::uintptr_t infinityZoom{};
     };
 
     struct BuildManifest {
@@ -59,6 +63,10 @@ namespace iee::game {
                 return false;
             }
             if (!offsets.vidTileResource || !offsets.tisLinearTilesFlag || !offsets.tisHeaderTileDimension) {
+                return false;
+            }
+            if (!offsets.infGameVisibleArea || !offsets.infGameAreas || !offsets.infGameAreaMaster ||
+                !offsets.infinityZoom) {
                 return false;
             }
 

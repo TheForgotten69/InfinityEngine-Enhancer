@@ -56,7 +56,7 @@ namespace iee::game {
                     "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
                 },
                 {0x27E710, 0x4247E0},
-                {0x100, 0x1DC, 0x14},
+                {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8, 0x484},
                 {{
                     {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
                     {"DrawBindTexture", 0x6E, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},

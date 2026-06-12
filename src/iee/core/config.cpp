@@ -101,6 +101,17 @@ namespace iee::core {
             } else if (iequals(key, "FallbackRenderTextureRVA")) {
                 if (auto v = parse_u32_dec_or_hex(val)) cfg.cachedRenderTextureRVA = *v;
             }
+            return;
+        }
+
+        // [Shaders]
+        if (iequals(section, "shaders")) {
+            if (iequals(key, "EnableOverrides")) cfg.enableShaderOverrides = parse_bool(val, cfg.enableShaderOverrides);
+            else if (iequals(key, "DumpEngineShaders")) cfg.dumpEngineShaders = parse_bool(val, cfg.dumpEngineShaders);
+            else if (iequals(key, "OverrideDir")) cfg.shaderOverrideDir = val;
+            else if (iequals(key, "MagentaShaders")) cfg.debugMagentaShaders = val;
+            else if (iequals(key, "EnableDebugHotkeys")) cfg.enableDebugHotkeys = parse_bool(val, cfg.enableDebugHotkeys);
+            return;
         }
     }
 
@@ -188,6 +199,13 @@ namespace iee::core {
                 << static_cast<std::uint32_t>(cfg.cachedLoadAreaRVA) << std::dec << "\n";
         f << "FallbackRenderTextureRVA = 0x" << std::hex << std::uppercase
                 << static_cast<std::uint32_t>(cfg.cachedRenderTextureRVA) << std::dec << "\n";
+
+        write_section(f, "Shaders");
+        write_bool(f, "EnableOverrides", cfg.enableShaderOverrides);
+        write_bool(f, "DumpEngineShaders", cfg.dumpEngineShaders);
+        f << "OverrideDir = " << cfg.shaderOverrideDir << "\n";
+        f << "MagentaShaders = " << cfg.debugMagentaShaders << "\n";
+        write_bool(f, "EnableDebugHotkeys", cfg.enableDebugHotkeys);
 
         return true;
     }

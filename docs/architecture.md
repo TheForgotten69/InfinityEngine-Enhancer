@@ -49,9 +49,42 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/hooks.*`
 
-- Owns the runtime hook lifecycle.
-- `LoadArea` resets area-scoped detection state.
-- `RenderTexture` applies the tile upscale path once scale is known.
+- Owns the runtime hook lifecycle as a thin detour -> dispatch layer.
+- `LoadArea` resets area-scoped feature state; `RenderTexture` dispatches into
+  the tile render feature and honors feature hook-disable requests.
+
+`src/iee/area_state.*`
+
+- Active-area resolution (manifest-driven CInfGame offsets), scroll reads, and
+  the post-LoadArea WED cache refresh + area cell texture upload.
+
+`src/iee/features/tile_render.*`
+
+- The tile upscale render path and its per-area state, moved out of hooks/AppContext.
+
+`src/iee/diagnostics.*`
+
+- TIS header / pointer dump logging used by detection fallbacks.
+
+`src/iee/game/shader_override.*`
+
+- Host-safe shader replacement logic: name extraction, override registry,
+  magenta debug variants, interface-contract checks. Unit-tested in WSL/macOS.
+
+`src/iee/shader_probe.*`
+
+- Windows GL detours (glShaderSource/Compile/Link/UseProgram + ARB): override
+  substitution with compile-failure fallback, retroactive engine-shader archival,
+  per-frame uniform feed (uIeeTime/uIeeEnabled), V5 FBO probe, F10 A/B hotkey.
+
+`src/iee/frame_hook.*`
+
+- Frame boundary via the SDL2 `SDL_GL_SwapWindow` export; drives the probe's
+  per-frame tick.
+
+`src/iee/game/area_texture.*`
+
+- Host-safe packing of WED per-cell overlay flags into an R8 grid for GL upload.
 
 ## Build Layout
 

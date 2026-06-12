@@ -63,9 +63,11 @@ add_library(iee_common STATIC
     src/iee/core/config.cpp
     src/iee/core/logger.cpp
     src/iee/core/pattern_scanner.cpp
+    src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp
     src/iee/game/game_addrs.cpp
     src/iee/game/resref_runtime.cpp
+    src/iee/game/shader_override.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
     src/iee/game/tis_runtime.cpp
@@ -94,9 +96,14 @@ if(IEE_BUILD_WINDOWS_DLL)
     FetchContent_MakeAvailable(minhook)
 
     add_library(InfinityEngine-Enhancer SHARED
+        src/iee/area_state.cpp
+        src/iee/diagnostics.cpp
         src/iee/dll_main.cpp
         src/iee/exports.cpp
+        src/iee/features/tile_render.cpp
+        src/iee/frame_hook.cpp
         src/iee/hooks.cpp
+        src/iee/shader_probe.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
     )
@@ -107,6 +114,7 @@ if(IEE_BUILD_WINDOWS_DLL)
             minhook
             psapi
             opengl32
+            dbghelp
     )
 
     target_compile_definitions(InfinityEngine-Enhancer
@@ -126,6 +134,8 @@ if(IEE_BUILD_WINDOWS_DLL)
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:InfinityEngine-Enhancer>" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.dll"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/shaders" "${IEE_RELEASE_BUNDLE_DIR}/iee-shaders"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-override" "${IEE_RELEASE_BUNDLE_DIR}/game-override"
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )
