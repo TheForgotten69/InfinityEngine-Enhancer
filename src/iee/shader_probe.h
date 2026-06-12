@@ -29,5 +29,7 @@ namespace iee::probe {
     void set_area_world_size(float widthPx, float heightPx) noexcept;
 
     // Published by tile_render per tile draw; consumed by the uniform feed.
-    void set_area_scroll_zoom(float scrollX, float scrollY, float zoom) noexcept;
+    // viewWorldW/H = rViewPort size (world px visible); the feed derives the
+    // physical-per-world zoom from the live GL viewport.
+    void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept;
 }

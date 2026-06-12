@@ -125,7 +125,11 @@ namespace iee::probe {
         std::atomic<float> g_worldHeightPx{0.0f};
         std::atomic<float> g_scrollX{0.0f};
         std::atomic<float> g_scrollY{0.0f};
-        std::atomic<float> g_zoom{1.0f};
+        // rViewPort size in world px; physical-per-world zoom is derived
+        // against the live GL viewport at feed time (the engine's own screen
+        // coords are UI-scaled logical px — confirmed live 2026-06-13).
+        std::atomic<float> g_viewWorldW{0.0f};
+        std::atomic<float> g_viewWorldH{0.0f};
         // Diagnostics: how often the feed actually runs (stale-uniform check).
         std::atomic<unsigned> g_feedCount{0};
         // Effect gate fed to uIeeEnabled (0=off, 1=on, 2=alignment debug) and,
@@ -911,12 +915,21 @@ namespace iee::probe {
                                g_scrollX.load(std::memory_order_relaxed),
                                g_scrollY.load(std::memory_order_relaxed));
             }
-            if (locs.zoom >= 0) {
-                gl.glUniform1f(locs.zoom, g_zoom.load(std::memory_order_relaxed));
-            }
-            if (locs.viewport >= 0 && gl.glUniform2f && gl.glGetIntegerv) {
-                int vp[4] = {0, 0, 0, 0};
+            int vp[4] = {0, 0, 0, 0};
+            if (gl.glGetIntegerv) {
                 gl.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
+            }
+            if (locs.zoom >= 0 && gl.glUniform2f) {
+                // Physical px per world px, per axis: GL viewport / rViewPort size.
+                const float viewW = g_viewWorldW.load(std::memory_order_relaxed);
+                const float viewH = g_viewWorldH.load(std::memory_order_relaxed);
+                if (viewW > 0.0f && viewH > 0.0f && vp[2] > 0 && vp[3] > 0) {
+                    gl.glUniform2f(locs.zoom,
+                                   static_cast<float>(vp[2]) / viewW,
+                                   static_cast<float>(vp[3]) / viewH);
+                }
+            }
+            if (locs.viewport >= 0 && gl.glUniform2f) {
                 gl.glUniform2f(locs.viewport, static_cast<float>(vp[2]), static_cast<float>(vp[3]));
             }
             if (locs.worldSizeInv >= 0 && gl.glUniform2f) {
@@ -1372,11 +1385,12 @@ namespace iee::probe {
             if (glState.glGetIntegerv) {
                 glState.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
             }
-            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), zoom={}, viewport={}x{} at ({}, {}), world={}x{}, feeds={})",
+            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), viewWorld={}x{}, viewport={}x{} at ({}, {}), world={}x{}, feeds={})",
                      next,
                      g_scrollX.load(std::memory_order_relaxed),
                      g_scrollY.load(std::memory_order_relaxed),
-                     g_zoom.load(std::memory_order_relaxed),
+                     g_viewWorldW.load(std::memory_order_relaxed),
+                     g_viewWorldH.load(std::memory_order_relaxed),
                      vp[2], vp[3], vp[0], vp[1],
                      g_worldWidthPx.load(std::memory_order_relaxed),
                      g_worldHeightPx.load(std::memory_order_relaxed),
@@ -1398,10 +1412,11 @@ namespace iee::probe {
         g_worldHeightPx.store(heightPx, std::memory_order_relaxed);
     }
 
-    void set_area_scroll_zoom(float scrollX, float scrollY, float zoom) noexcept {
+    void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept {
         g_scrollX.store(scrollX, std::memory_order_relaxed);
         g_scrollY.store(scrollY, std::memory_order_relaxed);
-        g_zoom.store(zoom > 0.0f ? zoom : 1.0f, std::memory_order_relaxed);
+        g_viewWorldW.store(viewWorldW > 0.0f ? viewWorldW : 0.0f, std::memory_order_relaxed);
+        g_viewWorldH.store(viewWorldH > 0.0f ? viewWorldH : 0.0f, std::memory_order_relaxed);
     }
 
     // endregion

@@ -115,18 +115,23 @@ namespace iee::area {
             return false;
         }
 
-        const float physicalW = static_cast<float>(viewPortNotZoomed.right - viewPortNotZoomed.left);
-        const float zoomedW = static_cast<float>(viewPort.right - viewPort.left);
-        if (physicalW <= 0.0f || zoomedW <= 0.0f) {
+        const float logicalW = static_cast<float>(viewPortNotZoomed.right - viewPortNotZoomed.left);
+        const float logicalH = static_cast<float>(viewPortNotZoomed.bottom - viewPortNotZoomed.top);
+        const float worldW = static_cast<float>(viewPort.right - viewPort.left);
+        const float worldH = static_cast<float>(viewPort.bottom - viewPort.top);
+        if (logicalW <= 0.0f || logicalH <= 0.0f || worldW <= 0.0f || worldH <= 0.0f) {
             return false;
         }
 
-        // zoom = physical px per world px; world = nNew + (screen - physOrigin) / zoom
-        out.zoom = physicalW / zoomedW;
+        // ScreenToWorld in logical px: world = nNew + (logical - rVPNZ.origin) * rVP.size/rVPNZ.size
+        // The rVPNZ.origin shift folds into scroll (in world px); the per-pixel
+        // term is converted to PHYSICAL pixels by the probe at feed time.
+        out.viewWorldW = worldW;
+        out.viewWorldH = worldH;
         out.scrollX = static_cast<float>(newX) -
-                      static_cast<float>(viewPortNotZoomed.left) / out.zoom;
+                      static_cast<float>(viewPortNotZoomed.left) * worldW / logicalW;
         out.scrollY = static_cast<float>(newY) -
-                      static_cast<float>(viewPortNotZoomed.top) / out.zoom;
+                      static_cast<float>(viewPortNotZoomed.top) * worldH / logicalH;
 
         // Debug: raw inputs, rate-limited — pairs with F10 snapshots so the
         // transform arithmetic can be checked exactly against screenshots.
@@ -134,12 +139,12 @@ namespace iee::area {
         const std::uint32_t nowTick = GetTickCount();
         if (nowTick - s_lastLogTick > 5000) {
             s_lastLogTick = nowTick;
-            LOG_INFO("ViewXform raw: nNew=({}, {}) rVP=({}, {}, {}, {}) rVPNZ=({}, {}, {}, {}) -> scroll=({}, {}) zoom={}",
+            LOG_INFO("ViewXform raw: nNew=({}, {}) rVP=({}, {}, {}, {}) rVPNZ=({}, {}, {}, {}) -> scroll=({}, {}) viewWorld={}x{}",
                      newX, newY,
                      viewPort.left, viewPort.top, viewPort.right, viewPort.bottom,
                      viewPortNotZoomed.left, viewPortNotZoomed.top,
                      viewPortNotZoomed.right, viewPortNotZoomed.bottom,
-                     out.scrollX, out.scrollY, out.zoom);
+                     out.scrollX, out.scrollY, out.viewWorldW, out.viewWorldH);
         }
         return true;
     }

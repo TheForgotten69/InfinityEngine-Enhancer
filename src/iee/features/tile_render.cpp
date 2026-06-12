@@ -185,7 +185,8 @@ namespace iee::features {
             const auto *activeArea = ctx.activeArea.load();
             area::ViewTransform view{};
             if (area::read_view_transform(activeArea, view)) {
-                probe::set_area_scroll_zoom(view.scrollX, view.scrollY, view.zoom);
+                probe::set_area_view(view.scrollX, view.scrollY,
+                                     view.viewWorldW, view.viewWorldH);
             }
         }
 

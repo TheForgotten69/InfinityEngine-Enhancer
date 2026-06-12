@@ -19,13 +19,16 @@ namespace iee::area {
     bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom);
 
     // The engine's exact screen->world affine transform, replicated from the
-    // decompiled CInfinity::ScreenToWorld:
-    //   world = nNew + rViewPort.size/rViewPortNotZoomed.size * (screen - rViewPortNotZoomed.origin)
-    // expressed for the shader's `world = scroll + screen/zoom` model.
+    // decompiled CInfinity::ScreenToWorld — expressed resolution-independently:
+    // the engine's "screen" coords are UI-SCALED LOGICAL pixels (rViewPortNotZoomed
+    // is the logical window, e.g. 2364x1314 inside a 3840x2135 GL viewport), so
+    // the only safe currency for the shader is the view's WORLD-pixel size:
+    //   world = scroll + physicalPx * viewWorldSize / physicalViewportSize
     struct ViewTransform {
         float scrollX{};
         float scrollY{};
-        float zoom{1.0f};
+        float viewWorldW{};  // rViewPort.width  (world px visible)
+        float viewWorldH{};  // rViewPort.height
     };
 
     bool read_view_transform(const game::CGameArea *area, ViewTransform &out);

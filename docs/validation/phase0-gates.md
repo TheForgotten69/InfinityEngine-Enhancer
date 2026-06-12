@@ -267,3 +267,18 @@ Verdicts:
 - Fixed: `read_view_transform` replicates the engine formula exactly from
   `nNewX/nNewY` + the two viewport rects (fields added to CInfinity with
   static_asserts at +0x60/+0x68/+0x78). No scale guessing remains.
+
+### Phase 2 session v6 findings (2026-06-13) — UI-scale root cause
+
+- Feeds counter: ~54/s = per-frame; stale-uniform hypothesis eliminated.
+- **Root cause found in the raw rects**: `rVPNZ=(0,0,2364,1314)` vs GL viewport
+  3840x2135 — the engine's "screen" coordinates are **UI-scaled logical
+  pixels** (factor ~1.624), not physical pixels. ScreenToWorld speaks logical;
+  gl_FragCoord speaks physical; the shader mixed them.
+- Fixed: the publish path now carries the view's WORLD size (rViewPort.size);
+  the feed derives per-axis physical-per-world zoom against the live GL
+  viewport (uIeeZoom is now a vec2). Resolution/UI-scale independent.
+- Classification note (user concern): flags are NOT all-overlays — they come
+  from resref-prefix classification (WTWAVE/WTRIV/WTPOOL/WTLAK/WTFALL/WTURN/
+  YSPOOL/YSRIV/YSWAVE -> water; WTLAVA/WTGOO/WTSEW/WTSW -> other modes).
+  Base-TIS-painted water remains uncovered (Phase 2.5).

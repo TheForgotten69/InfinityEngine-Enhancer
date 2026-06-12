@@ -18,7 +18,7 @@ uniform highp	vec4		uColorTone;
 uniform highp	float		uIeeEnabled;       // 0/1 master gate (F10)
 uniform highp	float		uIeeTime;          // seconds
 uniform highp	vec2		uIeeScroll;        // world px of viewport origin
-uniform highp	float		uIeeZoom;          // world->screen scale
+uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: liquid mode per WED cell
@@ -88,7 +88,7 @@ void main()
 	// World position of this fragment: gl_FragCoord is physical pixels with a
 	// bottom-left origin; the engine's world is top-left, scaled by zoom.
 	vec2 screenPx = vec2(gl_FragCoord.x, uIeeViewport.y - gl_FragCoord.y);
-	vec2 worldPos = uIeeScroll + screenPx / max(uIeeZoom, 0.0001);
+	vec2 worldPos = uIeeScroll + screenPx / max(uIeeZoom, vec2(0.0001, 0.0001));
 
 	// Liquid mode of the WED cell under this fragment (R8: 0..5 -> 0..5/255).
 	float cellMode = 0.0;
