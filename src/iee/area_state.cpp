@@ -127,6 +127,20 @@ namespace iee::area {
                       static_cast<float>(viewPortNotZoomed.left) / out.zoom;
         out.scrollY = static_cast<float>(newY) -
                       static_cast<float>(viewPortNotZoomed.top) / out.zoom;
+
+        // Debug: raw inputs, rate-limited — pairs with F10 snapshots so the
+        // transform arithmetic can be checked exactly against screenshots.
+        static std::uint32_t s_lastLogTick = 0;
+        const std::uint32_t nowTick = GetTickCount();
+        if (nowTick - s_lastLogTick > 5000) {
+            s_lastLogTick = nowTick;
+            LOG_INFO("ViewXform raw: nNew=({}, {}) rVP=({}, {}, {}, {}) rVPNZ=({}, {}, {}, {}) -> scroll=({}, {}) zoom={}",
+                     newX, newY,
+                     viewPort.left, viewPort.top, viewPort.right, viewPort.bottom,
+                     viewPortNotZoomed.left, viewPortNotZoomed.top,
+                     viewPortNotZoomed.right, viewPortNotZoomed.bottom,
+                     out.scrollX, out.scrollY, out.zoom);
+        }
         return true;
     }
 

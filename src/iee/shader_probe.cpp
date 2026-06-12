@@ -126,6 +126,8 @@ namespace iee::probe {
         std::atomic<float> g_scrollX{0.0f};
         std::atomic<float> g_scrollY{0.0f};
         std::atomic<float> g_zoom{1.0f};
+        // Diagnostics: how often the feed actually runs (stale-uniform check).
+        std::atomic<unsigned> g_feedCount{0};
         // Effect gate fed to uIeeEnabled (0=off, 1=on, 2=alignment debug) and,
         // thresholded, to the legacy liquid uniforms. Starts OFF.
         std::atomic<float> g_overrideEffectValue{0.0f};
@@ -884,6 +886,7 @@ namespace iee::probe {
             }
 
             // Feed values — program is currently bound (we are post-original in glUseProgram)
+            g_feedCount.fetch_add(1, std::memory_order_relaxed);
             const float timeValue = g_uniformTime.load(std::memory_order_relaxed);
             const float enabledValue = g_overrideEffectValue.load(std::memory_order_relaxed);
             if (locs.time >= 0) {
@@ -1369,14 +1372,15 @@ namespace iee::probe {
             if (glState.glGetIntegerv) {
                 glState.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
             }
-            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), zoom={}, viewport={}x{} at ({}, {}), world={}x{})",
+            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), zoom={}, viewport={}x{} at ({}, {}), world={}x{}, feeds={})",
                      next,
                      g_scrollX.load(std::memory_order_relaxed),
                      g_scrollY.load(std::memory_order_relaxed),
                      g_zoom.load(std::memory_order_relaxed),
                      vp[2], vp[3], vp[0], vp[1],
                      g_worldWidthPx.load(std::memory_order_relaxed),
-                     g_worldHeightPx.load(std::memory_order_relaxed));
+                     g_worldHeightPx.load(std::memory_order_relaxed),
+                     g_feedCount.load(std::memory_order_relaxed));
         }
         f10WasDown = f10Down;
     }
