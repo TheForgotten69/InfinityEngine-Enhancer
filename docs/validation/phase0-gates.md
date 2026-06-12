@@ -188,3 +188,34 @@ flashes magenta (whole scene during play? movies only? the final window blit
 when scaled?).
 
 Verdict: `fpCatRom covers <X>` — decides whether the fpCatRom replacement ships.
+
+---
+
+## Phase 2 session — WED-masked water
+
+Build: `<sha>`. Install the bundle DLL + copy `game-override/fpSEAM.glsl` into
+the game `override/`. `EnableDebugHotkeys = true`. Use an area with water
+(coast/river/harbor — check the log: `liquidOverlayMask` must be non-zero;
+AR2300N was 0x00).
+
+1. Load the area. Expect `Area liquid texture uploaded: WxH (unit 2, tex N)`
+   and `Program 24 registered for uniform feed`.
+2. F10 once (ON): water cells animate; land cells must be pixel-identical.
+3. F10 again (ALIGN): liquid cells tint red. Walk the shoreline — the red
+   region must hug the actual water edge. **Repeat while zoomed in and out**
+   (this also verifies the zoom term of the world-position equation, and
+   would expose any FBO-resolution mismatch). If offset: note the direction,
+   whether zoom changes it, screenshot, report.
+4. F10 again (OFF): everything back to vanilla.
+5. Scroll and zoom during ON: waves must stay glued to the world (no swimming
+   against the scroll), continuous across tile boundaries; edges of tiles show
+   damped (still) water in a ~3px band — expected, not a bug.
+6. Pause during ON: grey tone must still apply over the water.
+7. Evidence: log + screenshots/clip per state.
+
+Verdicts:
+- Upload/registration: PASS/FAIL
+- Alignment (incl. zoomed): PASS/FAIL (+offset notes)
+- Water visuals: notes (incl. whether the world-space glints read as sparkle
+  or blocky pop — cosmetic judgment call)
+- Regression (land tiles, fonts, sprites, pause): PASS/FAIL
