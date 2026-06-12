@@ -239,3 +239,16 @@ Verdicts:
   center semantics (fix is a CPU-side subtract).
 - Classification quality (fountains/yspool unlit, base-TIS sea unflagged) is
   Phase 2.5: per-tile resref + pixel masks via tile_liquid machinery.
+
+### Phase 2 session v3 findings (2026-06-12)
+
+- `m_ptCurrentPosExact` raw values are ~14.2e6 — **16.16 fixed point** (the
+  `bSetExactScale` parameter of `SetViewPosition` names the scaling; EEex docs
+  give no multiplier). Geometry bounds the scale to >>16 (view x≈217, NW
+  citadel ✓) or /10000 (x≈1422); >>16 shipped as the IE-standard prior.
+- The uniform red wash + global waviness in v3 = mask UV in the thousands
+  clamping to the far-edge texel; expected symptom, not a new bug.
+- **v4 must include the scale delta-test**: press F10 (note scroll in log),
+  scroll the camera right by roughly one screen width, press F10 again. The
+  scroll-x delta should be ≈ viewportWidth/zoom (≈3555 at 3840/1.08). If the
+  delta is ~6.5x smaller (~542), the true scale is /10000 — one-line fix.

@@ -76,9 +76,10 @@ namespace iee::area {
         }
 
         // m_ptCurrentPosExact is the smooth-scroll world position of the view
-        // (layout-asserted at CInfinity+0x2F4). nOffsetX/Y is only the
-        // within-tile remainder (0..63) — live-confirmed 2026-06-12: it never
-        // exceeded 63 while the citadel view needed scroll in the thousands.
+        // (layout-asserted at CInfinity+0x2F4), stored in 16.16 fixed point —
+        // SetViewPosition's bSetExactScale parameter names the scaling, and the
+        // live raw values (~14.2e6 for a view needing x in the hundreds) bound
+        // the scale to >>16. nOffsetX/Y is only the within-tile remainder.
         const auto *base = reinterpret_cast<const std::byte *>(area);
         const auto *posAddr = base + offsetof(game::CGameArea, m_cInfinity) +
                               offsetof(game::CInfinity, m_ptCurrentPosExact);
@@ -86,8 +87,8 @@ namespace iee::area {
         if (!core::safe_read(posAddr, pos)) {
             return false;
         }
-        outOffsetX = pos.x;
-        outOffsetY = pos.y;
+        outOffsetX = pos.x >> 16;
+        outOffsetY = pos.y >> 16;
         return true;
     }
 
