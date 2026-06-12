@@ -171,31 +171,14 @@ void main()
 		return;
 	}
 
-	vec2 sampleTc = vTc;
-	float waveH = 0.0;
-	if (cellMode > 0.5)
-	{
-		float t = uIeeTime;
-		waveH = ieeWaveHeight(worldPos, t);
-
-		// Refraction-style distortion from the wave field (continuous across
-		// tiles), damped to zero near tile edges so the +-texel reach never
-		// crosses into a neighboring (non-adjacent-in-world) atlas tile.
-		vec2 distort;
-		distort.x = ieeWaveHeight(worldPos + vec2(13.0, 0.0), t) - waveH;
-		distort.y = ieeWaveHeight(worldPos + vec2(0.0, 13.0), t) - waveH;
-		vec2 unb     = vTc / uTcScale;
-		vec2 tileLoc = mod(unb - vRef / uTcScale, 64.0);
-		vec2 edge    = min(tileLoc, 64.0 - tileLoc);
-		float damp   = smoothstep(0.0, 4.0, min(edge.x, edge.y));
-		sampleTc = vTc + distort * uTcScale * 9.0 * damp;
-	}
-
-	vec4 texColor = seamSample(sampleTc);
+	// Water cells are fully shader-generated; the texture sample only carries
+	// the tile alpha (and the land path, where it is everything).
+	vec4 texColor = seamSample(vTc);
 
 	if (cellMode > 0.5)
 	{
 		float t = uIeeTime;
+		float waveH = ieeWaveHeight(worldPos, t);
 
 		// Surface normal from the height field (finite differences).
 		float hx = ieeWaveHeight(worldPos + vec2(6.0, 0.0), t) - waveH;
@@ -228,9 +211,13 @@ void main()
 		vec3 water = mix(deepColor, shallowColor, depthMix);
 		water *= 0.75 + 0.45 * diffuse;
 
-		// Keep a measure of the authored art for painted detail (rocks, boats,
-		// art shading) refracted through the distorted sample.
-		water = mix(water, texColor.rgb * (0.85 + 0.30 * diffuse), 0.35);
+		// Full replacement: none of the authored water survives. Large-scale
+		// patchiness replaces the art's visual variety so open water doesn't
+		// read flat.
+		float patch = ieeNoise(worldPos * 0.011 + vec2(t * 0.012, -t * 0.008));
+		water = mix(water, mix(deepColor, shallowColor, patch), 0.30);
+		float patch2 = ieeNoise(worldPos * 0.004);
+		water *= 0.88 + 0.24 * patch2;
 
 		// Animated shoreline foam: a noisy band that breathes against the land.
 		float foamBand = smoothstep(0.55, 0.95, shore + 0.18 * sin(t * 1.4 + waveH * 9.0));
