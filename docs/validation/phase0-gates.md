@@ -282,3 +282,11 @@ Verdicts:
   from resref-prefix classification (WTWAVE/WTRIV/WTPOOL/WTLAK/WTFALL/WTURN/
   YSPOOL/YSRIV/YSWAVE -> water; WTLAVA/WTGOO/WTSEW/WTSW -> other modes).
   Base-TIS-painted water remains uncovered (Phase 2.5).
+
+### Phase 2 session v7 (2026-06-13) — ALIGNMENT PASS
+
+- Gradient glued to the world under scroll and zoom; blue mask cells hug the
+  shoreline; water mode styles only liquid cells. The world transform is
+  correct end to end (engine formula + UI-scale bridge).
+- Visual quality is explicitly NOT a pass yet: the current effect is a subtle
+  swell/tint over existing art — the styling pass comes next.
