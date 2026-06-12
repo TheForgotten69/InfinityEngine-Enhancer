@@ -123,19 +123,30 @@ float ieeLiquidAt(vec2 worldPos)
 	return mode > 0.5 ? 1.0 : 0.0;
 }
 
+// Continuous liquid coverage: manual bilinear over the 64px cell grid.
+// 1 deep inside water, 0 on land, smooth curve through shoreline cells —
+// the "one surface" field that kills the per-cell squares.
+float ieeCoverage(vec2 worldPos)
+{
+	vec2 cell = worldPos / 64.0 - 0.5;
+	vec2 base = (floor(cell) + 0.5) * 64.0;
+	vec2 f = fract(cell);
+	float c00 = ieeLiquidAt(base);
+	float c10 = ieeLiquidAt(base + vec2(64.0, 0.0));
+	float c01 = ieeLiquidAt(base + vec2(0.0, 64.0));
+	float c11 = ieeLiquidAt(base + vec2(64.0, 64.0));
+	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+}
+
 // Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
 float ieeShoreFactor(vec2 worldPos)
 {
-	float cover = ieeLiquidAt(worldPos) * 2.0;
-	cover += ieeLiquidAt(worldPos + vec2( 44.0, 0.0));
-	cover += ieeLiquidAt(worldPos + vec2(-44.0, 0.0));
-	cover += ieeLiquidAt(worldPos + vec2(0.0,  44.0));
-	cover += ieeLiquidAt(worldPos + vec2(0.0, -44.0));
-	cover += ieeLiquidAt(worldPos + vec2( 31.0,  31.0));
-	cover += ieeLiquidAt(worldPos + vec2(-31.0,  31.0));
-	cover += ieeLiquidAt(worldPos + vec2( 31.0, -31.0));
-	cover += ieeLiquidAt(worldPos + vec2(-31.0, -31.0));
-	return 1.0 - clamp((cover - 2.0) / 8.0, 0.0, 1.0);
+	float cover = ieeCoverage(worldPos) * 2.0;
+	cover += ieeCoverage(worldPos + vec2( 44.0, 0.0));
+	cover += ieeCoverage(worldPos + vec2(-44.0, 0.0));
+	cover += ieeCoverage(worldPos + vec2(0.0,  44.0));
+	cover += ieeCoverage(worldPos + vec2(0.0, -44.0));
+	return 1.0 - clamp((cover - 1.0) / 5.0, 0.0, 1.0);
 }
 
 void main()
@@ -171,11 +182,17 @@ void main()
 		return;
 	}
 
-	// Water cells are fully shader-generated; the texture sample only carries
-	// the tile alpha (and the land path, where it is everything).
 	vec4 texColor = seamSample(vTc);
 
-	if (cellMode > 0.5)
+	// Continuous coverage drives a soft replacement: the water is one surface
+	// whose boundary curves through shoreline cells (no per-cell squares).
+	float coverage = 0.0;
+	if (uIeeEnabled > 0.5)
+	{
+		coverage = ieeCoverage(worldPos);
+	}
+
+	if (coverage > 0.02)
 	{
 		float t = uIeeTime;
 		float waveH = ieeWaveHeight(worldPos, t);
@@ -193,15 +210,25 @@ void main()
 		vec3 halfVec = normalize(lightDir + viewDir);
 		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 48.0);
 
-		// Per-mode water body palette (deep, shallow) + foam color.
-		vec3 deepColor    = vec3(0.05, 0.15, 0.27);
-		vec3 shallowColor = vec3(0.13, 0.34, 0.45);
-		vec3 foamColor    = vec3(0.82, 0.90, 0.93);
+		// Palette derived from the AUTHORED art so every body of water keeps
+		// its area's painted character (sea teal, river brown, ...): the art
+		// color is graded into deep and shallow tones instead of hardcoding.
+		vec3 artColor = texColor.rgb;
+		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
+		// Normalize the art tone so dark night pixels still yield a usable hue.
+		vec3 artTone = artColor / max(artLuma, 0.06);
+		vec3 deepColor    = artTone * 0.10;
+		vec3 shallowColor = artTone * 0.32;
+		vec3 foamColor    = mix(vec3(0.88), artTone * 0.9, 0.25);
 		float emissive    = 0.0;
-		if (cellMode > 4.5)      { deepColor = vec3(0.10, 0.16, 0.07); shallowColor = vec3(0.22, 0.30, 0.12); foamColor = vec3(0.55, 0.62, 0.40); } // swamp
-		else if (cellMode > 3.5) { deepColor = vec3(0.18, 0.16, 0.05); shallowColor = vec3(0.34, 0.30, 0.10); foamColor = vec3(0.62, 0.58, 0.38); } // sewage
-		else if (cellMode > 2.5) { deepColor = vec3(0.07, 0.18, 0.05); shallowColor = vec3(0.16, 0.34, 0.10); foamColor = vec3(0.55, 0.72, 0.42); } // goo
-		else if (cellMode > 1.5) { deepColor = vec3(0.32, 0.04, 0.00); shallowColor = vec3(0.85, 0.28, 0.02); foamColor = vec3(1.00, 0.78, 0.25); emissive = 0.5; } // lava
+		if (cellMode > 1.5 && cellMode < 2.5)
+		{
+			// Lava keeps an authored-orange emissive identity.
+			deepColor = vec3(0.32, 0.04, 0.00);
+			shallowColor = vec3(0.85, 0.28, 0.02);
+			foamColor = vec3(1.00, 0.78, 0.25);
+			emissive = 0.5;
+		}
 
 		// Shore proximity: brightens shallows and drives the foam band.
 		float shore = ieeShoreFactor(worldPos);
@@ -211,16 +238,14 @@ void main()
 		vec3 water = mix(deepColor, shallowColor, depthMix);
 		water *= 0.75 + 0.45 * diffuse;
 
-		// Full replacement: none of the authored water survives. Large-scale
-		// patchiness replaces the art's visual variety so open water doesn't
-		// read flat.
+		// Large-scale patchiness so open water does not read flat.
 		float patch = ieeNoise(worldPos * 0.011 + vec2(t * 0.012, -t * 0.008));
 		water = mix(water, mix(deepColor, shallowColor, patch), 0.30);
 		float patch2 = ieeNoise(worldPos * 0.004);
 		water *= 0.88 + 0.24 * patch2;
 
 		// Animated shoreline foam: a noisy band that breathes against the land.
-		float foamBand = smoothstep(0.55, 0.95, shore + 0.18 * sin(t * 1.4 + waveH * 9.0));
+		float foamBand = smoothstep(0.50, 0.92, shore + 0.18 * sin(t * 1.4 + waveH * 9.0));
 		float foamNoise = ieeNoise(worldPos * 0.22 + vec2(t * 0.35, -t * 0.2));
 		float foam = foamBand * smoothstep(0.35, 0.75, foamNoise);
 		// Crest foam: thin caps on the highest waves, away from shore too.
@@ -235,7 +260,10 @@ void main()
 			water += deepColor * emissive * (0.6 + 0.8 * pulse);
 		}
 
-		texColor.rgb = water;
+		// Soft replacement by coverage: full water inside the body, a smooth
+		// blend through the boundary cells, untouched land beyond.
+		float waterAlpha = smoothstep(0.25, 0.7, coverage);
+		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
 	}
 
 	texColor = texColor * vColor;
