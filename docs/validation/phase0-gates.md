@@ -290,3 +290,19 @@ Verdicts:
   correct end to end (engine formula + UI-scale bridge).
 - Visual quality is explicitly NOT a pass yet: the current effect is a subtle
   swell/tint over existing art — the styling pass comes next.
+
+### Phase 2 session v12 post-mortem (2026-06-13)
+
+- v12 (publish from the frame tick) broke ALL maps: water everywhere,
+  tracking zoom. Decompile root cause: `AdjustViewportForZoom` recomputes
+  `rViewPort = rViewPortNotZoomed * m_fZoom` transiently around the world
+  pass — at SwapBuffers time the rects are not the render-time values, so the
+  published transform was junk. Reverted.
+- v13 fix: publish from the existing DrawColorTone hook when mode == Seam (8)
+  — the engine routes its tile pass through DrawColorTone on every map type
+  (decompile: CInfinity::Render calls DrawColorTone at 464958; sprite/font
+  tones at 301145/245924), so the publish runs mid-world-pass with coherent
+  rects, before the fpSEAM bind that consumes the values. Zero new RVAs.
+- Bonus V1 closure: DRAW_TONE_SPRITE / DRAW_TONE_FONT / DRAW_TONE_GREY /
+  DRAW_TONE_NORMAL constants in the decompile confirm DrawColorTone selects
+  per-draw-type programs.
