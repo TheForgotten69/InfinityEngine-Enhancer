@@ -75,10 +75,20 @@ namespace iee::area {
             return false;
         }
 
+        // m_ptCurrentPosExact is the smooth-scroll world position of the view
+        // (layout-asserted at CInfinity+0x2F4). nOffsetX/Y is only the
+        // within-tile remainder (0..63) — live-confirmed 2026-06-12: it never
+        // exceeded 63 while the citadel view needed scroll in the thousands.
         const auto *base = reinterpret_cast<const std::byte *>(area);
-        const auto *offsetXAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetX);
-        const auto *offsetYAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetY);
-        return core::safe_read(offsetXAddr, outOffsetX) && core::safe_read(offsetYAddr, outOffsetY);
+        const auto *posAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                              offsetof(game::CInfinity, m_ptCurrentPosExact);
+        game::CPoint pos{};
+        if (!core::safe_read(posAddr, pos)) {
+            return false;
+        }
+        outOffsetX = pos.x;
+        outOffsetY = pos.y;
+        return true;
     }
 
     bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom) {

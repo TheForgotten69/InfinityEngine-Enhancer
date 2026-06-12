@@ -12,7 +12,7 @@ namespace iee::area {
     // manifest's CInfGame offsets (visible area index -> areas array -> master area).
     const game::CGameArea *resolve_active_area(void *infGame, const game::BuildManifest &manifest);
 
-    // Reads the area's CInfinity scroll offsets via safe_read.
+    // Reads the view's world position (CInfinity::m_ptCurrentPosExact) via safe_read.
     bool read_area_scroll(const game::CGameArea *area, int &outOffsetX, int &outOffsetY);
 
     // Reads CInfinity::m_fZoom via the manifest offset (EEex docs +0x484).

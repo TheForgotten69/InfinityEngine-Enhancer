@@ -219,3 +219,23 @@ Verdicts:
 - Water visuals: notes (incl. whether the world-space glints read as sparkle
   or blocky pop — cosmetic judgment call)
 - Regression (land tiles, fonts, sprites, pause): PASS/FAIL
+
+### Phase 2 session v2 findings (2026-06-12, AR2600)
+
+- Gradient debug + F10 value snapshots worked exactly as designed: the log
+  showed `scroll=(3, 8)`/`(17, 1)`/`(14, 60)` for a citadel view that needs
+  thousands — **`nOffsetX/Y` is the within-tile smooth-scroll remainder
+  (0..63), not the world view position.** The mask was anchored to the screen.
+  Fixed: `read_area_scroll` now reads `m_ptCurrentPosExact` (CInfinity+0x2F4,
+  layout-asserted).
+- The "styling matched particles" observation: coincidence of screen position
+  — with near-zero scroll the mask sampled the map's NW cells regardless of
+  where the camera was.
+- Viewport confirmed sane: full-window `3840x2135 at (0, 0)`; zoom values
+  plausible (1.08, 1.30). The y-flip/zoom terms remain to be confirmed by the
+  next gradient screenshot.
+- OPEN: `m_ptCurrentPosExact` may be the view's top-left or its center. The
+  v3 gradient screenshot decides: a half-viewport shift in the gradient =
+  center semantics (fix is a CPU-side subtract).
+- Classification quality (fountains/yspool unlit, base-TIS sea unflagged) is
+  Phase 2.5: per-tile resref + pixel masks via tile_liquid machinery.
