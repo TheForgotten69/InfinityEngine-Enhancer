@@ -22,6 +22,9 @@ uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: liquid mode per WED cell
+uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
+uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
+uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
 
 varying highp	vec2		vTc;
 varying highp	vec2		vRef;
@@ -105,15 +108,18 @@ float ieeNoise(vec2 p)
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Animated 3-octave wave height field. Two drifting layers kill repetition.
-float ieeWaveHeight(vec2 worldPos, float t)
+// Water surface normal from two drifting layers of the tiling normal map.
+// Different scales + opposite drift kill visible repetition.
+vec3 ieeWaterNormal(vec2 worldPos, float t)
 {
-	vec2 p = worldPos * 0.035;
-	float h = 0.0;
-	h += 0.55 * ieeNoise(p + vec2(t * 0.06, t * 0.045));
-	h += 0.30 * ieeNoise(p * 2.3 - vec2(t * 0.085, t * 0.03));
-	h += 0.15 * ieeNoise(p * 5.1 + vec2(t * 0.12, -t * 0.09));
-	return h;
+	vec2 drift1 = vec2(t * 3.1, t * 2.2);
+	vec2 drift2 = vec2(-t * 4.4, t * 1.6);
+	// DuDv jitter breaks up the linear scroll so the layers feel fluid.
+	vec2 dudv = texture2D(uIeeDudvMap, worldPos / 384.0 + vec2(t * 0.015, -t * 0.01)).rg * 2.0 - 1.0;
+	vec3 n1 = texture2D(uIeeNormalMap, (worldPos + drift1 + dudv * 9.0) / 256.0).rgb * 2.0 - 1.0;
+	vec3 n2 = texture2D(uIeeNormalMap, (worldPos + drift2 - dudv * 6.0) / 117.0).rgb * 2.0 - 1.0;
+	vec3 n = vec3(n1.xy + n2.xy * 0.6, n1.z * n2.z);
+	return normalize(vec3(n.x, n.y, max(n.z, 0.3) * 2.2));
 }
 
 // Liquid coverage (0 = land, 1 = liquid) at a world position.
@@ -195,12 +201,9 @@ void main()
 	if (coverage > 0.02)
 	{
 		float t = uIeeTime;
-		float waveH = ieeWaveHeight(worldPos, t);
-
-		// Surface normal from the height field (finite differences).
-		float hx = ieeWaveHeight(worldPos + vec2(6.0, 0.0), t) - waveH;
-		float hy = ieeWaveHeight(worldPos + vec2(0.0, 6.0), t) - waveH;
-		vec3 normal = normalize(vec3(-hx * 4.0, -hy * 4.0, 1.0));
+		vec3 normal = ieeWaterNormal(worldPos, t);
+		// Wave "height" proxy from the normal's tilt: drives depth + caps.
+		float waveH = clamp(0.5 + (normal.x + normal.y) * 1.4, 0.0, 1.0);
 
 		// IE shadows fall toward the lower-left: light comes from the top-right.
 		vec3 lightDir = normalize(vec3(0.45, -0.6, 0.66));
@@ -208,7 +211,7 @@ void main()
 		// Specular: tight highlight for sun glitter on wave crests.
 		vec3 viewDir = vec3(0.0, 0.0, 1.0);
 		vec3 halfVec = normalize(lightDir + viewDir);
-		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 48.0);
+		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 64.0);
 
 		// Palette derived from the AUTHORED art so every body of water keeps
 		// its area's painted character (sea teal, river brown, ...): the art
@@ -246,13 +249,13 @@ void main()
 		float patch2 = ieeNoise(worldPos * 0.004);
 		water *= 0.88 + 0.24 * patch2;
 
-		// Animated shoreline foam: a noisy band that breathes against the land.
-		float foamBand = smoothstep(0.62, 0.95, shore + 0.15 * sin(t * 1.4 + waveH * 9.0));
-		float foamNoise = ieeNoise(worldPos * 0.22 + vec2(t * 0.35, -t * 0.2));
-		float foam = foamBand * smoothstep(0.40, 0.78, foamNoise);
-		// Crest foam: thin caps on the highest waves, away from shore too.
-		foam += smoothstep(0.78, 0.92, waveH) * 0.5;
-		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.7);
+		// Animated shoreline foam from the foam texture, breathing on the band.
+		float foamBand = smoothstep(0.60, 0.95, shore + 0.12 * sin(t * 1.3 + waveH * 6.0));
+		float foamTex = texture2D(uIeeFoamMap, (worldPos + vec2(t * 6.0, -t * 4.0)) / 220.0).r;
+		float foam = foamBand * smoothstep(0.30, 0.85, foamTex);
+		// Crest foam: texture-shaped caps on the most tilted waves.
+		foam += smoothstep(0.80, 0.95, waveH) * foamTex * 0.7;
+		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.75);
 
 		// Sun glitter + lava glow.
 		water += spec * mix(0.35, 0.9, waveH);

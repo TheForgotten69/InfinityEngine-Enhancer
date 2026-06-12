@@ -104,6 +104,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/frame_hook.cpp
         src/iee/hooks.cpp
         src/iee/shader_probe.cpp
+        src/iee/water_textures.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
     )
@@ -136,6 +137,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/shaders" "${IEE_RELEASE_BUNDLE_DIR}/iee-shaders"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-override" "${IEE_RELEASE_BUNDLE_DIR}/game-override"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-textures" "${IEE_RELEASE_BUNDLE_DIR}/iee-textures"
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )

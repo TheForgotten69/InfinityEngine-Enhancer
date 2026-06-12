@@ -24,6 +24,7 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/game/opengl_types.h"
 #include "iee/game/shader_override.h"
+#include "iee/water_textures.h"
 
 namespace iee::probe {
     namespace {
@@ -69,6 +70,9 @@ namespace iee::probe {
             int viewport{-2};      // uIeeViewport (vec2, physical px)
             int worldSizeInv{-2};  // uIeeWorldSizeInv (vec2, 1/world px)
             int areaMask{-2};      // uIeeAreaMask (sampler2D -> unit 2)
+            int normalMap{-2};     // uIeeNormalMap (sampler2D -> unit 3)
+            int dudvMap{-2};       // uIeeDudvMap (sampler2D -> unit 4)
+            int foamMap{-2};       // uIeeFoamMap (sampler2D -> unit 5)
         };
         // endregion
 
@@ -879,6 +883,9 @@ namespace iee::probe {
             if (locs.viewport == -2)     locs.viewport     = gl.glGetUniformLocation(program, "uIeeViewport");
             if (locs.worldSizeInv == -2) locs.worldSizeInv = gl.glGetUniformLocation(program, "uIeeWorldSizeInv");
             if (locs.areaMask == -2)     locs.areaMask     = gl.glGetUniformLocation(program, "uIeeAreaMask");
+            if (locs.normalMap == -2)    locs.normalMap    = gl.glGetUniformLocation(program, "uIeeNormalMap");
+            if (locs.dudvMap == -2)      locs.dudvMap      = gl.glGetUniformLocation(program, "uIeeDudvMap");
+            if (locs.foamMap == -2)      locs.foamMap      = gl.glGetUniformLocation(program, "uIeeFoamMap");
 
             // Store back resolved locations
             {
@@ -941,6 +948,15 @@ namespace iee::probe {
             }
             if (locs.areaMask >= 0 && gl.glUniform1i) {
                 gl.glUniform1i(locs.areaMask, 2); // reserved unit (area_state upload)
+            }
+            if (locs.normalMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.normalMap, 3);
+            }
+            if (locs.dudvMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.dudvMap, 4);
+            }
+            if (locs.foamMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.foamMap, 5);
             }
         }
         // endregion
@@ -1216,6 +1232,9 @@ namespace iee::probe {
 
             // Dump directory
             g_dumpDir = dllDir / "iee-shader-dumps";
+
+            // Water textures (render thread, context current here).
+            (void) water::load_water_textures(dllDir / "iee-textures");
         }
 #else
         {

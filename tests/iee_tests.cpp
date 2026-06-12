@@ -733,8 +733,8 @@ void test_fpseam_override_asset_contract() {
 
     // Our feed contract.
     for (const std::string_view name :
-         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",
-          "uIeeViewport", "uIeeWorldSizeInv", "uIeeAreaMask"}) {
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeAreaMask",
+          "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
         expect_true(source.find(name) != std::string::npos,
                     "fpSEAM override declares feed uniform");
     }
