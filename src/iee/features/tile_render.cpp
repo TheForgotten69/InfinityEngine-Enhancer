@@ -183,14 +183,9 @@ namespace iee::features {
 
         if (std::atomic_load(&ctx.wed)) {
             const auto *activeArea = ctx.activeArea.load();
-            int offsetX = 0;
-            int offsetY = 0;
-            if (area::read_area_scroll(activeArea, offsetX, offsetY)) {
-                float zoom = 1.0f;
-                (void) area::read_area_zoom(activeArea, *ctx.manifest, zoom);
-                probe::set_area_scroll_zoom(static_cast<float>(offsetX),
-                                            static_cast<float>(offsetY),
-                                            zoom);
+            area::ViewTransform view{};
+            if (area::read_view_transform(activeArea, view)) {
+                probe::set_area_scroll_zoom(view.scrollX, view.scrollY, view.zoom);
             }
         }
 

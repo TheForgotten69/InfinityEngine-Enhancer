@@ -18,6 +18,18 @@ namespace iee::area {
     // Reads CInfinity::m_fZoom via the manifest offset (EEex docs +0x484).
     bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom);
 
+    // The engine's exact screen->world affine transform, replicated from the
+    // decompiled CInfinity::ScreenToWorld:
+    //   world = nNew + rViewPort.size/rViewPortNotZoomed.size * (screen - rViewPortNotZoomed.origin)
+    // expressed for the shader's `world = scroll + screen/zoom` model.
+    struct ViewTransform {
+        float scrollX{};
+        float scrollY{};
+        float zoom{1.0f};
+    };
+
+    bool read_view_transform(const game::CGameArea *area, ViewTransform &out);
+
     // Re-resolves the active area after LoadArea and caches its parsed WED into ctx.
     void refresh_wed_cache(AppContext &ctx, void *infGame);
 }

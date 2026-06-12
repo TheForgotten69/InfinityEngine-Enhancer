@@ -252,3 +252,18 @@ Verdicts:
   scroll the camera right by roughly one screen width, press F10 again. The
   scroll-x delta should be ≈ viewportWidth/zoom (≈3555 at 3840/1.08). If the
   delta is ~6.5x smaller (~542), the true scale is /10000 — one-line fix.
+
+### Phase 2 session v4 findings (2026-06-12) — decompile ground truth
+
+- v4 red blobs mirrored the pool layout — mask data + world size verified
+  correct; only the view transform remained wrong. Zooming moved the read
+  "scroll" the wrong direction, killing the top-left model.
+- **Decompiled ground truth** (user's full Ghidra C export, Baldur.exe.c):
+  - `CInfinity::GetWorldCoordinates`: `world = (nNew - rViewPort.origin) + screen`
+  - `CInfinity::ScreenToWorld`: zoom = rViewPort.size / rViewPortNotZoomed.size
+    applied to (screen - rViewPortNotZoomed.origin), then the same nNew shift.
+  - `CInfinity::Scroll`: `m_ptCurrentPosExact` is **x10000 decimal fixed point**
+    (not 16.16 as v4's build assumed; both prior models superseded).
+- Fixed: `read_view_transform` replicates the engine formula exactly from
+  `nNewX/nNewY` + the two viewport rects (fields added to CInfinity with
+  static_asserts at +0x60/+0x68/+0x78). No scale guessing remains.

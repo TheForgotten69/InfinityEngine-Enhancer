@@ -75,21 +75,17 @@ namespace iee::area {
             return false;
         }
 
-        // m_ptCurrentPosExact is the smooth-scroll world position of the view
-        // (layout-asserted at CInfinity+0x2F4), stored in 16.16 fixed point —
-        // SetViewPosition's bSetExactScale parameter names the scaling, and the
-        // live raw values (~14.2e6 for a view needing x in the hundreds) bound
-        // the scale to >>16. nOffsetX/Y is only the within-tile remainder.
+        // nNewX/nNewY is the view's world position in plain pixels — taken
+        // straight from the decompiled CInfinity::GetWorldCoordinates:
+        //   world = (nNew - rViewPort.origin) + screen
+        // (m_ptCurrentPosExact is the same position in x10000 fixed point,
+        // per the decompiled CInfinity::Scroll; not needed here.)
         const auto *base = reinterpret_cast<const std::byte *>(area);
-        const auto *posAddr = base + offsetof(game::CGameArea, m_cInfinity) +
-                              offsetof(game::CInfinity, m_ptCurrentPosExact);
-        game::CPoint pos{};
-        if (!core::safe_read(posAddr, pos)) {
-            return false;
-        }
-        outOffsetX = pos.x >> 16;
-        outOffsetY = pos.y >> 16;
-        return true;
+        const auto *posXAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewX);
+        const auto *posYAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewY);
+        return core::safe_read(posXAddr, outOffsetX) && core::safe_read(posYAddr, outOffsetY);
     }
 
     bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom) {
@@ -99,6 +95,39 @@ namespace iee::area {
         const auto *base = reinterpret_cast<const std::byte *>(area);
         const auto *zoomAddr = base + offsetof(game::CGameArea, m_cInfinity) + manifest.offsets.infinityZoom;
         return core::safe_read(zoomAddr, outZoom);
+    }
+
+    bool read_view_transform(const game::CGameArea *area, ViewTransform &out) {
+        if (!area) {
+            return false;
+        }
+        const auto *infinityBase = reinterpret_cast<const std::byte *>(area) +
+                                   offsetof(game::CGameArea, m_cInfinity);
+
+        std::int32_t newX = 0;
+        std::int32_t newY = 0;
+        game::CRect viewPortNotZoomed{};
+        game::CRect viewPort{};
+        if (!core::safe_read(infinityBase + offsetof(game::CInfinity, nNewX), newX) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, nNewY), newY) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPortNotZoomed), viewPortNotZoomed) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPort), viewPort)) {
+            return false;
+        }
+
+        const float physicalW = static_cast<float>(viewPortNotZoomed.right - viewPortNotZoomed.left);
+        const float zoomedW = static_cast<float>(viewPort.right - viewPort.left);
+        if (physicalW <= 0.0f || zoomedW <= 0.0f) {
+            return false;
+        }
+
+        // zoom = physical px per world px; world = nNew + (screen - physOrigin) / zoom
+        out.zoom = physicalW / zoomedW;
+        out.scrollX = static_cast<float>(newX) -
+                      static_cast<float>(viewPortNotZoomed.left) / out.zoom;
+        out.scrollY = static_cast<float>(newY) -
+                      static_cast<float>(viewPortNotZoomed.top) / out.zoom;
+        return true;
     }
 
     void refresh_wed_cache(AppContext &ctx, void *infGame) {
