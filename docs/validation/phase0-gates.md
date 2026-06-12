@@ -290,16 +290,3 @@ Verdicts:
   correct end to end (engine formula + UI-scale bridge).
 - Visual quality is explicitly NOT a pass yet: the current effect is a subtle
   swell/tint over existing art — the styling pass comes next.
-
-### Phase 2 sessions v7-v11 (2026-06-13) — styling track
-
-- v8: full procedural water (noise) — alignment held, quality poor.
-- v9: one-surface coverage (bilinear) + art-derived palette; fountains exposed
-  coverage bleed/palette smear/foam storm.
-- v10: art-luma pixel gate fixed pool containment; surface still noise mush.
-- v11: TEXTURE water (wip-branch normal/dudv/foam, raw IRGB blobs, units 3-5)
-  — "soooo much better". Two issues raised: (1) non-upscaled areas freeze the
-  transform ("follows the zoom") because the publish lived in the
-  self-disabling tile hook — FIXED: publish moved to the frame tick
-  (hooks::publish_view_state); (2) sub-cell granularity (luma gate is a
-  heuristic) — Phase 2.5.
