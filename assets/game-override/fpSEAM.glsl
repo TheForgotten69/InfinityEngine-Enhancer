@@ -215,11 +215,13 @@ void main()
 		// color is graded into deep and shallow tones instead of hardcoding.
 		vec3 artColor = texColor.rgb;
 		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
-		// Normalize the art tone so dark night pixels still yield a usable hue.
+		// Normalize the art tone so dark night pixels still yield a usable hue;
+		// soften extremes so bright rim pixels can't smear the palette.
 		vec3 artTone = artColor / max(artLuma, 0.06);
+		artTone = mix(vec3(1.0), artTone, 0.75);
 		vec3 deepColor    = artTone * 0.10;
 		vec3 shallowColor = artTone * 0.32;
-		vec3 foamColor    = mix(vec3(0.88), artTone * 0.9, 0.25);
+		vec3 foamColor    = mix(vec3(0.88), artTone * 0.9, 0.10);
 		float emissive    = 0.0;
 		if (cellMode > 1.5 && cellMode < 2.5)
 		{
@@ -245,12 +247,12 @@ void main()
 		water *= 0.88 + 0.24 * patch2;
 
 		// Animated shoreline foam: a noisy band that breathes against the land.
-		float foamBand = smoothstep(0.50, 0.92, shore + 0.18 * sin(t * 1.4 + waveH * 9.0));
+		float foamBand = smoothstep(0.62, 0.95, shore + 0.15 * sin(t * 1.4 + waveH * 9.0));
 		float foamNoise = ieeNoise(worldPos * 0.22 + vec2(t * 0.35, -t * 0.2));
-		float foam = foamBand * smoothstep(0.35, 0.75, foamNoise);
+		float foam = foamBand * smoothstep(0.40, 0.78, foamNoise);
 		// Crest foam: thin caps on the highest waves, away from shore too.
 		foam += smoothstep(0.78, 0.92, waveH) * 0.5;
-		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.85);
+		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.7);
 
 		// Sun glitter + lava glow.
 		water += spec * mix(0.35, 0.9, waveH);
@@ -262,7 +264,16 @@ void main()
 
 		// Soft replacement by coverage: full water inside the body, a smooth
 		// blend through the boundary cells, untouched land beyond.
-		float waterAlpha = smoothstep(0.25, 0.7, coverage);
+		float waterAlpha = smoothstep(0.30, 0.7, coverage);
+
+		// Art-luma gate: a live pixel-resolution mask. Painted water is dark;
+		// pool rims, pavement, and flowers inside coarse mask cells are bright
+		// and must never be flooded. Lava is exempt (authored bright).
+		if (emissive <= 0.0)
+		{
+			waterAlpha *= 1.0 - smoothstep(0.40, 0.62, artLuma);
+		}
+
 		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
 	}
 
