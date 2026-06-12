@@ -83,6 +83,61 @@ vec4 seamSample(vec2 tc)
 	return texColor;
 }
 
+// --- IEE water helpers (world-space, GLSL 110) ---
+
+float ieeHash(vec2 p)
+{
+	p = fract(p * vec2(123.34, 345.45));
+	p += dot(p, p + 34.345);
+	return fract(p.x * p.y);
+}
+
+// Smooth value noise over world position.
+float ieeNoise(vec2 p)
+{
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = ieeHash(i);
+	float b = ieeHash(i + vec2(1.0, 0.0));
+	float c = ieeHash(i + vec2(0.0, 1.0));
+	float d = ieeHash(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// Animated 3-octave wave height field. Two drifting layers kill repetition.
+float ieeWaveHeight(vec2 worldPos, float t)
+{
+	vec2 p = worldPos * 0.035;
+	float h = 0.0;
+	h += 0.55 * ieeNoise(p + vec2(t * 0.06, t * 0.045));
+	h += 0.30 * ieeNoise(p * 2.3 - vec2(t * 0.085, t * 0.03));
+	h += 0.15 * ieeNoise(p * 5.1 + vec2(t * 0.12, -t * 0.09));
+	return h;
+}
+
+// Liquid coverage (0 = land, 1 = liquid) at a world position.
+float ieeLiquidAt(vec2 worldPos)
+{
+	float mode = texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0;
+	return mode > 0.5 ? 1.0 : 0.0;
+}
+
+// Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
+float ieeShoreFactor(vec2 worldPos)
+{
+	float cover = ieeLiquidAt(worldPos) * 2.0;
+	cover += ieeLiquidAt(worldPos + vec2( 44.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(-44.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0,  44.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0, -44.0));
+	cover += ieeLiquidAt(worldPos + vec2( 31.0,  31.0));
+	cover += ieeLiquidAt(worldPos + vec2(-31.0,  31.0));
+	cover += ieeLiquidAt(worldPos + vec2( 31.0, -31.0));
+	cover += ieeLiquidAt(worldPos + vec2(-31.0, -31.0));
+	return 1.0 - clamp((cover - 2.0) / 8.0, 0.0, 1.0);
+}
+
 void main()
 {
 	// World position of this fragment: gl_FragCoord is physical pixels with a
@@ -117,23 +172,23 @@ void main()
 	}
 
 	vec2 sampleTc = vTc;
+	float waveH = 0.0;
 	if (cellMode > 0.5)
 	{
-		// World-space wave field: continuous across tile and cell boundaries.
 		float t = uIeeTime;
-		vec2 w = worldPos * 0.085;
+		waveH = ieeWaveHeight(worldPos, t);
+
+		// Refraction-style distortion from the wave field (continuous across
+		// tiles), damped to zero near tile edges so the +-texel reach never
+		// crosses into a neighboring (non-adjacent-in-world) atlas tile.
 		vec2 distort;
-		distort.x = sin(w.y * 1.7 + t * 1.1) + 0.5 * sin(w.x * 2.3 - t * 0.7);
-		distort.y = cos(w.x * 1.9 - t * 0.9) + 0.5 * cos(w.y * 2.9 + t * 1.3);
-		// Damp the distortion to zero near tile edges: |distort| reaches 1.5,
-		// times the 1.5 texel factor = 2.25 texels, which would cross into a
-		// neighboring (non-adjacent-in-world) atlas tile. The envelope is
-		// symmetric at every boundary, so the wave field stays continuous.
+		distort.x = ieeWaveHeight(worldPos + vec2(13.0, 0.0), t) - waveH;
+		distort.y = ieeWaveHeight(worldPos + vec2(0.0, 13.0), t) - waveH;
 		vec2 unb     = vTc / uTcScale;
 		vec2 tileLoc = mod(unb - vRef / uTcScale, 64.0);
 		vec2 edge    = min(tileLoc, 64.0 - tileLoc);
-		float damp   = smoothstep(0.0, 3.5, min(edge.x, edge.y));
-		sampleTc = vTc + distort * uTcScale * 1.5 * damp;
+		float damp   = smoothstep(0.0, 4.0, min(edge.x, edge.y));
+		sampleTc = vTc + distort * uTcScale * 9.0 * damp;
 	}
 
 	vec4 texColor = seamSample(sampleTc);
@@ -141,20 +196,59 @@ void main()
 	if (cellMode > 0.5)
 	{
 		float t = uIeeTime;
-		vec2 w = worldPos * 0.085;
 
-		// Per-mode tint (TileLiquidMode: 1 water, 2 lava, 3 goo, 4 sewage, 5 swamp).
-		vec3 deepTint = vec3(0.10, 0.22, 0.38);
-		if (cellMode > 4.5)      { deepTint = vec3(0.16, 0.26, 0.10); } // swamp
-		else if (cellMode > 3.5) { deepTint = vec3(0.30, 0.28, 0.08); } // sewage
-		else if (cellMode > 2.5) { deepTint = vec3(0.12, 0.28, 0.08); } // goo
-		else if (cellMode > 1.5) { deepTint = vec3(0.40, 0.12, 0.02); } // lava
+		// Surface normal from the height field (finite differences).
+		float hx = ieeWaveHeight(worldPos + vec2(6.0, 0.0), t) - waveH;
+		float hy = ieeWaveHeight(worldPos + vec2(0.0, 6.0), t) - waveH;
+		vec3 normal = normalize(vec3(-hx * 4.0, -hy * 4.0, 1.0));
 
-		// Gentle swell only: the base art is already water — the job is motion,
-		// not repainting. (Glints removed: they read as static noise at native
-		// resolution; revisit after alignment is proven.)
-		float swell = 0.5 + 0.5 * sin(w.x * 1.3 + w.y * 1.1 + t * 0.8);
-		texColor.rgb = mix(texColor.rgb, texColor.rgb * (0.92 + 0.16 * swell) + deepTint * 0.08, 0.45);
+		// IE shadows fall toward the lower-left: light comes from the top-right.
+		vec3 lightDir = normalize(vec3(0.45, -0.6, 0.66));
+		float diffuse = clamp(dot(normal, lightDir), 0.0, 1.0);
+		// Specular: tight highlight for sun glitter on wave crests.
+		vec3 viewDir = vec3(0.0, 0.0, 1.0);
+		vec3 halfVec = normalize(lightDir + viewDir);
+		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 48.0);
+
+		// Per-mode water body palette (deep, shallow) + foam color.
+		vec3 deepColor    = vec3(0.05, 0.15, 0.27);
+		vec3 shallowColor = vec3(0.13, 0.34, 0.45);
+		vec3 foamColor    = vec3(0.82, 0.90, 0.93);
+		float emissive    = 0.0;
+		if (cellMode > 4.5)      { deepColor = vec3(0.10, 0.16, 0.07); shallowColor = vec3(0.22, 0.30, 0.12); foamColor = vec3(0.55, 0.62, 0.40); } // swamp
+		else if (cellMode > 3.5) { deepColor = vec3(0.18, 0.16, 0.05); shallowColor = vec3(0.34, 0.30, 0.10); foamColor = vec3(0.62, 0.58, 0.38); } // sewage
+		else if (cellMode > 2.5) { deepColor = vec3(0.07, 0.18, 0.05); shallowColor = vec3(0.16, 0.34, 0.10); foamColor = vec3(0.55, 0.72, 0.42); } // goo
+		else if (cellMode > 1.5) { deepColor = vec3(0.32, 0.04, 0.00); shallowColor = vec3(0.85, 0.28, 0.02); foamColor = vec3(1.00, 0.78, 0.25); emissive = 0.5; } // lava
+
+		// Shore proximity: brightens shallows and drives the foam band.
+		float shore = ieeShoreFactor(worldPos);
+
+		// Water body: deep->shallow by wave height and shore, lit by the normal.
+		float depthMix = clamp(waveH * 0.65 + shore * 0.55, 0.0, 1.0);
+		vec3 water = mix(deepColor, shallowColor, depthMix);
+		water *= 0.75 + 0.45 * diffuse;
+
+		// Keep a measure of the authored art for painted detail (rocks, boats,
+		// art shading) refracted through the distorted sample.
+		water = mix(water, texColor.rgb * (0.85 + 0.30 * diffuse), 0.35);
+
+		// Animated shoreline foam: a noisy band that breathes against the land.
+		float foamBand = smoothstep(0.55, 0.95, shore + 0.18 * sin(t * 1.4 + waveH * 9.0));
+		float foamNoise = ieeNoise(worldPos * 0.22 + vec2(t * 0.35, -t * 0.2));
+		float foam = foamBand * smoothstep(0.35, 0.75, foamNoise);
+		// Crest foam: thin caps on the highest waves, away from shore too.
+		foam += smoothstep(0.78, 0.92, waveH) * 0.5;
+		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.85);
+
+		// Sun glitter + lava glow.
+		water += spec * mix(0.35, 0.9, waveH);
+		if (emissive > 0.0)
+		{
+			float pulse = 0.5 + 0.5 * sin(t * 1.1 + waveH * 6.0);
+			water += deepColor * emissive * (0.6 + 0.8 * pulse);
+		}
+
+		texColor.rgb = water;
 	}
 
 	texColor = texColor * vColor;
