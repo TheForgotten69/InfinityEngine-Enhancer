@@ -46,6 +46,22 @@ namespace iee::hooks {
                 LOG_WARN("GL shader probes were not installed; will retry on subsequent frames");
             }
         }
+
+        // Publishes the view transform to the uniform feed. Reliable only
+        // while the engine is inside its world pass: rViewPort is transient
+        // (AdjustViewportForZoom recomputes it as rViewPortNotZoomed * m_fZoom
+        // around rendering) — frame-tick-time reads saw restored/stale rects,
+        // which broke every map (the reverted v12).
+        void publish_view_state() noexcept {
+            if (!g_ctx || !std::atomic_load(&g_ctx->wed)) {
+                return;
+            }
+            area::ViewTransform view{};
+            if (area::read_view_transform(g_ctx->activeArea.load(), view)) {
+                probe::set_area_view(view.scrollX, view.scrollY,
+                                     view.viewWorldW, view.viewWorldH);
+            }
+        }
     }
 
     // LoadArea hook - reset area-specific state for new area detection
@@ -75,25 +91,12 @@ namespace iee::hooks {
 
         auto *result = H_LoadArea.original()(thisPtr, pAreaNameString, a2, a3, a4);
         area::refresh_wed_cache(ctx, thisPtr);
+        // Seed the new area's transform immediately — otherwise the uniforms
+        // hold the PREVIOUS map's values until the first Seam-tone publish
+        // (visible as a one-to-few-frame glitch on area transitions). The
+        // rects may be mid-transition here; the world pass corrects them.
+        publish_view_state();
         return result;
-    }
-
-    namespace {
-        // Publishes the view transform to the uniform feed. Only call this
-        // while the engine is inside its world pass: rViewPort is transient
-        // (AdjustViewportForZoom recomputes it as rViewPortNotZoomed * m_fZoom
-        // around rendering) — frame-tick-time reads saw restored/stale rects,
-        // which broke every map (the reverted v12).
-        void publish_view_state() noexcept {
-            if (!g_ctx || !std::atomic_load(&g_ctx->wed)) {
-                return;
-            }
-            area::ViewTransform view{};
-            if (area::read_view_transform(g_ctx->activeArea.load(), view)) {
-                probe::set_area_view(view.scrollX, view.scrollY,
-                                     view.viewWorldW, view.viewWorldH);
-            }
-        }
     }
 
     // DrawColorTone hook: the engine calls this throughout rendering (tile,

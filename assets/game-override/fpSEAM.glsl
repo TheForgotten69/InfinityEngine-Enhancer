@@ -269,12 +269,16 @@ void main()
 		// blend through the boundary cells, untouched land beyond.
 		float waterAlpha = smoothstep(0.30, 0.7, coverage);
 
-		// Art-luma gate: a live pixel-resolution mask. Painted water is dark;
-		// pool rims, pavement, and flowers inside coarse mask cells are bright
-		// and must never be flooded. Lava is exempt (authored bright).
+		// Art gates: a live pixel-resolution mask within coarse cells.
+		// Luma: painted water is dark; rims/pavement/flowers are bright.
+		// Chroma: grass is green-dominant, water never is (teal has B >= G,
+		// muddy rivers are R~G balanced) — kills dark night grass that a pure
+		// luma gate lets through. Lava is exempt (authored bright).
 		if (emissive <= 0.0)
 		{
 			waterAlpha *= 1.0 - smoothstep(0.40, 0.62, artLuma);
+			float greenDominance = artColor.g - max(artColor.r, artColor.b);
+			waterAlpha *= 1.0 - smoothstep(0.015, 0.07, greenDominance);
 		}
 
 		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
