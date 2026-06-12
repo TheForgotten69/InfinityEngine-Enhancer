@@ -3,6 +3,7 @@
 #include <atomic>
 #include <windows.h>
 
+#include "hooks.h"
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "iee/shader_probe.h"
@@ -20,6 +21,10 @@ namespace iee::frame {
 
         void frame_tick() {
             g_frames.fetch_add(1, std::memory_order_relaxed);
+            // View transform first, so the probe's uniform refresh sees fresh
+            // values. Independent of the tile-render hook, which self-disables
+            // on non-upscaled areas (the v11 "follows the zoom" bug).
+            hooks::publish_view_state();
             probe::on_frame_tick(seconds_since_install());
         }
 

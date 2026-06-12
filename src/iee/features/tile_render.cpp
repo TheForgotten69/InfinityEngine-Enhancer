@@ -4,14 +4,12 @@
 #include <optional>
 
 #include "iee/app_context.h"
-#include "iee/area_state.h"
 #include "iee/diagnostics.h"
 #include "iee/core/logger.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
 #include "iee/game/tile_upscale.h"
 #include "iee/game/tis_runtime.h"
-#include "iee/shader_probe.h"
 
 namespace iee::features {
     namespace {
@@ -179,15 +177,6 @@ namespace iee::features {
         // Check the "linear tiles" switch in TIS structure
         if (game::get_tis_linear_tiles_flag(tileInfo.tileset, *ctx.manifest)) {
             tone = static_cast<int>(ShaderTone::Seam);
-        }
-
-        if (std::atomic_load(&ctx.wed)) {
-            const auto *activeArea = ctx.activeArea.load();
-            area::ViewTransform view{};
-            if (area::read_view_transform(activeArea, view)) {
-                probe::set_area_view(view.scrollX, view.scrollY,
-                                     view.viewWorldW, view.viewWorldH);
-            }
         }
 
         if (ctx.draw.DrawColorTone) ctx.draw.DrawColorTone(tone);

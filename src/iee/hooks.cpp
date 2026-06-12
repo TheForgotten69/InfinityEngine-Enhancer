@@ -1,6 +1,7 @@
 #include "hooks.h"
 
 #include <atomic>
+#include <memory>
 #include <windows.h>
 
 #include "app_context.h"
@@ -182,5 +183,20 @@ namespace iee::hooks {
 
     bool is_active() {
         return g_ctx != nullptr && g_ctx->isRenderHookActive;
+    }
+
+    void publish_view_state() noexcept {
+        if (!g_ctx) {
+            return;
+        }
+        if (!std::atomic_load(&g_ctx->wed)) {
+            return;
+        }
+        const auto *activeArea = g_ctx->activeArea.load();
+        area::ViewTransform view{};
+        if (area::read_view_transform(activeArea, view)) {
+            probe::set_area_view(view.scrollX, view.scrollY,
+                                 view.viewWorldW, view.viewWorldH);
+        }
     }
 }
