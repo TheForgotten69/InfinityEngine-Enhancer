@@ -83,13 +83,6 @@ vec4 seamSample(vec2 tc)
 	return texColor;
 }
 
-float hash21(vec2 p)
-{
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
-}
-
 void main()
 {
 	// World position of this fragment: gl_FragCoord is physical pixels with a
@@ -104,15 +97,22 @@ void main()
 		cellMode = floor(texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0 + 0.5);
 	}
 
-	// Alignment debug: uIeeEnabled fed as 2.0 tints liquid cells red instead of
-	// styling them — shoreline must hug the WED water edge exactly.
+	// Alignment debug (uIeeEnabled = 2.0): renders the derived mask coordinate
+	// as a gradient so ONE screenshot calibrates the whole world transform:
+	//   red   = mask u (0 at world left -> 1 at world right)
+	//   green = mask v (0 at world top  -> 1 at world bottom)
+	//   blue  = 1 on liquid-flagged cells
+	// Expected when correct: red ramps left->right across the WHOLE map,
+	// green ramps top->bottom, blue hugs the water. A mirrored ramp = flipped
+	// axis; a shifted ramp = scroll/viewport offset; a too-steep ramp = zoom.
 	if (uIeeEnabled > 1.5)
 	{
+		vec2 maskUv = worldPos * uIeeWorldSizeInv;
 		vec4 base = seamSample(vTc);
 		base = base * vColor;
-		if (cellMode > 0.5) { base.rgb = mix(base.rgb, vec3(1.0, 0.1, 0.1), 0.5); }
-		float dbgGrey = dot(base.rgb, vec3(0.299, 0.587, 0.114));
-		gl_FragColor = vec4(mix(base.rgb, dbgGrey * uColorTone.rgb, uColorTone.a), base.a);
+		vec3 dbg = vec3(fract(maskUv.x * 4.0), fract(maskUv.y * 4.0), cellMode > 0.5 ? 1.0 : 0.0);
+		base.rgb = mix(base.rgb, dbg, 0.65);
+		gl_FragColor = vec4(base.rgb, base.a);
 		return;
 	}
 
@@ -150,15 +150,11 @@ void main()
 		else if (cellMode > 2.5) { deepTint = vec3(0.12, 0.28, 0.08); } // goo
 		else if (cellMode > 1.5) { deepTint = vec3(0.40, 0.12, 0.02); } // lava
 
+		// Gentle swell only: the base art is already water — the job is motion,
+		// not repainting. (Glints removed: they read as static noise at native
+		// resolution; revisit after alignment is proven.)
 		float swell = 0.5 + 0.5 * sin(w.x * 1.3 + w.y * 1.1 + t * 0.8);
-		texColor.rgb = mix(texColor.rgb, texColor.rgb * (0.85 + 0.3 * swell) + deepTint * 0.12, 0.55);
-
-		// Sparse moving glints.
-		float glint = hash21(floor(worldPos * 0.25) + floor(t * 2.0));
-		if (glint > 0.985)
-		{
-			texColor.rgb += vec3(0.25);
-		}
+		texColor.rgb = mix(texColor.rgb, texColor.rgb * (0.92 + 0.16 * swell) + deepTint * 0.08, 0.45);
 	}
 
 	texColor = texColor * vColor;

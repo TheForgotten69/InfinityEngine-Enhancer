@@ -1361,7 +1361,22 @@ namespace iee::probe {
             const float current = g_overrideEffectValue.load(std::memory_order_relaxed);
             const float next = current < 0.5f ? 1.0f : (current < 1.5f ? 2.0f : 0.0f);
             g_overrideEffectValue.store(next, std::memory_order_relaxed);
-            LOG_INFO("Hotkey F10: override effect value {}", next);
+
+            // Snapshot the world-transform inputs so screenshots pair with the
+            // exact values the shader saw (render thread; context current).
+            int vp[4] = {0, 0, 0, 0};
+            const auto &glState = game::gl::get_gl_functions();
+            if (glState.glGetIntegerv) {
+                glState.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
+            }
+            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), zoom={}, viewport={}x{} at ({}, {}), world={}x{})",
+                     next,
+                     g_scrollX.load(std::memory_order_relaxed),
+                     g_scrollY.load(std::memory_order_relaxed),
+                     g_zoom.load(std::memory_order_relaxed),
+                     vp[2], vp[3], vp[0], vp[1],
+                     g_worldWidthPx.load(std::memory_order_relaxed),
+                     g_worldHeightPx.load(std::memory_order_relaxed));
         }
         f10WasDown = f10Down;
     }
