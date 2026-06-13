@@ -306,3 +306,21 @@ Verdicts:
 - Bonus V1 closure: DRAW_TONE_SPRITE / DRAW_TONE_FONT / DRAW_TONE_GREY /
   DRAW_TONE_NORMAL constants in the decompile confirm DrawColorTone selects
   per-draw-type programs.
+
+### Phase 2 session v14 verdict (2026-06-13) — heuristic gates rejected
+
+- v13/v14 publish fix works (water world-glued on all map types); area
+  transitions improved by the LoadArea seed.
+- The luma+chroma art gates are the WRONG layer: they approximate the water
+  contour from colors and produce oddities (holes, mottled edges). User's
+  arrow screenshot: the true contour is the painted water silhouette inside
+  flagged cells.
+- **Phase 2.5 design locked (from the arrow + the decompile):** the overlay
+  tileset's NON-TRANSPARENT PIXELS are the pixel-perfect water mask. Flagged
+  cells alpha-blend wt*/ys* overlay tiles (decompile: WATER_ALPHA path in
+  CInfTileSet::Render); overlay TIS are classic palette tiles (the non-0xc
+  format branch) with a transparent key. Plan: parse WED overlay tilemaps
+  (offsets already stored in WedAreaInfo), decode each unique overlay tile
+  once (palette TIS, host-testable), stamp a sub-cell fine mask (4-8px),
+  upload via the proven unit-2 path, and DELETE the shader's coverage
+  smoothing + luma/chroma gates.
