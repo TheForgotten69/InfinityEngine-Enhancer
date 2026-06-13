@@ -7,255 +7,287 @@ precision highp float;
 #endif
 
 // fpSEAM.glsl
-// IEE_V1_FPSEAM_LIQUID
+// IEE_V2_FPSEAM_WATER — world-space, WED-mask-gated water.
+// uIeeEnabled < 0.5 reproduces the vanilla fpSEAM output exactly.
 
-uniform lowp sampler2D uTex;
-uniform highp vec2 uTcScale;
-uniform highp vec4 uColorTone;
-uniform highp float uIeeTileLiquidMode;
-uniform highp float uIeeLiquidTime;
+uniform lowp	sampler2D	uTex;
+uniform highp 	vec2 		uTcScale;
+uniform highp	vec4		uColorTone;
 
-varying highp vec2 vTc;
-varying highp vec2 vRef;
-varying lowp vec4 vColor;
+// --- IEE feed (set by the DLL at program bind + frame tick) ---
+uniform highp	float		uIeeEnabled;       // 0/1 master gate (F10)
+uniform highp	float		uIeeTime;          // seconds
+uniform highp	vec2		uIeeScroll;        // world px of viewport origin
+uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
+uniform highp	vec2		uIeeViewport;      // physical px (w, h)
+uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
+uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: liquid mode per WED cell
+uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
+uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
+uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
+
+varying highp	vec2		vTc;
+varying highp	vec2		vRef;
+varying lowp	vec4		vColor;
 
 bool isBorderColor(vec4 testColor)
 {
-    return (testColor.x == 0.0) && (testColor.y == 0.0) && (testColor.z == 0.0);
+	if ((testColor.x == 0.0) && (testColor.y == 0.0) && (testColor.z == 0.0))
+	{
+		return true;
+	}
+	return false;
 }
 
-vec4 ieeSampleSeamAware(vec2 tc)
+// Vanilla seam-aware sampling, parameterized on the sample coordinate so the
+// water path can ride the same border handling with distorted coords.
+vec4 seamSample(vec2 tc)
 {
-    vec2 texCoordUnbiased = tc / uTcScale;
-    vec2 refCoordUnbiased = vRef / uTcScale;
+	vec2 texCoordUnbiased = tc / uTcScale;
+	vec2 refCoordUnbiased = vRef / uTcScale;
 
-    float fu = fract(texCoordUnbiased.x);
-    float fv = fract(texCoordUnbiased.y);
+	float fu = fract(texCoordUnbiased.x);
+	float fv = fract(texCoordUnbiased.y);
 
-    vec2 texCoordTileLoc = mod(texCoordUnbiased - refCoordUnbiased, 64.0);
-    int texCoordTileLocIntx = int(floor(texCoordTileLoc.x));
-    int texCoordTileLocInty = int(floor(texCoordTileLoc.y));
+	vec2 texCoordTileLoc = mod(texCoordUnbiased - refCoordUnbiased, 64.0);
+	int texCoordTileLocIntx = int(floor(texCoordTileLoc.x));
+	int texCoordTileLocInty = int(floor(texCoordTileLoc.y));
 
-    vec4 texColor0 = texture2D(uTex, tc);
+	vec4 texColor0 = texture2D(uTex, tc);
 
-    vec4 texColor1 = texture2D(uTex, tc + vec2(uTcScale.x, 0.0));
-    vec4 texColor2 = texture2D(uTex, tc + vec2(0.0, uTcScale.y));
-    vec4 texColor3 = texture2D(uTex, tc + vec2(uTcScale.x, uTcScale.y));
+	vec4 texColor1 = texture2D(uTex, tc + vec2(uTcScale.x, 0.0));
+	vec4 texColor2 = texture2D(uTex, tc + vec2(0.0, uTcScale.y));
+	vec4 texColor3 = texture2D(uTex, tc + vec2(uTcScale.x, uTcScale.y));
 
-    bool border0 = isBorderColor(texColor0);
-    bool border1 = isBorderColor(texColor1);
-    bool border2 = isBorderColor(texColor2);
-    bool border3 = isBorderColor(texColor3);
+	bool border0 = isBorderColor(texColor0);
+	bool border1 = isBorderColor(texColor1);
+	bool border2 = isBorderColor(texColor2);
+	bool border3 = isBorderColor(texColor3);
 
-    if (((texCoordTileLocIntx == 0) || (texCoordTileLocIntx >= 63) ||
-         (texCoordTileLocInty == 0) || (texCoordTileLocInty >= 63)) &&
-        (border0 || border1 || border2 || border3))
-    {
-        return texColor0;
-    }
+	vec4 texColor = vec4(0.0, 0.0, 0.0, 1.0);
 
-    if (border1) texColor1 = texColor0;
-    if (border2) texColor2 = texColor0;
-    if (border3) texColor3 = texColor0;
+	if (((texCoordTileLocIntx == 0) || (texCoordTileLocIntx >= 63) ||
+		 (texCoordTileLocInty == 0) || (texCoordTileLocInty >= 63)) &&
+		 (border0 || border1 || border2 || border3) )
+	{
+		texColor = texColor0;
+	}
+	else
+	{
+		if (border1) { texColor1 = texColor0; }
+		if (border2) { texColor2 = texColor0; }
+		if (border3) { texColor3 = texColor0; }
 
-    vec4 texColorTop = mix(texColor0, texColor1, fu);
-    vec4 texColorBottom = mix(texColor2, texColor3, fu);
-    return mix(texColorTop, texColorBottom, fv);
+		vec4 texColorTop = mix(texColor0, texColor1, fu);
+		vec4 texColorBottom = mix(texColor2, texColor3, fu);
+		texColor = mix(texColorTop, texColorBottom, fv);
+	}
+
+	return texColor;
 }
+
+// --- IEE water helpers (world-space, GLSL 110) ---
 
 float ieeHash(vec2 p)
 {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+	p = fract(p * vec2(123.34, 345.45));
+	p += dot(p, p + 34.345);
+	return fract(p.x * p.y);
 }
 
+// Smooth value noise over world position.
 float ieeNoise(vec2 p)
 {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    vec2 u = f * f * (3.0 - 2.0 * f);
-
-    return mix(
-        mix(ieeHash(i + vec2(0.0, 0.0)), ieeHash(i + vec2(1.0, 0.0)), u.x),
-        mix(ieeHash(i + vec2(0.0, 1.0)), ieeHash(i + vec2(1.0, 1.0)), u.x),
-        u.y);
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = ieeHash(i);
+	float b = ieeHash(i + vec2(1.0, 0.0));
+	float c = ieeHash(i + vec2(0.0, 1.0));
+	float d = ieeHash(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float ieeFbm(vec2 p)
+// Water surface normal from two drifting layers of the tiling normal map.
+// Different scales + opposite drift kill visible repetition.
+vec3 ieeWaterNormal(vec2 worldPos, float t)
 {
-    float value = 0.0;
-    float amplitude = 0.5;
-    mat2 octave = mat2(vec2(1.6, 1.2), vec2(-1.2, 1.6));
-
-    for (int i = 0; i < 4; ++i) {
-        value += amplitude * ieeNoise(p);
-        p = octave * p * 1.35;
-        amplitude *= 0.5;
-    }
-
-    return value;
+	vec2 drift1 = vec2(t * 3.1, t * 2.2);
+	vec2 drift2 = vec2(-t * 4.4, t * 1.6);
+	// DuDv jitter breaks up the linear scroll so the layers feel fluid.
+	vec2 dudv = texture2D(uIeeDudvMap, worldPos / 384.0 + vec2(t * 0.015, -t * 0.01)).rg * 2.0 - 1.0;
+	vec3 n1 = texture2D(uIeeNormalMap, (worldPos + drift1 + dudv * 9.0) / 256.0).rgb * 2.0 - 1.0;
+	vec3 n2 = texture2D(uIeeNormalMap, (worldPos + drift2 - dudv * 6.0) / 117.0).rgb * 2.0 - 1.0;
+	vec3 n = vec3(n1.xy + n2.xy * 0.6, n1.z * n2.z);
+	return normalize(vec3(n.x, n.y, max(n.z, 0.3) * 2.2));
 }
 
-vec2 ieeHash22(vec2 p)
+// Liquid coverage (0 = land, 1 = liquid) at a world position.
+float ieeLiquidAt(vec2 worldPos)
 {
-    return vec2(
-        ieeHash(p),
-        ieeHash(p + vec2(19.19, 47.23)));
+	float mode = texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0;
+	return mode > 0.5 ? 1.0 : 0.0;
 }
 
-float ieeVoronoi(vec2 uv)
+// Continuous liquid coverage: manual bilinear over the 64px cell grid.
+// 1 deep inside water, 0 on land, smooth curve through shoreline cells —
+// the "one surface" field that kills the per-cell squares.
+float ieeCoverage(vec2 worldPos)
 {
-    vec2 cell = floor(uv);
-    vec2 local = fract(uv);
-    float minDist = 8.0;
-
-    for (int j = -1; j <= 1; ++j) {
-        for (int i = -1; i <= 1; ++i) {
-            vec2 offset = vec2(float(i), float(j));
-            vec2 point = 0.5 + 0.5 * sin((6.2831853 * ieeHash22(cell + offset)) + (uIeeLiquidTime * 0.35));
-            vec2 diff = offset + point - local;
-            minDist = min(minDist, dot(diff, diff));
-        }
-    }
-
-    return sqrt(minDist);
+	vec2 cell = worldPos / 64.0 - 0.5;
+	vec2 base = (floor(cell) + 0.5) * 64.0;
+	vec2 f = fract(cell);
+	float c00 = ieeLiquidAt(base);
+	float c10 = ieeLiquidAt(base + vec2(64.0, 0.0));
+	float c01 = ieeLiquidAt(base + vec2(0.0, 64.0));
+	float c11 = ieeLiquidAt(base + vec2(64.0, 64.0));
+	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
 }
 
-vec4 ieeApplyLiquidStyle(vec4 baseColor)
+// Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
+float ieeShoreFactor(vec2 worldPos)
 {
-    if (uIeeTileLiquidMode < 0.5 || uTcScale.x <= 0.0 || uTcScale.y <= 0.0) {
-        return baseColor;
-    }
-
-    vec2 texCoordUnbiased = vTc / uTcScale;
-    vec2 refCoordUnbiased = vRef / uTcScale;
-    vec2 tileUv = mod(texCoordUnbiased - refCoordUnbiased, 64.0) / 64.0;
-    vec2 overlayUv = texCoordUnbiased / 64.0;
-    float time = uIeeLiquidTime;
-    float luma = dot(baseColor.rgb, vec3(0.299, 0.587, 0.114));
-
-    float mode = floor(uIeeTileLiquidMode + 0.5);
-    float flowSpeed = 0.75;
-    float warpStrength = 0.90;
-    float fluidScale = 2.5;
-    float foamScale = 6.5;
-    float foamCutoff = 0.78;
-    float foamStrength = 0.85;
-    float replaceAmount = 0.86;
-    float sourceMix = 0.18;
-    float pulse = 0.0;
-    vec3 shallowColor = vec3(0.18, 0.70, 0.76);
-    vec3 deepColor = vec3(0.02, 0.20, 0.32);
-    vec3 foamColor = vec3(0.90, 0.98, 1.00);
-    vec3 glowColor = vec3(0.05, 0.12, 0.20);
-    vec3 sourceTint = vec3(0.55, 0.80, 0.95);
-
-    if (mode < 1.5) {
-        flowSpeed = 0.80;
-        warpStrength = 1.00;
-        fluidScale = 2.6;
-        foamScale = 6.2;
-        foamCutoff = 0.76;
-        replaceAmount = 0.88;
-        sourceMix = 0.20;
-        shallowColor = vec3(0.22, 0.76, 0.80);
-        deepColor = vec3(0.03, 0.24, 0.38);
-        foamColor = vec3(0.92, 0.99, 1.00);
-        glowColor = vec3(0.06, 0.15, 0.24);
-        sourceTint = vec3(0.55, 0.85, 0.98);
-    } else if (mode < 2.5) {
-        flowSpeed = 0.42;
-        warpStrength = 1.35;
-        fluidScale = 2.2;
-        foamScale = 5.2;
-        foamCutoff = 0.82;
-        foamStrength = 0.35;
-        replaceAmount = 0.92;
-        sourceMix = 0.10;
-        pulse = 0.16;
-        shallowColor = vec3(0.88, 0.36, 0.06);
-        deepColor = vec3(0.22, 0.03, 0.00);
-        foamColor = vec3(1.00, 0.84, 0.28);
-        glowColor = vec3(0.48, 0.12, 0.02);
-        sourceTint = vec3(1.00, 0.50, 0.10);
-    } else if (mode < 3.5) {
-        flowSpeed = 0.36;
-        warpStrength = 0.82;
-        fluidScale = 2.9;
-        foamScale = 7.2;
-        foamCutoff = 0.84;
-        foamStrength = 0.42;
-        replaceAmount = 0.90;
-        sourceMix = 0.12;
-        shallowColor = vec3(0.32, 0.58, 0.16);
-        deepColor = vec3(0.05, 0.18, 0.05);
-        foamColor = vec3(0.80, 0.94, 0.62);
-        glowColor = vec3(0.10, 0.18, 0.05);
-        sourceTint = vec3(0.60, 0.86, 0.50);
-    } else if (mode < 4.5) {
-        flowSpeed = 0.30;
-        warpStrength = 0.65;
-        fluidScale = 2.4;
-        foamScale = 6.0;
-        foamCutoff = 0.86;
-        foamStrength = 0.28;
-        replaceAmount = 0.84;
-        sourceMix = 0.14;
-        shallowColor = vec3(0.28, 0.36, 0.18);
-        deepColor = vec3(0.08, 0.12, 0.05);
-        foamColor = vec3(0.72, 0.78, 0.58);
-        glowColor = vec3(0.08, 0.10, 0.03);
-        sourceTint = vec3(0.58, 0.62, 0.40);
-    } else {
-        flowSpeed = 0.28;
-        warpStrength = 0.72;
-        fluidScale = 2.2;
-        foamScale = 5.8;
-        foamCutoff = 0.87;
-        foamStrength = 0.24;
-        replaceAmount = 0.82;
-        sourceMix = 0.16;
-        shallowColor = vec3(0.26, 0.32, 0.14);
-        deepColor = vec3(0.07, 0.10, 0.03);
-        foamColor = vec3(0.66, 0.72, 0.48);
-        glowColor = vec3(0.08, 0.10, 0.02);
-        sourceTint = vec3(0.52, 0.58, 0.28);
-    }
-
-    vec2 flowUv = overlayUv * fluidScale;
-    float flowA = ieeFbm(flowUv + vec2(time * flowSpeed, -time * flowSpeed * 0.45));
-    float flowB = ieeFbm((flowUv * 1.9) + vec2(-time * flowSpeed * 0.70, time * flowSpeed * 0.80));
-    float wave = 0.5 + 0.5 * sin((tileUv.x * 12.0) + (tileUv.y * 7.0) + (flowA * 3.2) - (flowB * 2.1) + (time * flowSpeed * 4.0));
-    float ridge = 0.5 + 0.5 * sin((overlayUv.x * 8.0) - (overlayUv.y * 5.5) + (flowB * 2.6) - (time * flowSpeed * 3.0));
-    float bubbles = 1.0 - clamp(ieeVoronoi((overlayUv * foamScale) + vec2(flowA, flowB) * 1.5), 0.0, 1.0);
-
-    vec2 warp = vec2(flowA - 0.5, flowB - 0.5) * warpStrength;
-    vec4 warpedColor = ieeSampleSeamAware(vTc + warp * uTcScale * 1.75);
-    float pseudoDepth = clamp((0.40 * (1.0 - luma)) + (0.35 * (1.0 - wave)) + (0.25 * (1.0 - ridge)), 0.0, 1.0);
-    float shallowMask = 1.0 - smoothstep(0.18, 0.78, pseudoDepth);
-    float crestMask = smoothstep(0.58, 0.86, wave + ridge * 0.25 + bubbles * 0.15);
-    float foamMask = smoothstep(foamCutoff, foamCutoff + 0.16, (shallowMask * 0.75) + (crestMask * 0.45) + (bubbles * 0.55));
-
-    vec3 stylized = mix(shallowColor, deepColor, pseudoDepth);
-    stylized = mix(stylized, warpedColor.rgb * sourceTint, sourceMix);
-    stylized += glowColor * (0.05 + 0.10 * ridge);
-    if (pulse > 0.0) {
-        stylized += vec3(1.00, 0.48, 0.10) * pulse * (0.55 + 0.45 * ridge);
-    }
-    stylized = mix(stylized, foamColor, clamp(foamMask * foamStrength, 0.0, 1.0));
-
-    vec4 result = baseColor;
-    result.rgb = mix(baseColor.rgb, clamp(stylized, 0.0, 1.0), replaceAmount);
-    return result;
+	float cover = ieeCoverage(worldPos) * 2.0;
+	cover += ieeCoverage(worldPos + vec2( 44.0, 0.0));
+	cover += ieeCoverage(worldPos + vec2(-44.0, 0.0));
+	cover += ieeCoverage(worldPos + vec2(0.0,  44.0));
+	cover += ieeCoverage(worldPos + vec2(0.0, -44.0));
+	return 1.0 - clamp((cover - 1.0) / 5.0, 0.0, 1.0);
 }
 
 void main()
 {
-    vec4 texColor = ieeSampleSeamAware(vTc);
-    texColor = ieeApplyLiquidStyle(texColor);
-    texColor = texColor * vColor;
+	// World position of this fragment: gl_FragCoord is physical pixels with a
+	// bottom-left origin; the engine's world is top-left, scaled by zoom.
+	vec2 screenPx = vec2(gl_FragCoord.x, uIeeViewport.y - gl_FragCoord.y);
+	vec2 worldPos = uIeeScroll + screenPx / max(uIeeZoom, vec2(0.0001, 0.0001));
 
-    float grey = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
-    vec3 tone = grey * uColorTone.rgb;
+	// Liquid mode of the WED cell under this fragment (R8: 0..5 -> 0..5/255).
+	float cellMode = 0.0;
+	if (uIeeEnabled > 0.5)
+	{
+		cellMode = floor(texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0 + 0.5);
+	}
 
-    gl_FragColor = vec4(mix(texColor.rgb, tone, uColorTone.a), texColor.a);
+	// Alignment debug (uIeeEnabled = 2.0): renders the derived mask coordinate
+	// as a gradient so ONE screenshot calibrates the whole world transform:
+	//   red   = mask u (0 at world left -> 1 at world right)
+	//   green = mask v (0 at world top  -> 1 at world bottom)
+	//   blue  = 1 on liquid-flagged cells
+	// Expected when correct: red ramps left->right across the WHOLE map,
+	// green ramps top->bottom, blue hugs the water. A mirrored ramp = flipped
+	// axis; a shifted ramp = scroll/viewport offset; a too-steep ramp = zoom.
+	if (uIeeEnabled > 1.5)
+	{
+		vec2 maskUv = worldPos * uIeeWorldSizeInv;
+		vec4 base = seamSample(vTc);
+		base = base * vColor;
+		vec3 dbg = vec3(fract(maskUv.x * 4.0), fract(maskUv.y * 4.0), cellMode > 0.5 ? 1.0 : 0.0);
+		base.rgb = mix(base.rgb, dbg, 0.65);
+		gl_FragColor = vec4(base.rgb, base.a);
+		return;
+	}
+
+	vec4 texColor = seamSample(vTc);
+
+	// Continuous coverage drives a soft replacement: the water is one surface
+	// whose boundary curves through shoreline cells (no per-cell squares).
+	float coverage = 0.0;
+	if (uIeeEnabled > 0.5)
+	{
+		coverage = ieeCoverage(worldPos);
+	}
+
+	if (coverage > 0.02)
+	{
+		float t = uIeeTime;
+		vec3 normal = ieeWaterNormal(worldPos, t);
+		// Wave "height" proxy from the normal's tilt: drives depth + caps.
+		float waveH = clamp(0.5 + (normal.x + normal.y) * 1.4, 0.0, 1.0);
+
+		// IE shadows fall toward the lower-left: light comes from the top-right.
+		vec3 lightDir = normalize(vec3(0.45, -0.6, 0.66));
+		float diffuse = clamp(dot(normal, lightDir), 0.0, 1.0);
+		// Specular: tight highlight for sun glitter on wave crests.
+		vec3 viewDir = vec3(0.0, 0.0, 1.0);
+		vec3 halfVec = normalize(lightDir + viewDir);
+		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 64.0);
+
+		// Palette derived from the AUTHORED art so every body of water keeps
+		// its area's painted character (sea teal, river brown, ...): the art
+		// color is graded into deep and shallow tones instead of hardcoding.
+		vec3 artColor = texColor.rgb;
+		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
+		// Normalize the art tone so dark night pixels still yield a usable hue;
+		// soften extremes so bright rim pixels can't smear the palette.
+		vec3 artTone = artColor / max(artLuma, 0.06);
+		artTone = mix(vec3(1.0), artTone, 0.75);
+		vec3 deepColor    = artTone * 0.10;
+		vec3 shallowColor = artTone * 0.32;
+		vec3 foamColor    = mix(vec3(0.88), artTone * 0.9, 0.10);
+		float emissive    = 0.0;
+		if (cellMode > 1.5 && cellMode < 2.5)
+		{
+			// Lava keeps an authored-orange emissive identity.
+			deepColor = vec3(0.32, 0.04, 0.00);
+			shallowColor = vec3(0.85, 0.28, 0.02);
+			foamColor = vec3(1.00, 0.78, 0.25);
+			emissive = 0.5;
+		}
+
+		// Shore proximity: brightens shallows and drives the foam band.
+		float shore = ieeShoreFactor(worldPos);
+
+		// Water body: deep->shallow by wave height and shore, lit by the normal.
+		float depthMix = clamp(waveH * 0.65 + shore * 0.55, 0.0, 1.0);
+		vec3 water = mix(deepColor, shallowColor, depthMix);
+		water *= 0.75 + 0.45 * diffuse;
+
+		// Large-scale patchiness so open water does not read flat.
+		float patch = ieeNoise(worldPos * 0.011 + vec2(t * 0.012, -t * 0.008));
+		water = mix(water, mix(deepColor, shallowColor, patch), 0.30);
+		float patch2 = ieeNoise(worldPos * 0.004);
+		water *= 0.88 + 0.24 * patch2;
+
+		// Animated shoreline foam from the foam texture, breathing on the band.
+		float foamBand = smoothstep(0.60, 0.95, shore + 0.12 * sin(t * 1.3 + waveH * 6.0));
+		float foamTex = texture2D(uIeeFoamMap, (worldPos + vec2(t * 6.0, -t * 4.0)) / 220.0).r;
+		float foam = foamBand * smoothstep(0.30, 0.85, foamTex);
+		// Crest foam: texture-shaped caps on the most tilted waves.
+		foam += smoothstep(0.80, 0.95, waveH) * foamTex * 0.7;
+		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.75);
+
+		// Sun glitter + lava glow.
+		water += spec * mix(0.35, 0.9, waveH);
+		if (emissive > 0.0)
+		{
+			float pulse = 0.5 + 0.5 * sin(t * 1.1 + waveH * 6.0);
+			water += deepColor * emissive * (0.6 + 0.8 * pulse);
+		}
+
+		// Soft replacement by coverage: full water inside the body, a smooth
+		// blend through the boundary cells, untouched land beyond.
+		float waterAlpha = smoothstep(0.30, 0.7, coverage);
+
+		// Art gates: a live pixel-resolution mask within coarse cells.
+		// Luma: painted water is dark; rims/pavement/flowers are bright.
+		// Chroma: grass is green-dominant, water never is (teal has B >= G,
+		// muddy rivers are R~G balanced) — kills dark night grass that a pure
+		// luma gate lets through. Lava is exempt (authored bright).
+		if (emissive <= 0.0)
+		{
+			waterAlpha *= 1.0 - smoothstep(0.40, 0.62, artLuma);
+			float greenDominance = artColor.g - max(artColor.r, artColor.b);
+			waterAlpha *= 1.0 - smoothstep(0.015, 0.07, greenDominance);
+		}
+
+		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
+	}
+
+	texColor = texColor * vColor;
+
+	float grey = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
+	vec3 tone = grey * uColorTone.rgb;
+
+	gl_FragColor = vec4(mix(texColor.rgb, tone, uColorTone.a), texColor.a);
 }

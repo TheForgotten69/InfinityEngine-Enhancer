@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -669,6 +670,78 @@ void test_area_texture_packing_size_mismatch() {
     expect_true(!iee::game::pack_area_cell_texture(wed).has_value(), "flag/dimension mismatch -> nullopt");
 }
 
+void test_area_liquid_texture_packing() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 2;
+    wed.baseHeight = 2;
+    wed.overlays.resize(3);
+    wed.overlays[1].liquidMode = iee::game::TileLiquidMode::Water;
+    wed.overlays[2].liquidMode = iee::game::TileLiquidMode::Lava;
+    // cell flags: bit N set = overlay N covers the cell
+    wed.baseOverlayFlags = {
+        0x00,        // no overlays -> mode 0
+        0x02,        // overlay 1 (water) -> mode 1
+        0x04,        // overlay 2 (lava) -> mode 2
+        0x06,        // overlays 1+2 -> lowest overlay index wins -> mode 1
+    };
+    const auto packed = iee::game::pack_area_liquid_texture(wed);
+    expect_true(packed.has_value(), "packs valid wed");
+    if (packed) {
+        expect_eq(packed->width, 2, "liquid width");
+        expect_eq(packed->height, 2, "liquid height");
+        expect_eq(packed->texels[0], std::uint8_t{0}, "no overlay -> 0");
+        expect_eq(packed->texels[1], std::uint8_t{1}, "water overlay -> 1");
+        expect_eq(packed->texels[2], std::uint8_t{2}, "lava overlay -> 2");
+        expect_eq(packed->texels[3], std::uint8_t{1}, "first liquid overlay wins");
+    }
+}
+
+void test_area_liquid_texture_packing_rejects_mismatch() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 3;
+    wed.baseHeight = 1;
+    wed.baseOverlayFlags = {0x00}; // wrong size
+    expect_true(!iee::game::pack_area_liquid_texture(wed).has_value(),
+                "flag/dimension mismatch -> nullopt");
+    iee::game::WedAreaInfo empty{};
+    expect_true(!iee::game::pack_area_liquid_texture(empty).has_value(), "empty -> nullopt");
+}
+
+void test_fpseam_override_asset_contract() {
+    namespace fs = std::filesystem;
+    const fs::path assetPath = fs::path("assets") / "game-override" / "fpSEAM.glsl";
+    std::ifstream file(assetPath, std::ios::binary);
+    expect_true(static_cast<bool>(file), "fpSEAM override asset exists (run tests from repo root)");
+    if (!file) return;
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    const std::string source = contents.str();
+
+    // Engine interface (from the live vanilla dump) must be fully preserved.
+    constexpr std::string_view vanillaInterface =
+        "uniform sampler2D uTex;\n"
+        "uniform vec2 uTcScale;\n"
+        "uniform vec4 uColorTone;\n"
+        "varying vec2 vTc;\n"
+        "varying vec2 vRef;\n"
+        "varying vec4 vColor;\n";
+    const auto contract = iee::game::check_interface_contract(vanillaInterface, source);
+    expect_true(contract.ok, "fpSEAM override preserves the engine interface");
+    for (const auto &missing : contract.missingIdentifiers) {
+        std::cerr << "  missing identifier: " << missing << '\n';
+    }
+
+    // Our feed contract.
+    for (const std::string_view name :
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeAreaMask",
+          "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
+        expect_true(source.find(name) != std::string::npos,
+                    "fpSEAM override declares feed uniform");
+    }
+    expect_true(source.find("#version") == std::string::npos,
+                "no #version line (engine sources are ARB-era GLSL)");
+}
+
 int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
@@ -693,6 +766,9 @@ int main() {
     test_override_registry();
     test_area_texture_packing();
     test_area_texture_packing_size_mismatch();
+    test_area_liquid_texture_packing();
+    test_area_liquid_texture_packing_rejects_mismatch();
+    test_fpseam_override_asset_contract();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

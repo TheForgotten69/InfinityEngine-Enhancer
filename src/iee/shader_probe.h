@@ -21,7 +21,15 @@ namespace iee::probe {
     void uninstall_shader_probes() noexcept;
     // Called once per frame by the frame hook (Task 8); advances uIeeTime.
     void on_frame_tick(float secondsSinceStart) noexcept;
-    // Hotkey toggle target (Task 9): flips the value fed to uIeeEnabled.
+    // Hotkey cycle target: uIeeEnabled value 0=off / 1=effect on / 2=alignment debug.
     void set_override_effect_enabled(bool enabled) noexcept;
     [[nodiscard]] bool override_effect_enabled() noexcept;
+
+    // Published by area_state at area load; consumed by the uniform feed.
+    void set_area_world_size(float widthPx, float heightPx) noexcept;
+
+    // Published by tile_render per tile draw; consumed by the uniform feed.
+    // viewWorldW/H = rViewPort size (world px visible); the feed derives the
+    // physical-per-world zoom from the live GL viewport.
+    void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept;
 }

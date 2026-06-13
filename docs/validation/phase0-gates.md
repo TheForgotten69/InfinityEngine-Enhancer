@@ -188,3 +188,139 @@ flashes magenta (whole scene during play? movies only? the final window blit
 when scaled?).
 
 Verdict: `fpCatRom covers <X>` — decides whether the fpCatRom replacement ships.
+
+---
+
+## Phase 2 session — WED-masked water
+
+Build: `<sha>`. Install the bundle DLL + copy `game-override/fpSEAM.glsl` into
+the game `override/`. `EnableDebugHotkeys = true`. Use an area with water
+(coast/river/harbor — check the log: `liquidOverlayMask` must be non-zero;
+AR2300N was 0x00).
+
+1. Load the area. Expect `Area liquid texture uploaded: WxH (unit 2, tex N)`
+   and `Program 24 registered for uniform feed`.
+2. F10 once (ON): water cells animate; land cells must be pixel-identical.
+3. F10 again (ALIGN): liquid cells tint red. Walk the shoreline — the red
+   region must hug the actual water edge. **Repeat while zoomed in and out**
+   (this also verifies the zoom term of the world-position equation, and
+   would expose any FBO-resolution mismatch). If offset: note the direction,
+   whether zoom changes it, screenshot, report.
+4. F10 again (OFF): everything back to vanilla.
+5. Scroll and zoom during ON: waves must stay glued to the world (no swimming
+   against the scroll), continuous across tile boundaries; edges of tiles show
+   damped (still) water in a ~3px band — expected, not a bug.
+6. Pause during ON: grey tone must still apply over the water.
+7. Evidence: log + screenshots/clip per state.
+
+Verdicts:
+- Upload/registration: PASS/FAIL
+- Alignment (incl. zoomed): PASS/FAIL (+offset notes)
+- Water visuals: notes (incl. whether the world-space glints read as sparkle
+  or blocky pop — cosmetic judgment call)
+- Regression (land tiles, fonts, sprites, pause): PASS/FAIL
+
+### Phase 2 session v2 findings (2026-06-12, AR2600)
+
+- Gradient debug + F10 value snapshots worked exactly as designed: the log
+  showed `scroll=(3, 8)`/`(17, 1)`/`(14, 60)` for a citadel view that needs
+  thousands — **`nOffsetX/Y` is the within-tile smooth-scroll remainder
+  (0..63), not the world view position.** The mask was anchored to the screen.
+  Fixed: `read_area_scroll` now reads `m_ptCurrentPosExact` (CInfinity+0x2F4,
+  layout-asserted).
+- The "styling matched particles" observation: coincidence of screen position
+  — with near-zero scroll the mask sampled the map's NW cells regardless of
+  where the camera was.
+- Viewport confirmed sane: full-window `3840x2135 at (0, 0)`; zoom values
+  plausible (1.08, 1.30). The y-flip/zoom terms remain to be confirmed by the
+  next gradient screenshot.
+- OPEN: `m_ptCurrentPosExact` may be the view's top-left or its center. The
+  v3 gradient screenshot decides: a half-viewport shift in the gradient =
+  center semantics (fix is a CPU-side subtract).
+- Classification quality (fountains/yspool unlit, base-TIS sea unflagged) is
+  Phase 2.5: per-tile resref + pixel masks via tile_liquid machinery.
+
+### Phase 2 session v3 findings (2026-06-12)
+
+- `m_ptCurrentPosExact` raw values are ~14.2e6 — **16.16 fixed point** (the
+  `bSetExactScale` parameter of `SetViewPosition` names the scaling; EEex docs
+  give no multiplier). Geometry bounds the scale to >>16 (view x≈217, NW
+  citadel ✓) or /10000 (x≈1422); >>16 shipped as the IE-standard prior.
+- The uniform red wash + global waviness in v3 = mask UV in the thousands
+  clamping to the far-edge texel; expected symptom, not a new bug.
+- **v4 must include the scale delta-test**: press F10 (note scroll in log),
+  scroll the camera right by roughly one screen width, press F10 again. The
+  scroll-x delta should be ≈ viewportWidth/zoom (≈3555 at 3840/1.08). If the
+  delta is ~6.5x smaller (~542), the true scale is /10000 — one-line fix.
+
+### Phase 2 session v4 findings (2026-06-12) — decompile ground truth
+
+- v4 red blobs mirrored the pool layout — mask data + world size verified
+  correct; only the view transform remained wrong. Zooming moved the read
+  "scroll" the wrong direction, killing the top-left model.
+- **Decompiled ground truth** (user's full Ghidra C export, Baldur.exe.c):
+  - `CInfinity::GetWorldCoordinates`: `world = (nNew - rViewPort.origin) + screen`
+  - `CInfinity::ScreenToWorld`: zoom = rViewPort.size / rViewPortNotZoomed.size
+    applied to (screen - rViewPortNotZoomed.origin), then the same nNew shift.
+  - `CInfinity::Scroll`: `m_ptCurrentPosExact` is **x10000 decimal fixed point**
+    (not 16.16 as v4's build assumed; both prior models superseded).
+- Fixed: `read_view_transform` replicates the engine formula exactly from
+  `nNewX/nNewY` + the two viewport rects (fields added to CInfinity with
+  static_asserts at +0x60/+0x68/+0x78). No scale guessing remains.
+
+### Phase 2 session v6 findings (2026-06-13) — UI-scale root cause
+
+- Feeds counter: ~54/s = per-frame; stale-uniform hypothesis eliminated.
+- **Root cause found in the raw rects**: `rVPNZ=(0,0,2364,1314)` vs GL viewport
+  3840x2135 — the engine's "screen" coordinates are **UI-scaled logical
+  pixels** (factor ~1.624), not physical pixels. ScreenToWorld speaks logical;
+  gl_FragCoord speaks physical; the shader mixed them.
+- Fixed: the publish path now carries the view's WORLD size (rViewPort.size);
+  the feed derives per-axis physical-per-world zoom against the live GL
+  viewport (uIeeZoom is now a vec2). Resolution/UI-scale independent.
+- Classification note (user concern): flags are NOT all-overlays — they come
+  from resref-prefix classification (WTWAVE/WTRIV/WTPOOL/WTLAK/WTFALL/WTURN/
+  YSPOOL/YSRIV/YSWAVE -> water; WTLAVA/WTGOO/WTSEW/WTSW -> other modes).
+  Base-TIS-painted water remains uncovered (Phase 2.5).
+
+### Phase 2 session v7 (2026-06-13) — ALIGNMENT PASS
+
+- Gradient glued to the world under scroll and zoom; blue mask cells hug the
+  shoreline; water mode styles only liquid cells. The world transform is
+  correct end to end (engine formula + UI-scale bridge).
+- Visual quality is explicitly NOT a pass yet: the current effect is a subtle
+  swell/tint over existing art — the styling pass comes next.
+
+### Phase 2 session v12 post-mortem (2026-06-13)
+
+- v12 (publish from the frame tick) broke ALL maps: water everywhere,
+  tracking zoom. Decompile root cause: `AdjustViewportForZoom` recomputes
+  `rViewPort = rViewPortNotZoomed * m_fZoom` transiently around the world
+  pass — at SwapBuffers time the rects are not the render-time values, so the
+  published transform was junk. Reverted.
+- v13 fix: publish from the existing DrawColorTone hook when mode == Seam (8)
+  — the engine routes its tile pass through DrawColorTone on every map type
+  (decompile: CInfinity::Render calls DrawColorTone at 464958; sprite/font
+  tones at 301145/245924), so the publish runs mid-world-pass with coherent
+  rects, before the fpSEAM bind that consumes the values. Zero new RVAs.
+- Bonus V1 closure: DRAW_TONE_SPRITE / DRAW_TONE_FONT / DRAW_TONE_GREY /
+  DRAW_TONE_NORMAL constants in the decompile confirm DrawColorTone selects
+  per-draw-type programs.
+
+### Phase 2 session v14 verdict (2026-06-13) — heuristic gates rejected
+
+- v13/v14 publish fix works (water world-glued on all map types); area
+  transitions improved by the LoadArea seed.
+- The luma+chroma art gates are the WRONG layer: they approximate the water
+  contour from colors and produce oddities (holes, mottled edges). User's
+  arrow screenshot: the true contour is the painted water silhouette inside
+  flagged cells.
+- **Phase 2.5 design locked (from the arrow + the decompile):** the overlay
+  tileset's NON-TRANSPARENT PIXELS are the pixel-perfect water mask. Flagged
+  cells alpha-blend wt*/ys* overlay tiles (decompile: WATER_ALPHA path in
+  CInfTileSet::Render); overlay TIS are classic palette tiles (the non-0xc
+  format branch) with a transparent key. Plan: parse WED overlay tilemaps
+  (offsets already stored in WedAreaInfo), decode each unique overlay tile
+  once (palette TIS, host-testable), stamp a sub-cell fine mask (4-8px),
+  upload via the proven unit-2 path, and DELETE the shader's coverage
+  smoothing + luma/chroma gates.

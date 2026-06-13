@@ -1,6 +1,7 @@
 #include "area_state.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string_view>
 
@@ -13,6 +14,7 @@
 #include "iee/game/resref_runtime.h"
 #include "iee/game/tile_liquid.h"
 #include "iee/game/wed_runtime.h"
+#include "iee/shader_probe.h"
 
 namespace iee::area {
     namespace {
@@ -73,10 +75,78 @@ namespace iee::area {
             return false;
         }
 
+        // nNewX/nNewY is the view's world position in plain pixels — taken
+        // straight from the decompiled CInfinity::GetWorldCoordinates:
+        //   world = (nNew - rViewPort.origin) + screen
+        // (m_ptCurrentPosExact is the same position in x10000 fixed point,
+        // per the decompiled CInfinity::Scroll; not needed here.)
         const auto *base = reinterpret_cast<const std::byte *>(area);
-        const auto *offsetXAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetX);
-        const auto *offsetYAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetY);
-        return core::safe_read(offsetXAddr, outOffsetX) && core::safe_read(offsetYAddr, outOffsetY);
+        const auto *posXAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewX);
+        const auto *posYAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewY);
+        return core::safe_read(posXAddr, outOffsetX) && core::safe_read(posYAddr, outOffsetY);
+    }
+
+    bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom) {
+        if (!area) {
+            return false;
+        }
+        const auto *base = reinterpret_cast<const std::byte *>(area);
+        const auto *zoomAddr = base + offsetof(game::CGameArea, m_cInfinity) + manifest.offsets.infinityZoom;
+        return core::safe_read(zoomAddr, outZoom);
+    }
+
+    bool read_view_transform(const game::CGameArea *area, ViewTransform &out) {
+        if (!area) {
+            return false;
+        }
+        const auto *infinityBase = reinterpret_cast<const std::byte *>(area) +
+                                   offsetof(game::CGameArea, m_cInfinity);
+
+        std::int32_t newX = 0;
+        std::int32_t newY = 0;
+        game::CRect viewPortNotZoomed{};
+        game::CRect viewPort{};
+        if (!core::safe_read(infinityBase + offsetof(game::CInfinity, nNewX), newX) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, nNewY), newY) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPortNotZoomed), viewPortNotZoomed) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPort), viewPort)) {
+            return false;
+        }
+
+        const float logicalW = static_cast<float>(viewPortNotZoomed.right - viewPortNotZoomed.left);
+        const float logicalH = static_cast<float>(viewPortNotZoomed.bottom - viewPortNotZoomed.top);
+        const float worldW = static_cast<float>(viewPort.right - viewPort.left);
+        const float worldH = static_cast<float>(viewPort.bottom - viewPort.top);
+        if (logicalW <= 0.0f || logicalH <= 0.0f || worldW <= 0.0f || worldH <= 0.0f) {
+            return false;
+        }
+
+        // ScreenToWorld in logical px: world = nNew + (logical - rVPNZ.origin) * rVP.size/rVPNZ.size
+        // The rVPNZ.origin shift folds into scroll (in world px); the per-pixel
+        // term is converted to PHYSICAL pixels by the probe at feed time.
+        out.viewWorldW = worldW;
+        out.viewWorldH = worldH;
+        out.scrollX = static_cast<float>(newX) -
+                      static_cast<float>(viewPortNotZoomed.left) * worldW / logicalW;
+        out.scrollY = static_cast<float>(newY) -
+                      static_cast<float>(viewPortNotZoomed.top) * worldH / logicalH;
+
+        // Debug: raw inputs, rate-limited — pairs with F10 snapshots so the
+        // transform arithmetic can be checked exactly against screenshots.
+        static std::uint32_t s_lastLogTick = 0;
+        const std::uint32_t nowTick = GetTickCount();
+        if (nowTick - s_lastLogTick > 5000) {
+            s_lastLogTick = nowTick;
+            LOG_INFO("ViewXform raw: nNew=({}, {}) rVP=({}, {}, {}, {}) rVPNZ=({}, {}, {}, {}) -> scroll=({}, {}) viewWorld={}x{}",
+                     newX, newY,
+                     viewPort.left, viewPort.top, viewPort.right, viewPort.bottom,
+                     viewPortNotZoomed.left, viewPortNotZoomed.top,
+                     viewPortNotZoomed.right, viewPortNotZoomed.bottom,
+                     out.scrollX, out.scrollY, out.viewWorldW, out.viewWorldH);
+        }
+        return true;
     }
 
     void refresh_wed_cache(AppContext &ctx, void *infGame) {
@@ -140,11 +210,11 @@ namespace iee::area {
                       liquidMask);
         }
 
-        // Upload the per-cell overlay flags as an R8 texture on reserved unit 2.
+        // Upload the per-cell liquid modes as an R8 texture on reserved unit 2.
         // CAVEAT: this runs on the LoadArea thread, which may not own the GL
         // context. If in-game logs show GL errors here, move the upload to a
         // pending-work flag consumed by the frame hook (render thread).
-        if (const auto packed = game::pack_area_cell_texture(*cachedWed)) {
+        {
             auto &gl = game::gl::get_gl_functions();
             if (gl.textureUploadAvailable) {
                 core::GlStateGuard guard;
@@ -153,16 +223,32 @@ namespace iee::area {
                 gl.glActiveTexture(game::gl::TEXTURE0 + 2);
                 gl.glBindTexture(game::gl::TEXTURE_2D, s_areaTexture);
                 gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
+
+                // On any failure the previous area's mask must not survive the
+                // transition: fall back to a 1x1 zero texel (mode 0 everywhere).
+                static const std::uint8_t kNoLiquid = 0;
+                const auto packed = game::pack_area_liquid_texture(*cachedWed);
+                const void *texels = packed ? static_cast<const void *>(packed->texels.data())
+                                            : static_cast<const void *>(&kNoLiquid);
+                const int width = packed ? packed->width : 1;
+                const int height = packed ? packed->height : 1;
+
                 gl.glTexImage2D(game::gl::TEXTURE_2D, 0, game::gl::R8,
-                                packed->width, packed->height, 0,
-                                game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
+                                width, height, 0,
+                                game::gl::RED, game::gl::UNSIGNED_BYTE, texels);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
-                if (game::gl::check_error("area cell texture upload")) {
-                    LOG_INFO("Area cell texture uploaded: {}x{} (unit 2, tex {})",
-                             packed->width, packed->height, s_areaTexture);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
+                if (packed && game::gl::check_error("area liquid texture upload")) {
+                    LOG_INFO("Area liquid texture uploaded: {}x{} (unit 2, tex {})",
+                             width, height, s_areaTexture);
+                    probe::set_area_world_size(static_cast<float>(width) * 64.0f,
+                                               static_cast<float>(height) * 64.0f);
+                } else if (!packed) {
+                    LOG_WARN("Area liquid pack failed; uploaded 1x1 no-liquid mask");
                 } else {
-                    LOG_WARN("Area cell texture upload reported a GL error (likely wrong thread; see caveat)");
+                    LOG_WARN("Area liquid texture upload reported a GL error (likely wrong thread; see caveat)");
                 }
             }
         }
