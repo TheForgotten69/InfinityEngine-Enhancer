@@ -775,6 +775,91 @@ void test_area_liquid_texture_packing_rejects_mismatch() {
     expect_true(!iee::game::pack_area_liquid_texture(empty).has_value(), "empty -> nullopt");
 }
 
+void test_build_fine_liquid_mask() {
+    using namespace iee::game;
+
+    WedAreaInfo wed{};
+    wed.baseWidth = 2;
+    wed.baseHeight = 2;
+    wed.overlays.resize(2);
+    wed.overlays[1].liquidMode = TileLiquidMode::Water;
+    wed.overlays[1].width = 2;
+    wed.overlays[1].height = 2;
+    // Cells 0 and 2 carry the water overlay; cell 0 has a decodable tile,
+    // cell 2's tile fails to decode (full-cell fallback).
+    wed.baseOverlayFlags = {0x02, 0x00, 0x02, 0x00};
+    wed.overlays[1].cellTileIndex = {5, 0xFFFF, 7, 0xFFFF};
+
+    // Tile 5: left half opaque (pixel columns 0..31). On top of that, the 8x8
+    // block at texel (4,0) gets exactly 32 opaque pixels (majority -> liquid)
+    // and the block at (5,0) gets 31 (below majority -> land).
+    TileAlpha tile5{};
+    for (int y = 0; y < kTilePixels; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            tile5.opaque[y * kTilePixels + x] = 1;
+        }
+    }
+    for (int i = 0; i < 32; ++i) {
+        tile5.opaque[(i / 8) * kTilePixels + 32 + (i % 8)] = 1;
+    }
+    for (int i = 0; i < 31; ++i) {
+        tile5.opaque[(i / 8) * kTilePixels + 40 + (i % 8)] = 1;
+    }
+
+    int providerCalls = 0;
+    const auto provider = [&](std::size_t overlayIndex, std::uint16_t tileIndex)
+            -> std::optional<TileAlpha> {
+        ++providerCalls;
+        expect_eq(overlayIndex, std::size_t{1}, "provider should be asked for the liquid overlay");
+        if (tileIndex == 5) return tile5;
+        return std::nullopt; // tile 7: decode failure
+    };
+
+    const auto mask = build_fine_liquid_mask(wed, provider);
+    expect_true(mask.has_value(), "fine mask should build for a valid wed");
+    if (!mask) return;
+
+    expect_eq(mask->width, 16, "fine mask width should be baseWidth * 8");
+    expect_eq(mask->height, 16, "fine mask height should be baseHeight * 8");
+    expect_eq(providerCalls, 2, "provider should be called once per flagged cell with a tile index");
+
+    const auto texel = [&](int x, int y) { return mask->texels[y * mask->width + x]; };
+
+    // Cell 0: painted silhouette.
+    expect_eq(texel(0, 0), std::uint8_t{1}, "opaque overlay pixels should stamp the liquid mode");
+    expect_eq(texel(3, 7), std::uint8_t{1}, "left half of tile 5 should be liquid");
+    expect_eq(texel(4, 0), std::uint8_t{1}, "exactly-half-opaque blocks should count as liquid");
+    expect_eq(texel(5, 0), std::uint8_t{0}, "below-majority blocks should stay land");
+    expect_eq(texel(6, 0), std::uint8_t{0}, "transparent overlay pixels should stay land");
+    expect_eq(texel(7, 7), std::uint8_t{0}, "right edge of tile 5 should stay land");
+
+    // Cell 1 (unflagged): all land.
+    expect_eq(texel(8, 0), std::uint8_t{0}, "unflagged cells should stay land");
+    expect_eq(texel(15, 7), std::uint8_t{0}, "unflagged cells should stay land at the far corner");
+
+    // Cell 2 (tile decode failed): full-cell fallback.
+    expect_eq(texel(0, 8), std::uint8_t{1}, "undecodable tiles should fall back to full-cell liquid");
+    expect_eq(texel(7, 15), std::uint8_t{1}, "full-cell fallback should cover the whole cell");
+
+    // Cell 3 (unflagged): all land.
+    expect_eq(texel(8, 8), std::uint8_t{0}, "unflagged cells should stay land");
+
+    // A flagged cell with no parsed tilemap at all also falls back to full-cell.
+    WedAreaInfo noTilemap = wed;
+    noTilemap.overlays[1].cellTileIndex.clear();
+    const auto fallbackMask = build_fine_liquid_mask(noTilemap, provider);
+    expect_true(fallbackMask.has_value(), "fine mask should build without a parsed tilemap");
+    if (fallbackMask) {
+        expect_eq(fallbackMask->texels[0], std::uint8_t{1},
+                  "missing tilemap should fall back to full-cell liquid");
+        expect_eq(fallbackMask->texels[7 * 16 + 7], std::uint8_t{1},
+                  "missing tilemap fallback should cover the whole cell");
+    }
+
+    WedAreaInfo empty{};
+    expect_true(!build_fine_liquid_mask(empty, provider).has_value(), "empty wed -> nullopt");
+}
+
 void test_fpseam_override_asset_contract() {
     namespace fs = std::filesystem;
     const fs::path assetPath = fs::path("assets") / "game-override" / "fpSEAM.glsl";
@@ -837,6 +922,7 @@ int main() {
     test_area_texture_packing_size_mismatch();
     test_area_liquid_texture_packing();
     test_area_liquid_texture_packing_rejects_mismatch();
+    test_build_fine_liquid_mask();
     test_fpseam_override_asset_contract();
 
     if (g_failures != 0) {

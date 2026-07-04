@@ -61,4 +61,4 @@ $RECYCLE.BIN/
 *.msm
 *.msp
 *.lnk
-/shaders/
+/shaders/compile_commands.json
