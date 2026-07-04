@@ -324,3 +324,37 @@ Verdicts:
   once (palette TIS, host-testable), stamp a sub-cell fine mask (4-8px),
   upload via the proven unit-2 path, and DELETE the shader's coverage
   smoothing + luma/chroma gates.
+
+## Phase 2.5 session v15 — overlay-pixel fine mask
+
+Build: `<sha>` (fine mask replaces cell mask + art gates). Install the bundle
+DLL + copy `game-override/fpSEAM.glsl` into the game `override/`.
+`EnableDebugHotkeys = true`.
+
+1. Load a water area. Expect
+   `Fine liquid mask uploaded: WxH texels, N unique overlay tiles decoded (unit 2, tex T)`
+   with W/H = 8x the WED base grid and N > 0. N == 0 means every cell fell
+   back to full-cell mode — the tile fetch path (pTileSets -> pResTiles ->
+   pData) needs DLL-log investigation before judging visuals.
+2. **Arrow test (the v14 rejection case):** the shoreline that motivated
+   Phase 2.5. F10 ON: water must follow the painted silhouette inside flagged
+   cells — no square cell edges, no holes in open water, no mottled edges on
+   dark land. Screenshot the same spot as the v14 arrow screenshot.
+3. Fountains/pools (yspool): basin interior styled, rim untouched.
+4. F10 ALIGN: blue region must now trace the painted contour (not whole
+   cells). Zoom in close on a shoreline for one screenshot.
+5. Map changes: transition between 2-3 areas (water -> waterless -> water).
+   The mask must never survive a transition (waterless area shows zero water;
+   log shows a fresh upload per load).
+6. Lava/sewage if reachable (e.g. a sewer area, mode 4): mode still styles
+   non-water liquids; lava keeps the emissive identity.
+7. Regression: land tiles, fonts, sprites, pause tone — pixel-identical
+   with F10 OFF.
+
+Verdicts:
+- Fine mask upload (N unique tiles > 0): PASS/FAIL
+- Contour fidelity (arrow test, fountains): PASS/FAIL (+screenshots)
+- Area transitions: PASS/FAIL
+- Regression: PASS/FAIL
+- Notes: edge softness (one-texel rim from the 5-tap coverage) — cosmetic
+  tuning is the NEXT step, only after the contour is clean.
