@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 
 #include "app_context.h"
 #include "iee/core/gl_state_guard.h"
@@ -210,7 +211,8 @@ namespace iee::area {
                       liquidMask);
         }
 
-        // Upload the per-cell liquid modes as an R8 texture on reserved unit 2.
+        // Upload the fine liquid mask (8px/texel from the painted overlay-tile
+        // silhouette) as an R8 texture on reserved unit 2.
         // CAVEAT: this runs on the LoadArea thread, which may not own the GL
         // context. If in-game logs show GL errors here, move the upload to a
         // pending-work flag consumed by the frame hook (render thread).
@@ -224,10 +226,45 @@ namespace iee::area {
                 gl.glBindTexture(game::gl::TEXTURE_2D, s_areaTexture);
                 gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
 
+                // Overlay tile alpha straight from the engine's loaded tilesets,
+                // memoized per unique (overlay, tile). Any unreadable step
+                // returns nullopt and the stamper keeps the full-cell fallback.
+                std::unordered_map<std::uint32_t, std::optional<game::TileAlpha>> tileAlphaCache;
+                const auto &tileSets = areaSnapshot.m_cInfinity.pTileSets;
+                const auto tileAlpha = [&](std::size_t overlayIndex,
+                                           std::uint16_t tileIndex) -> std::optional<game::TileAlpha> {
+                    const auto key = static_cast<std::uint32_t>(overlayIndex) << 16 | tileIndex;
+                    if (const auto cached = tileAlphaCache.find(key); cached != tileAlphaCache.end()) {
+                        return cached->second;
+                    }
+                    auto &slot = tileAlphaCache[key];
+                    if (overlayIndex >= tileSets.size() || !tileSets[overlayIndex]) {
+                        return slot;
+                    }
+                    game::CInfTileSet tileSet{};
+                    if (!core::safe_read(tileSets[overlayIndex], tileSet) ||
+                        !tileSet.pResTiles || tileIndex >= tileSet.nTiles) {
+                        return slot;
+                    }
+                    void *resPtr = nullptr;
+                    if (!core::safe_read(tileSet.pResTiles + tileIndex, resPtr) || !resPtr) {
+                        return slot;
+                    }
+                    game::CRes tileRes{};
+                    if (!core::safe_read(resPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
+                        tileRes.nSize < game::kPaletteTileBytes ||
+                        !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
+                        return slot;
+                    }
+                    slot = game::decode_palette_tile_alpha(
+                            static_cast<const std::uint8_t *>(tileRes.pData), tileRes.nSize);
+                    return slot;
+                };
+
                 // On any failure the previous area's mask must not survive the
                 // transition: fall back to a 1x1 zero texel (mode 0 everywhere).
                 static const std::uint8_t kNoLiquid = 0;
-                const auto packed = game::pack_area_liquid_texture(*cachedWed);
+                const auto packed = game::build_fine_liquid_mask(*cachedWed, tileAlpha);
                 const void *texels = packed ? static_cast<const void *>(packed->texels.data())
                                             : static_cast<const void *>(&kNoLiquid);
                 const int width = packed ? packed->width : 1;
@@ -241,12 +278,13 @@ namespace iee::area {
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
                 if (packed && game::gl::check_error("area liquid texture upload")) {
-                    LOG_INFO("Area liquid texture uploaded: {}x{} (unit 2, tex {})",
-                             width, height, s_areaTexture);
-                    probe::set_area_world_size(static_cast<float>(width) * 64.0f,
-                                               static_cast<float>(height) * 64.0f);
+                    LOG_INFO("Fine liquid mask uploaded: {}x{} texels, {} unique overlay tiles decoded (unit 2, tex {})",
+                             width, height, tileAlphaCache.size(), s_areaTexture);
+                    // 8 world px per fine-mask texel.
+                    probe::set_area_world_size(static_cast<float>(width) * 8.0f,
+                                               static_cast<float>(height) * 8.0f);
                 } else if (!packed) {
-                    LOG_WARN("Area liquid pack failed; uploaded 1x1 no-liquid mask");
+                    LOG_WARN("Fine liquid mask build failed; uploaded 1x1 no-liquid mask");
                 } else {
                     LOG_WARN("Area liquid texture upload reported a GL error (likely wrong thread; see caveat)");
                 }

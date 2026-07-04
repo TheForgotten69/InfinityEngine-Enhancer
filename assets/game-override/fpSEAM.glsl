@@ -21,7 +21,7 @@ uniform highp	vec2		uIeeScroll;        // world px of viewport origin
 uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
-uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: liquid mode per WED cell
+uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: fine liquid mask, 8px/texel
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
 uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
@@ -122,26 +122,24 @@ vec3 ieeWaterNormal(vec2 worldPos, float t)
 	return normalize(vec3(n.x, n.y, max(n.z, 0.3) * 2.2));
 }
 
-// Liquid coverage (0 = land, 1 = liquid) at a world position.
+// Liquid coverage (0 = land, 1 = liquid) at a world position. The mask is the
+// painted overlay-tile silhouette at 8px/texel, so this IS the water contour.
 float ieeLiquidAt(vec2 worldPos)
 {
 	float mode = texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0;
 	return mode > 0.5 ? 1.0 : 0.0;
 }
 
-// Continuous liquid coverage: manual bilinear over the 64px cell grid.
-// 1 deep inside water, 0 on land, smooth curve through shoreline cells —
-// the "one surface" field that kills the per-cell squares.
+// Soft coverage: center tap plus 4 taps one mask texel (8px) away. 1 inside
+// the painted water, 0 on land, a one-texel soft rim along the contour.
 float ieeCoverage(vec2 worldPos)
 {
-	vec2 cell = worldPos / 64.0 - 0.5;
-	vec2 base = (floor(cell) + 0.5) * 64.0;
-	vec2 f = fract(cell);
-	float c00 = ieeLiquidAt(base);
-	float c10 = ieeLiquidAt(base + vec2(64.0, 0.0));
-	float c01 = ieeLiquidAt(base + vec2(0.0, 64.0));
-	float c11 = ieeLiquidAt(base + vec2(64.0, 64.0));
-	return mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+	float cover = ieeLiquidAt(worldPos);
+	cover += ieeLiquidAt(worldPos + vec2( 8.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(-8.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0,  8.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0, -8.0));
+	return cover / 5.0;
 }
 
 // Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
@@ -265,21 +263,10 @@ void main()
 			water += deepColor * emissive * (0.6 + 0.8 * pulse);
 		}
 
-		// Soft replacement by coverage: full water inside the body, a smooth
-		// blend through the boundary cells, untouched land beyond.
+		// Soft replacement by coverage: full water inside the painted contour,
+		// a one-texel soft rim along it, untouched land beyond. The fine mask
+		// replaces the old luma/chroma art gates entirely.
 		float waterAlpha = smoothstep(0.30, 0.7, coverage);
-
-		// Art gates: a live pixel-resolution mask within coarse cells.
-		// Luma: painted water is dark; rims/pavement/flowers are bright.
-		// Chroma: grass is green-dominant, water never is (teal has B >= G,
-		// muddy rivers are R~G balanced) — kills dark night grass that a pure
-		// luma gate lets through. Lava is exempt (authored bright).
-		if (emissive <= 0.0)
-		{
-			waterAlpha *= 1.0 - smoothstep(0.40, 0.62, artLuma);
-			float greenDominance = artColor.g - max(artColor.r, artColor.b);
-			waterAlpha *= 1.0 - smoothstep(0.015, 0.07, greenDominance);
-		}
 
 		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
 	}
