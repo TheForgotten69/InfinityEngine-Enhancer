@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include "iee/game/runtime_types_x64.h"
 #include "iee/game/shader_override.h"
 #include "iee/game/tile_upscale.h"
+#include "iee/game/tis_palette.h"
 #include "iee/game/wed_runtime.h"
 
 namespace {
@@ -342,8 +344,10 @@ namespace {
         constexpr std::size_t headerOffset = 0x0;
         constexpr std::size_t layerOffset = sizeof(WED_WedHeader_st);
         constexpr std::size_t tilemapOffset = layerOffset + 2 * sizeof(WED_LayerHeader_st);
+        constexpr std::size_t liquidTilemapOffset = tilemapOffset + 4 * sizeof(WED_TileData_st);
+        constexpr std::size_t liquidLookupOffset = liquidTilemapOffset + 4 * sizeof(WED_TileData_st);
 
-        std::vector<std::byte> bytes(tilemapOffset + 4 * sizeof(WED_TileData_st));
+        std::vector<std::byte> bytes(liquidLookupOffset + 4 * sizeof(std::uint16_t));
 
         WED_WedHeader_st header{};
         header.nFileType = 0x20444557;
@@ -365,13 +369,24 @@ namespace {
         liquidLayer.nTilesDown = 2;
         liquidLayer.rrTileSet = {'W', 'T', 'W', 'A', 'V', 'E', '0', '1'};
         liquidLayer.nNumUniqueTiles = 4;
-        liquidLayer.nOffsetToTileData = static_cast<std::uint32_t>(tilemapOffset);
+        liquidLayer.nOffsetToTileData = static_cast<std::uint32_t>(liquidTilemapOffset);
+        liquidLayer.nOffsetToTileList = static_cast<std::uint32_t>(liquidLookupOffset);
         write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &liquidLayer, sizeof(liquidLayer));
 
         std::array<WED_TileData_st, 4> tileData{};
         tileData[0].bFlags = 0x02;
         tileData[2].bFlags = 0x02;
         write_bytes(bytes, tilemapOffset, tileData.data(), sizeof(tileData));
+
+        std::array<WED_TileData_st, 4> liquidTileData{};
+        liquidTileData[0].nStartingTile = 3;
+        liquidTileData[1].nStartingTile = 0;
+        liquidTileData[2].nStartingTile = 2;
+        liquidTileData[3].nStartingTile = 500;  // lookup entry out of bounds
+        write_bytes(bytes, liquidTilemapOffset, liquidTileData.data(), sizeof(liquidTileData));
+
+        const std::array<std::uint16_t, 4> liquidTileLookup{21, 22, 23, 24};
+        write_bytes(bytes, liquidLookupOffset, liquidTileLookup.data(), sizeof(liquidTileLookup));
 
         CRes resource{};
         resource.pData = bytes.data();
@@ -399,6 +414,59 @@ namespace {
         expect_eq(overlayFlags, std::uint8_t{0x02}, "Overlay flags should be returned for covered base cells");
         expect_true(!base_cell_has_liquid_overlay(wed, 1, overlayFlags),
                     "Second base cell should not report liquid overlay coverage");
+
+        expect_true(wed.overlays[0].cellTileIndex.empty(),
+                    "Base overlay should not carry per-cell tile indices");
+        expect_eq(wed.overlays[1].cellTileIndex.size(), std::size_t{4},
+                  "Liquid overlay should carry one tile index per overlay cell");
+        expect_eq(wed.overlays[1].cellTileIndex[0], std::uint16_t{24},
+                  "Cell 0 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[1], std::uint16_t{21},
+                  "Cell 1 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[2], std::uint16_t{23},
+                  "Cell 2 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[3], std::uint16_t{0xFFFF},
+                  "Out-of-bounds lookup entries should stay 0xFFFF");
+    }
+
+    void test_decode_palette_tile_alpha() {
+        using namespace iee::game;
+
+        std::vector<std::uint8_t> tile(kPaletteTileBytes, 0);
+
+        // BGRA palette entries. Entry 0 is transparent by index regardless of
+        // color; entry 1 is the green key; entries 2 and 3 are opaque colors,
+        // with entry 3 deliberately near-green.
+        const auto setEntry = [&](std::size_t i, std::uint8_t b, std::uint8_t g, std::uint8_t r) {
+            tile[i * 4 + 0] = b;
+            tile[i * 4 + 1] = g;
+            tile[i * 4 + 2] = r;
+            tile[i * 4 + 3] = 255;
+        };
+        setEntry(0, 255, 0, 0);
+        setEntry(1, 0, 255, 0);
+        setEntry(2, 255, 255, 255);
+        setEntry(3, 0, 255, 1);
+
+        std::uint8_t *indices = tile.data() + 1024;
+        std::fill(indices, indices + kTilePixels * kTilePixels, std::uint8_t{2});
+        indices[0] = 0;
+        indices[1] = 1;
+        indices[2] = 3;
+
+        const auto alpha = decode_palette_tile_alpha(tile.data(), tile.size());
+        expect_true(alpha.has_value(), "Full-size palette tile should decode");
+        expect_eq(alpha->opaque[0], std::uint8_t{0}, "Palette index 0 should be transparent");
+        expect_eq(alpha->opaque[1], std::uint8_t{0}, "Green-key palette entries should be transparent");
+        expect_eq(alpha->opaque[2], std::uint8_t{1}, "Near-green palette entries should stay opaque");
+        expect_eq(alpha->opaque[3], std::uint8_t{1}, "Ordinary palette entries should be opaque");
+        expect_eq(alpha->opaque[kTilePixels * kTilePixels - 1], std::uint8_t{1},
+                  "Last pixel should decode like any other");
+
+        expect_true(!decode_palette_tile_alpha(tile.data(), kPaletteTileBytes - 1).has_value(),
+                    "Undersized buffers should not decode as palette tiles");
+        expect_true(!decode_palette_tile_alpha(nullptr, kPaletteTileBytes).has_value(),
+                    "Null buffers should not decode");
     }
 
     void test_wed_screen_point_mapping() {
@@ -753,6 +821,7 @@ int main() {
     test_config_shader_override_defaults();
     test_config_shader_override_roundtrip();
     test_parse_loaded_wed();
+    test_decode_palette_tile_alpha();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();
     test_wed_screen_point_mapping();

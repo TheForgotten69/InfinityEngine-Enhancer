@@ -70,6 +70,7 @@ add_library(iee_common STATIC
     src/iee/game/shader_override.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
+    src/iee/game/tis_palette.cpp
     src/iee/game/tis_runtime.cpp
     src/iee/game/wed_runtime.cpp
 )
