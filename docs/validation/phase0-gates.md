@@ -445,3 +445,31 @@ Needs the NEW DLL BUNDLE (uniform feed changed) + the new fpSEAM.glsl.
 4. Regression: area-transition fades over water cells (the dampening keys
    off vColor.a in (0.15, 0.9) — a fade drawing tiles at those alphas over
    water would dim; report if transitions look wrong), pause tone, OFF state.
+
+### Phase 2.6 session v18 verdict (2026-07-05)
+
+- Fountains FIXED by the secondary dampening.
+- `Area water tint` never logged: AR2600's water overlay tile is PVRZ, so
+  the palette decode never succeeds and uIeeWaterTint stayed neutral grey —
+  the color finding is unchanged by design, not by bug. The whole 2.5
+  palette/fine-mask machinery is inert on EE PVRZ overlays.
+- Color seam persists (softened): with-secondary cells show painted art at
+  35% over our water, without-secondary cells show pure our-water.
+- NEW: a teal ~cell-size square at the map's top-left edge, identical in
+  probe and ON states — state-independence suggests it is not from our
+  fpSEAM branches. Needs an F10-OFF screenshot of the same spot to classify
+  (pre-existing art/engine draw vs our texture-unit leak).
+
+## Phase 2.6 session v19 — secondary pass suppressed (shader-only)
+
+Drop the new `fpSEAM.glsl` (no DLL change). F10 ON:
+
+1. The v18 color seam in the sea should be GONE — every water cell now
+   renders only our water (one source of truth). Color is still the neutral
+   grade; the authored tint returns in v20 (PVRZ decode).
+2. Fountains: still styled (they were fixed at 35%; now 0%).
+3. NEW RISK to check: land-art pixels INSIDE water cells (basin rims, rocks
+   crossing a flagged cell) must look unchanged — the suppressed secondary
+   also repainted those pixels; the base tile should already carry them.
+4. Please also take ONE F10-OFF screenshot of the v18 top-left teal square
+   spot, to classify that bug.

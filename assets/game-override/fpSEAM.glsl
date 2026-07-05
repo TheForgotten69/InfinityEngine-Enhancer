@@ -297,14 +297,15 @@ void main()
 
 	// The engine blends the painted-art secondary tile at WATER_ALPHA over
 	// flagged cells AFTER the base pass; at native strength it buries our
-	// water under static art (v17: fountains looked vanilla). Dampen that
-	// pass — its hue still glazes our water — leaving every other draw
-	// (fades on land, OFF state) untouched.
+	// water under static art (v17: fountains looked vanilla), and cells
+	// WITHOUT a secondary tile render our water alone — the two populations
+	// looked different (v18 color seam). Suppress the pass entirely while ON
+	// so every water cell shares one source of truth; OFF and ALIGN keep it.
 	float alphaScale = 1.0;
 	if (uIeeEnabled > 0.5 && uIeeEnabled < 1.5 && cellMode > 0.5 &&
 	    vColor.a > 0.15 && vColor.a < 0.9)
 	{
-		alphaScale = 0.35;
+		alphaScale = 0.0;
 	}
 
 	gl_FragColor = vec4(mix(texColor.rgb, tone, uColorTone.a), texColor.a * alphaScale);
