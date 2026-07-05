@@ -200,15 +200,19 @@ void main()
 
 	vec4 texColor = seamSample(vTc);
 
-	// Continuous coverage drives a soft replacement: the water is one surface
-	// whose boundary curves through shoreline cells (no per-cell squares).
-	float coverage = 0.0;
-	if (uIeeEnabled > 0.5)
+	// Water mask (v16-verified): inside flagged cells the engine draws the
+	// base tile with TRANSPARENT pixels exactly where water composites
+	// through — the tile's own alpha is the painted contour. Restrict to the
+	// opaque base pass: the WATER_ALPHA secondary pass and fades carry
+	// vColor.a < 1 and must stay vanilla.
+	float waterMask = 0.0;
+	if (uIeeEnabled > 0.5 && vColor.a > 0.9)
 	{
-		coverage = ieeCoverage(worldPos);
+		float cellSoft = smoothstep(0.02, 0.30, ieeCoverage(worldPos));
+		waterMask = (1.0 - texColor.a) * cellSoft;
 	}
 
-	if (coverage > 0.02)
+	if (waterMask > 0.02)
 	{
 		float t = uIeeTime;
 		vec3 normal = ieeWaterNormal(worldPos, t);
@@ -223,10 +227,12 @@ void main()
 		vec3 halfVec = normalize(lightDir + viewDir);
 		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 64.0);
 
-		// Palette derived from the AUTHORED art so every body of water keeps
-		// its area's painted character (sea teal, river brown, ...): the art
-		// color is graded into deep and shallow tones instead of hardcoding.
-		vec3 artColor = texColor.rgb;
+		// Palette: water-hole texels carry no art color (transparent = black),
+		// so grade from a neutral tone there — the engine's own secondary
+		// WATER_ALPHA pass then blends the AUTHORED painted water on top and
+		// restores each area's palette (sea teal, river brown, ...). Partially
+		// opaque contour pixels still contribute their real art color.
+		vec3 artColor = mix(vec3(0.5), texColor.rgb, texColor.a);
 		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
 		// Normalize the art tone so dark night pixels still yield a usable hue;
 		// soften extremes so bright rim pixels can't smear the palette.
@@ -275,12 +281,12 @@ void main()
 			water += deepColor * emissive * (0.6 + 0.8 * pulse);
 		}
 
-		// Soft replacement by coverage: full water inside the painted contour,
-		// a one-texel soft rim along it, untouched land beyond. The fine mask
-		// replaces the old luma/chroma art gates entirely.
-		float waterAlpha = smoothstep(0.30, 0.7, coverage);
-
-		texColor.rgb = mix(texColor.rgb, water, waterAlpha);
+		// Replace by the painted contour: hole pixels become our water (their
+		// art rgb is black anyway); the seamSample bilinear already softens
+		// the alpha edge. Raise the output alpha so our water covers the
+		// engine's generic animated tile drawn underneath the cell.
+		texColor.rgb = mix(texColor.rgb, water, waterMask);
+		texColor.a = max(texColor.a, waterMask);
 	}
 
 	texColor = texColor * vColor;

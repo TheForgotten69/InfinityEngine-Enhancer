@@ -392,3 +392,27 @@ old ALIGN state — it is now the alpha probe:
    what the compositing model predicts) — screenshot either way.
 3. Check one classic-palette area too if handy (different alpha upload path
    than PVRZ/DXT punch-through).
+
+### Phase 2.6 session v16 verdict (2026-07-05, AR2600) — CONFIRMED
+
+- The magenta probe traced the exact painted water silhouette inside the
+  flagged cells, land art stayed dark blue, unflagged cells untinted.
+  **texColor.a IS the pixel-perfect water contour.** No PVRZ decode, no
+  heuristics needed — the design is locked.
+
+## Phase 2.6 session v17 — contour-gated water (shader-only)
+
+Drop the new `fpSEAM.glsl` into `override/`. F10 once (ON):
+
+1. Water must render ONLY in the painted region (v16's magenta), not the
+   whole flagged cell. Land art inside flagged cells untouched.
+2. The engine's secondary pass still blends the authored painted water on
+   top at WATER_ALPHA — expected to restore the area's palette over our
+   neutral-graded water. Judge: does the water keep enough contrast and
+   animation through that painted blend?
+3. Known interim roughness (report, don't fail on):
+   - foam/shore band still follows cell-mask edges, not the painted contour;
+   - possible dark fringe on antialiased contour pixels (transparent DXT
+     texels are black);
+   - slight spill outside flagged cells is allowed (soft cell gate).
+4. Regression: fades/transitions (vColor.a gate), pause tone, unflagged maps.
