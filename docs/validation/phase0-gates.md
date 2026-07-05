@@ -358,3 +358,37 @@ Verdicts:
 - Regression: PASS/FAIL
 - Notes: edge softness (one-texel rim from the 5-tap coverage) — cosmetic
   tuning is the NEXT step, only after the contour is clean.
+
+### Phase 2.5 session v15 verdict (2026-07-05, AR2600) — overlay tile is NOT the contour
+
+- Visuals: user calls the shader "really really beautiful". Upload works
+  (640x480 texels). But the mask is still cell-square: the log's
+  `1 unique overlay tiles decoded` is ground truth, not a fetch bug.
+- Decompile root cause (CInfinity::Render ~465230, CInfTileSet::Render
+  ~467321): the liquid overlay's tilemap is read ONCE at (0,0) — the overlay
+  layer is a single generic animated water tile stamped under every flagged
+  cell. It carries no silhouette. The 2.5 premise ("overlay tile's opaque
+  pixels are the contour") is dead.
+- The real per-cell mechanism: (1) generic water tile drawn underneath the
+  whole cell, (2) base primary tile on top with TRANSPARENT pixels where
+  water shows through — THE painted contour, (3) base nSecondary blended at
+  WATER_ALPHA to tint with painted art.
+- PVRZ page decode rejected as the fix: CResPVR::Demand (decompile ~661967)
+  frees the decompressed page right after GL upload — reading base-tile
+  alpha from memory means zlib+DXT decoding pages ourselves. Not needed:
+  **fpSEAM already samples the base tile — texColor.a IS the contour**,
+  per fragment, GPU-decompressed for free. Design 2.6: keep the unit-2 cell
+  mask as the outer bound; inside flagged cells, water = low texture alpha.
+
+## Phase 2.6 session v16 — alpha-contour probe (shader-only)
+
+Drop the new `fpSEAM.glsl` into `override/` (no DLL change). F10 twice to the
+old ALIGN state — it is now the alpha probe:
+
+1. Inside flagged cells: magenta = transparent texel (theory: real water),
+   dark blue = opaque texel (painted land art). Unflagged cells untinted.
+2. PASS = magenta traces the exact painted silhouette (the v15 arrow spot).
+   FAIL = uniform magenta or uniform blue across flagged cells (alpha not
+   what the compositing model predicts) — screenshot either way.
+3. Check one classic-palette area too if handy (different alpha upload path
+   than PVRZ/DXT punch-through).

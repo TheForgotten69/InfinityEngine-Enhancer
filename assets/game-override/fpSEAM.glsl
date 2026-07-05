@@ -167,22 +167,34 @@ void main()
 		cellMode = floor(texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0 + 0.5);
 	}
 
-	// Alignment debug (uIeeEnabled = 2.0): renders the derived mask coordinate
-	// as a gradient so ONE screenshot calibrates the whole world transform:
-	//   red   = mask u (0 at world left -> 1 at world right)
-	//   green = mask v (0 at world top  -> 1 at world bottom)
-	//   blue  = 1 on liquid-flagged cells
-	// Expected when correct: red ramps left->right across the WHOLE map,
-	// green ramps top->bottom, blue hugs the water. A mirrored ramp = flipped
-	// axis; a shifted ramp = scroll/viewport offset; a too-steep ramp = zoom.
+	// v16 alpha-contour probe (uIeeEnabled = 2.0, was the alignment gradient —
+	// alignment passed v7). Tests the theory that the base tile's texture
+	// alpha IS the painted water contour inside flagged cells:
+	//   magenta = transparent texel (water hole -> real water)
+	//   dark blue = opaque texel (painted land art)
+	//   untinted = unflagged cell
+	// Expected when correct: magenta traces the exact painted silhouette
+	// inside the blue-zone cells. The WATER_ALPHA secondary pass (vColor.a
+	// well below 1) is discarded and flagged output is forced opaque so the
+	// base-tile draw's reading stays visible over the underneath water tile.
 	if (uIeeEnabled > 1.5)
 	{
-		vec2 maskUv = worldPos * uIeeWorldSizeInv;
-		vec4 base = seamSample(vTc);
-		base = base * vColor;
-		vec3 dbg = vec3(fract(maskUv.x * 4.0), fract(maskUv.y * 4.0), cellMode > 0.5 ? 1.0 : 0.0);
-		base.rgb = mix(base.rgb, dbg, 0.65);
-		gl_FragColor = vec4(base.rgb, base.a);
+		vec4 art = seamSample(vTc);
+		if (cellMode > 0.5)
+		{
+			if (vColor.a < 0.9)
+			{
+				discard;
+			}
+			float hole = 1.0 - art.a;
+			vec3 dbg = mix(vec3(0.05, 0.10, 0.55), vec3(1.0, 0.0, 0.6), hole);
+			gl_FragColor = vec4(mix(art.rgb * vColor.rgb, dbg, 0.8), 1.0);
+		}
+		else
+		{
+			vec4 base = art * vColor;
+			gl_FragColor = vec4(base.rgb, base.a);
+		}
 		return;
 	}
 
