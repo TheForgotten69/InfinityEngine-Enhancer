@@ -70,6 +70,7 @@ add_library(iee_common STATIC
     src/iee/game/shader_override.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
+    src/iee/game/tis_palette.cpp
     src/iee/game/tis_runtime.cpp
     src/iee/game/wed_runtime.cpp
 )
@@ -104,6 +105,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/frame_hook.cpp
         src/iee/hooks.cpp
         src/iee/shader_probe.cpp
+        src/iee/water_textures.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
     )
@@ -136,6 +138,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/shaders" "${IEE_RELEASE_BUNDLE_DIR}/iee-shaders"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-override" "${IEE_RELEASE_BUNDLE_DIR}/game-override"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-textures" "${IEE_RELEASE_BUNDLE_DIR}/iee-textures"
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )
@@ -157,5 +160,5 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(iee_tests PRIVATE iee_common)
-    add_test(NAME iee_tests COMMAND iee_tests)
+    add_test(NAME iee_tests COMMAND iee_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()

@@ -20,6 +20,10 @@ namespace iee::game {
         std::uint32_t tileIndexLookupOffset{};
         TileLiquidMode liquidMode{TileLiquidMode::None};
         std::uint32_t coverageCells{};
+        // Per-cell tile index into the overlay's tileset (0xFFFF = none).
+        // Parsed only for liquid overlays; same cell coordinates as the base
+        // grid (decompile: GetTileData uses identical x,y for every layer).
+        std::vector<std::uint16_t> cellTileIndex{};
 
         [[nodiscard]] std::string_view tilesetResrefView() const noexcept;
     };

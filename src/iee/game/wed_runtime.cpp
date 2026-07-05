@@ -128,6 +128,35 @@ namespace iee::game {
             }
         }
 
+        // Per-cell overlay tile indices for liquid overlays: tilemap entry ->
+        // nStartingTile -> tile-index lookup (u16). Feeds the fine water mask.
+        for (std::size_t overlayIndex = 1; overlayIndex < out.overlays.size() && overlayIndex <= 7; ++overlayIndex) {
+            auto &overlay = out.overlays[overlayIndex];
+            if (overlay.liquidMode == TileLiquidMode::None || overlay.coverageCells == 0) {
+                continue;
+            }
+            const auto overlayCells = static_cast<std::size_t>(overlay.width) * overlay.height;
+            if (overlayCells == 0) {
+                continue;
+            }
+            overlay.cellTileIndex.assign(overlayCells, 0xFFFF);
+            for (std::size_t cell = 0; cell < overlayCells; ++cell) {
+                WED_TileData_st tilemap{};
+                const auto entryOffset = static_cast<std::size_t>(overlay.tilemapOffset) +
+                                         cell * sizeof(WED_TileData_st);
+                if (!read_struct(base, size, entryOffset, tilemap)) {
+                    continue;
+                }
+                std::uint16_t tileIndex = 0xFFFF;
+                const auto lookupOffset = static_cast<std::size_t>(overlay.tileIndexLookupOffset) +
+                                          static_cast<std::size_t>(tilemap.nStartingTile) * sizeof(std::uint16_t);
+                if (!read_struct(base, size, lookupOffset, tileIndex)) {
+                    continue;
+                }
+                overlay.cellTileIndex[cell] = tileIndex;
+            }
+        }
+
         return true;
     }
 

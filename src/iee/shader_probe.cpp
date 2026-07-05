@@ -24,6 +24,7 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/game/opengl_types.h"
 #include "iee/game/shader_override.h"
+#include "iee/water_textures.h"
 
 namespace iee::probe {
     namespace {
@@ -64,6 +65,15 @@ namespace iee::probe {
             // some installs' game-data fpSEAM (confirmed live 2026-06-11):
             int liquidTime{-2};
             int liquidMode{-2};
+            int scroll{-2};        // uIeeScroll (vec2, world px)
+            int zoom{-2};          // uIeeZoom (float)
+            int viewport{-2};      // uIeeViewport (vec2, physical px)
+            int worldSizeInv{-2};  // uIeeWorldSizeInv (vec2, 1/world px)
+            int waterTint{-2};     // uIeeWaterTint (vec3, authored water color)
+            int areaMask{-2};      // uIeeAreaMask (sampler2D -> unit 2)
+            int normalMap{-2};     // uIeeNormalMap (sampler2D -> unit 3)
+            int dudvMap{-2};       // uIeeDudvMap (sampler2D -> unit 4)
+            int foamMap{-2};       // uIeeFoamMap (sampler2D -> unit 5)
         };
         // endregion
 
@@ -116,9 +126,25 @@ namespace iee::probe {
         std::filesystem::path                        g_dumpDir;
 
         std::atomic<float> g_uniformTime{0.0f};
-        // Effect gate fed to uIeeEnabled/uIeeTileLiquidMode. Starts OFF: the
-        // baseline render must be untouched until F10 explicitly enables it.
-        std::atomic<bool>  g_overridesEnabled{false};
+        std::atomic<float> g_worldWidthPx{0.0f};
+        std::atomic<float> g_worldHeightPx{0.0f};
+        std::atomic<float> g_scrollX{0.0f};
+        std::atomic<float> g_scrollY{0.0f};
+        // rViewPort size in world px; physical-per-world zoom is derived
+        // against the live GL viewport at feed time (the engine's own screen
+        // coords are UI-scaled logical px — confirmed live 2026-06-13).
+        std::atomic<float> g_viewWorldW{0.0f};
+        std::atomic<float> g_viewWorldH{0.0f};
+        // Authored water color of the current area's liquid overlay tile
+        // (average of its opaque pixels; neutral grey until an area provides one).
+        std::atomic<float> g_waterTintR{0.5f};
+        std::atomic<float> g_waterTintG{0.5f};
+        std::atomic<float> g_waterTintB{0.5f};
+        // Diagnostics: how often the feed actually runs (stale-uniform check).
+        std::atomic<unsigned> g_feedCount{0};
+        // Effect gate fed to uIeeEnabled (0=off, 1=on, 2=alignment debug) and,
+        // thresholded, to the legacy liquid uniforms. Starts OFF.
+        std::atomic<float> g_overrideEffectValue{0.0f};
         // Set by install; consumed by the first frame tick (sweep runs at the
         // frame boundary, never mid-draw).
         std::atomic<bool>  g_sweepPending{false};
@@ -858,6 +884,15 @@ namespace iee::probe {
             if (locs.liquidMode == -2) {
                 locs.liquidMode = gl.glGetUniformLocation(program, "uIeeTileLiquidMode");
             }
+            if (locs.scroll == -2)       locs.scroll       = gl.glGetUniformLocation(program, "uIeeScroll");
+            if (locs.zoom == -2)         locs.zoom         = gl.glGetUniformLocation(program, "uIeeZoom");
+            if (locs.viewport == -2)     locs.viewport     = gl.glGetUniformLocation(program, "uIeeViewport");
+            if (locs.worldSizeInv == -2) locs.worldSizeInv = gl.glGetUniformLocation(program, "uIeeWorldSizeInv");
+            if (locs.waterTint == -2)    locs.waterTint    = gl.glGetUniformLocation(program, "uIeeWaterTint");
+            if (locs.areaMask == -2)     locs.areaMask     = gl.glGetUniformLocation(program, "uIeeAreaMask");
+            if (locs.normalMap == -2)    locs.normalMap    = gl.glGetUniformLocation(program, "uIeeNormalMap");
+            if (locs.dudvMap == -2)      locs.dudvMap      = gl.glGetUniformLocation(program, "uIeeDudvMap");
+            if (locs.foamMap == -2)      locs.foamMap      = gl.glGetUniformLocation(program, "uIeeFoamMap");
 
             // Store back resolved locations
             {
@@ -869,8 +904,9 @@ namespace iee::probe {
             }
 
             // Feed values — program is currently bound (we are post-original in glUseProgram)
+            g_feedCount.fetch_add(1, std::memory_order_relaxed);
             const float timeValue = g_uniformTime.load(std::memory_order_relaxed);
-            const float enabledValue = g_overridesEnabled.load(std::memory_order_relaxed) ? 1.0f : 0.0f;
+            const float enabledValue = g_overrideEffectValue.load(std::memory_order_relaxed);
             if (locs.time >= 0) {
                 gl.glUniform1f(locs.time, timeValue);
             }
@@ -883,7 +919,57 @@ namespace iee::probe {
             if (locs.liquidMode >= 0) {
                 // F10 doubles as the liquid-mode toggle for the legacy patch
                 // (mode 1 = water styling on every tile — bridge proof, not a feature).
-                gl.glUniform1f(locs.liquidMode, enabledValue);
+                // Legacy patch only understands 0/1, and has no ALIGN branch: keep it
+                // OFF at effect value 2.0 so alignment debugging stays unambiguous.
+                gl.glUniform1f(locs.liquidMode,
+                               (enabledValue >= 0.5f && enabledValue < 1.5f) ? 1.0f : 0.0f);
+            }
+            if (locs.scroll >= 0 && gl.glUniform2f) {
+                gl.glUniform2f(locs.scroll,
+                               g_scrollX.load(std::memory_order_relaxed),
+                               g_scrollY.load(std::memory_order_relaxed));
+            }
+            int vp[4] = {0, 0, 0, 0};
+            if (gl.glGetIntegerv) {
+                gl.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
+            }
+            if (locs.zoom >= 0 && gl.glUniform2f) {
+                // Physical px per world px, per axis: GL viewport / rViewPort size.
+                const float viewW = g_viewWorldW.load(std::memory_order_relaxed);
+                const float viewH = g_viewWorldH.load(std::memory_order_relaxed);
+                if (viewW > 0.0f && viewH > 0.0f && vp[2] > 0 && vp[3] > 0) {
+                    gl.glUniform2f(locs.zoom,
+                                   static_cast<float>(vp[2]) / viewW,
+                                   static_cast<float>(vp[3]) / viewH);
+                }
+            }
+            if (locs.viewport >= 0 && gl.glUniform2f) {
+                gl.glUniform2f(locs.viewport, static_cast<float>(vp[2]), static_cast<float>(vp[3]));
+            }
+            if (locs.worldSizeInv >= 0 && gl.glUniform2f) {
+                const float w = g_worldWidthPx.load(std::memory_order_relaxed);
+                const float h = g_worldHeightPx.load(std::memory_order_relaxed);
+                if (w > 0.0f && h > 0.0f) {
+                    gl.glUniform2f(locs.worldSizeInv, 1.0f / w, 1.0f / h);
+                }
+            }
+            if (locs.waterTint >= 0 && gl.glUniform3f) {
+                gl.glUniform3f(locs.waterTint,
+                               g_waterTintR.load(std::memory_order_relaxed),
+                               g_waterTintG.load(std::memory_order_relaxed),
+                               g_waterTintB.load(std::memory_order_relaxed));
+            }
+            if (locs.areaMask >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.areaMask, 2); // reserved unit (area_state upload)
+            }
+            if (locs.normalMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.normalMap, 3);
+            }
+            if (locs.dudvMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.dudvMap, 4);
+            }
+            if (locs.foamMap >= 0 && gl.glUniform1i) {
+                gl.glUniform1i(locs.foamMap, 5);
             }
         }
         // endregion
@@ -1128,6 +1214,10 @@ namespace iee::probe {
 
         g_cfg = cfg;
 
+        // The water effect ships ON by default; the ini can disable it and
+        // the F10 debug cycle (when enabled) still overrides at runtime.
+        g_overrideEffectValue.store(cfg.enableWaterEffect ? 1.0f : 0.0f, std::memory_order_relaxed);
+
         configure_magenta_shaders(cfg.debugMagentaShaders);
         if (!g_magentaShaders.empty()) {
             std::string joined;
@@ -1159,6 +1249,9 @@ namespace iee::probe {
 
             // Dump directory
             g_dumpDir = dllDir / "iee-shader-dumps";
+
+            // Water textures (render thread, context current here).
+            (void) water::load_water_textures(dllDir / "iee-textures");
         }
 #else
         {
@@ -1313,23 +1406,59 @@ namespace iee::probe {
             return;
         }
 
-        // F10: toggle the visual effect of shader overrides (uIeeEnabled), edge-triggered.
+        // F10: cycle the visual effect gate OFF(0) -> WATER(1) -> ALIGN(2) -> OFF.
         static bool f10WasDown = false;
         const bool f10Down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
         if (f10Down && !f10WasDown) {
-            const bool enabled = !g_overridesEnabled.load(std::memory_order_relaxed);
-            g_overridesEnabled.store(enabled, std::memory_order_relaxed);
-            LOG_INFO("Hotkey F10: shader override effect {}", enabled ? "ON" : "OFF");
+            const float current = g_overrideEffectValue.load(std::memory_order_relaxed);
+            const float next = current < 0.5f ? 1.0f : (current < 1.5f ? 2.0f : 0.0f);
+            g_overrideEffectValue.store(next, std::memory_order_relaxed);
+
+            // Snapshot the world-transform inputs so screenshots pair with the
+            // exact values the shader saw (render thread; context current).
+            int vp[4] = {0, 0, 0, 0};
+            const auto &glState = game::gl::get_gl_functions();
+            if (glState.glGetIntegerv) {
+                glState.glGetIntegerv(0x0BA2 /*GL_VIEWPORT*/, vp);
+            }
+            LOG_INFO("Hotkey F10: override effect value {} (scroll=({}, {}), viewWorld={}x{}, viewport={}x{} at ({}, {}), world={}x{}, feeds={})",
+                     next,
+                     g_scrollX.load(std::memory_order_relaxed),
+                     g_scrollY.load(std::memory_order_relaxed),
+                     g_viewWorldW.load(std::memory_order_relaxed),
+                     g_viewWorldH.load(std::memory_order_relaxed),
+                     vp[2], vp[3], vp[0], vp[1],
+                     g_worldWidthPx.load(std::memory_order_relaxed),
+                     g_worldHeightPx.load(std::memory_order_relaxed),
+                     g_feedCount.load(std::memory_order_relaxed));
         }
         f10WasDown = f10Down;
     }
 
     void set_override_effect_enabled(bool enabled) noexcept {
-        g_overridesEnabled.store(enabled, std::memory_order_relaxed);
+        g_overrideEffectValue.store(enabled ? 1.0f : 0.0f, std::memory_order_relaxed);
     }
 
     bool override_effect_enabled() noexcept {
-        return g_overridesEnabled.load(std::memory_order_relaxed);
+        return g_overrideEffectValue.load(std::memory_order_relaxed) >= 0.5f;
+    }
+
+    void set_area_world_size(float widthPx, float heightPx) noexcept {
+        g_worldWidthPx.store(widthPx, std::memory_order_relaxed);
+        g_worldHeightPx.store(heightPx, std::memory_order_relaxed);
+    }
+
+    void set_area_water_tint(float r, float g, float b) noexcept {
+        g_waterTintR.store(r, std::memory_order_relaxed);
+        g_waterTintG.store(g, std::memory_order_relaxed);
+        g_waterTintB.store(b, std::memory_order_relaxed);
+    }
+
+    void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept {
+        g_scrollX.store(scrollX, std::memory_order_relaxed);
+        g_scrollY.store(scrollY, std::memory_order_relaxed);
+        g_viewWorldW.store(viewWorldW > 0.0f ? viewWorldW : 0.0f, std::memory_order_relaxed);
+        g_viewWorldH.store(viewWorldH > 0.0f ? viewWorldH : 0.0f, std::memory_order_relaxed);
     }
 
     // endregion

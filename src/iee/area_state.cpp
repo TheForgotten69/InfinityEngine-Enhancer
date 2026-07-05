@@ -1,8 +1,10 @@
 #include "area_state.h"
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string_view>
+#include <unordered_map>
 
 #include "app_context.h"
 #include "iee/core/gl_state_guard.h"
@@ -13,6 +15,7 @@
 #include "iee/game/resref_runtime.h"
 #include "iee/game/tile_liquid.h"
 #include "iee/game/wed_runtime.h"
+#include "iee/shader_probe.h"
 
 namespace iee::area {
     namespace {
@@ -73,10 +76,78 @@ namespace iee::area {
             return false;
         }
 
+        // nNewX/nNewY is the view's world position in plain pixels — taken
+        // straight from the decompiled CInfinity::GetWorldCoordinates:
+        //   world = (nNew - rViewPort.origin) + screen
+        // (m_ptCurrentPosExact is the same position in x10000 fixed point,
+        // per the decompiled CInfinity::Scroll; not needed here.)
         const auto *base = reinterpret_cast<const std::byte *>(area);
-        const auto *offsetXAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetX);
-        const auto *offsetYAddr = base + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, nOffsetY);
-        return core::safe_read(offsetXAddr, outOffsetX) && core::safe_read(offsetYAddr, outOffsetY);
+        const auto *posXAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewX);
+        const auto *posYAddr = base + offsetof(game::CGameArea, m_cInfinity) +
+                               offsetof(game::CInfinity, nNewY);
+        return core::safe_read(posXAddr, outOffsetX) && core::safe_read(posYAddr, outOffsetY);
+    }
+
+    bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom) {
+        if (!area) {
+            return false;
+        }
+        const auto *base = reinterpret_cast<const std::byte *>(area);
+        const auto *zoomAddr = base + offsetof(game::CGameArea, m_cInfinity) + manifest.offsets.infinityZoom;
+        return core::safe_read(zoomAddr, outZoom);
+    }
+
+    bool read_view_transform(const game::CGameArea *area, ViewTransform &out) {
+        if (!area) {
+            return false;
+        }
+        const auto *infinityBase = reinterpret_cast<const std::byte *>(area) +
+                                   offsetof(game::CGameArea, m_cInfinity);
+
+        std::int32_t newX = 0;
+        std::int32_t newY = 0;
+        game::CRect viewPortNotZoomed{};
+        game::CRect viewPort{};
+        if (!core::safe_read(infinityBase + offsetof(game::CInfinity, nNewX), newX) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, nNewY), newY) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPortNotZoomed), viewPortNotZoomed) ||
+            !core::safe_read(infinityBase + offsetof(game::CInfinity, rViewPort), viewPort)) {
+            return false;
+        }
+
+        const float logicalW = static_cast<float>(viewPortNotZoomed.right - viewPortNotZoomed.left);
+        const float logicalH = static_cast<float>(viewPortNotZoomed.bottom - viewPortNotZoomed.top);
+        const float worldW = static_cast<float>(viewPort.right - viewPort.left);
+        const float worldH = static_cast<float>(viewPort.bottom - viewPort.top);
+        if (logicalW <= 0.0f || logicalH <= 0.0f || worldW <= 0.0f || worldH <= 0.0f) {
+            return false;
+        }
+
+        // ScreenToWorld in logical px: world = nNew + (logical - rVPNZ.origin) * rVP.size/rVPNZ.size
+        // The rVPNZ.origin shift folds into scroll (in world px); the per-pixel
+        // term is converted to PHYSICAL pixels by the probe at feed time.
+        out.viewWorldW = worldW;
+        out.viewWorldH = worldH;
+        out.scrollX = static_cast<float>(newX) -
+                      static_cast<float>(viewPortNotZoomed.left) * worldW / logicalW;
+        out.scrollY = static_cast<float>(newY) -
+                      static_cast<float>(viewPortNotZoomed.top) * worldH / logicalH;
+
+        // Debug: raw inputs, rate-limited — pairs with F10 snapshots so the
+        // transform arithmetic can be checked exactly against screenshots.
+        static std::uint32_t s_lastLogTick = 0;
+        const std::uint32_t nowTick = GetTickCount();
+        if (nowTick - s_lastLogTick > 5000) {
+            s_lastLogTick = nowTick;
+            LOG_INFO("ViewXform raw: nNew=({}, {}) rVP=({}, {}, {}, {}) rVPNZ=({}, {}, {}, {}) -> scroll=({}, {}) viewWorld={}x{}",
+                     newX, newY,
+                     viewPort.left, viewPort.top, viewPort.right, viewPort.bottom,
+                     viewPortNotZoomed.left, viewPortNotZoomed.top,
+                     viewPortNotZoomed.right, viewPortNotZoomed.bottom,
+                     out.scrollX, out.scrollY, out.viewWorldW, out.viewWorldH);
+        }
+        return true;
     }
 
     void refresh_wed_cache(AppContext &ctx, void *infGame) {
@@ -130,6 +201,19 @@ namespace iee::area {
                      cachedWed->baseWidth,
                      cachedWed->baseHeight,
                      liquidMask);
+            // Per-overlay classification: an overlay the engine draws but we
+            // did NOT classify as liquid shows vanilla water through base-tile
+            // holes, unstyled (suspect for the v18/v19 teal squares).
+            for (std::size_t i = 1; i < cachedWed->overlays.size() && i <= 7; ++i) {
+                const auto &overlay = cachedWed->overlays[i];
+                if (overlay.tilesetResrefView().empty()) {
+                    continue;
+                }
+                LOG_INFO("  overlay {}: tileset={} mode={} cells={}",
+                         i, overlay.tilesetResrefView(),
+                         game::tile_liquid_mode_name(overlay.liquidMode),
+                         overlay.coverageCells);
+            }
             ctx.lastLoggedWedArea = cachedWed->areaResref;
         } else {
             LOG_DEBUG("Reloaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
@@ -140,11 +224,12 @@ namespace iee::area {
                       liquidMask);
         }
 
-        // Upload the per-cell overlay flags as an R8 texture on reserved unit 2.
+        // Upload the fine liquid mask (8px/texel from the painted overlay-tile
+        // silhouette) as an R8 texture on reserved unit 2.
         // CAVEAT: this runs on the LoadArea thread, which may not own the GL
         // context. If in-game logs show GL errors here, move the upload to a
         // pending-work flag consumed by the frame hook (render thread).
-        if (const auto packed = game::pack_area_cell_texture(*cachedWed)) {
+        {
             auto &gl = game::gl::get_gl_functions();
             if (gl.textureUploadAvailable) {
                 core::GlStateGuard guard;
@@ -153,16 +238,147 @@ namespace iee::area {
                 gl.glActiveTexture(game::gl::TEXTURE0 + 2);
                 gl.glBindTexture(game::gl::TEXTURE_2D, s_areaTexture);
                 gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
+
+                // Overlay tile alpha straight from the engine's loaded tilesets,
+                // memoized per unique (overlay, tile). Any unreadable step
+                // returns nullopt and the stamper keeps the full-cell fallback.
+                // Water tiles also contribute their average opaque color — the
+                // authored water tint fed to the shader as uIeeWaterTint.
+                std::unordered_map<std::uint32_t, std::optional<game::TileAlpha>> tileAlphaCache;
+                double tintSum[3] = {0.0, 0.0, 0.0};
+                std::size_t tintTiles = 0;
+                const auto &tileSets = areaSnapshot.m_cInfinity.pTileSets;
+                const auto tileAlpha = [&](std::size_t overlayIndex,
+                                           std::uint16_t tileIndex) -> std::optional<game::TileAlpha> {
+                    const auto key = static_cast<std::uint32_t>(overlayIndex) << 16 | tileIndex;
+                    if (const auto cached = tileAlphaCache.find(key); cached != tileAlphaCache.end()) {
+                        return cached->second;
+                    }
+                    auto &slot = tileAlphaCache[key];
+                    if (overlayIndex >= tileSets.size() || !tileSets[overlayIndex]) {
+                        return slot;
+                    }
+                    game::CInfTileSet tileSet{};
+                    if (!core::safe_read(tileSets[overlayIndex], tileSet) ||
+                        !tileSet.pResTiles || tileIndex >= tileSet.nTiles) {
+                        return slot;
+                    }
+                    void *resPtr = nullptr;
+                    if (!core::safe_read(tileSet.pResTiles + tileIndex, resPtr) || !resPtr) {
+                        return slot;
+                    }
+                    // pResTiles entries are CResInfTile wrappers; the tile CRes
+                    // pointer is their FIRST field (decompile: CRes::Demand(
+                    // pResTiles[i]->_padding_); probe-verified 2026-07-05:
+                    // +0x00 -> type 1003, nSize 5120, resref WTWAVE, loaded).
+                    void *tileResPtr = nullptr;
+                    if (!core::safe_read(resPtr, tileResPtr) || !tileResPtr) {
+                        return slot;
+                    }
+                    game::CRes tileRes{};
+                    if (!core::safe_read(tileResPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
+                        tileRes.nSize < game::kPaletteTileBytes ||
+                        !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
+                        // PVR-tile layout discovery (one per area): EE tiles have
+                        // nSize == 12 ({page,u,v}); the page's CResPVR pointer
+                        // lives somewhere in the CResInfTile — dump the pointer
+                        // chain so the tint decode can wire against certainty.
+                        static game::ResrefBuffer s_dumpedArea{};
+                        if (!same_resref(cachedWed->areaResrefView(), s_dumpedArea)) {
+                            s_dumpedArea = cachedWed->areaResref;
+                            LOG_INFO("PVR tile probe: overlay={} tile={} res@0x{:X} type={} nSize={} pData@0x{:X}",
+                                     overlayIndex, tileIndex,
+                                     reinterpret_cast<std::uintptr_t>(resPtr),
+                                     tileRes.type, tileRes.nSize,
+                                     reinterpret_cast<std::uintptr_t>(tileRes.pData));
+                            if (tileRes.pData && tileRes.nSize == 12 &&
+                                core::is_readable(tileRes.pData, 12)) {
+                                const auto *entry = static_cast<const std::uint32_t *>(tileRes.pData);
+                                LOG_INFO("PVR tile probe: entry = page {}, u {}, v {}",
+                                         entry[0], entry[1], entry[2]);
+                            }
+                            // Walk the CResInfTile's first 16 qwords; any that
+                            // point at a CRes-shaped object gets its type/nSize
+                            // logged — the CResPVR candidate will show a large
+                            // nSize (compressed PVRZ) or a PVR resref.
+                            const auto *slots = static_cast<void *const *>(resPtr);
+                            for (int i = 0; i < 16; ++i) {
+                                void *candidate = nullptr;
+                                if (!core::safe_read(slots + i, candidate) || !candidate) {
+                                    continue;
+                                }
+                                game::CRes candidateRes{};
+                                if (!core::safe_read(candidate, candidateRes)) {
+                                    continue;
+                                }
+                                game::ResrefBuffer candidateResref{};
+                                if (candidateRes.resref) {
+                                    (void) game::read_runtime_resref(candidateRes.resref, candidateResref);
+                                }
+                                LOG_INFO("PVR tile probe: +0x{:02X} -> 0x{:X} type={} nSize={} resref={} loaded={}",
+                                         i * 8,
+                                         reinterpret_cast<std::uintptr_t>(candidate),
+                                         candidateRes.type, candidateRes.nSize,
+                                         game::resref_view(candidateResref),
+                                         static_cast<int>(candidateRes.bLoaded));
+                            }
+                        }
+                        return slot;
+                    }
+                    slot = game::decode_palette_tile_alpha(
+                            static_cast<const std::uint8_t *>(tileRes.pData), tileRes.nSize);
+                    if (slot && overlayIndex < cachedWed->overlays.size() &&
+                        cachedWed->overlays[overlayIndex].liquidMode == game::TileLiquidMode::Water) {
+                        if (const auto avg = game::palette_tile_average_color(
+                                    static_cast<const std::uint8_t *>(tileRes.pData), tileRes.nSize)) {
+                            tintSum[0] += (*avg)[0];
+                            tintSum[1] += (*avg)[1];
+                            tintSum[2] += (*avg)[2];
+                            ++tintTiles;
+                        }
+                    }
+                    return slot;
+                };
+
+                // On any failure the previous area's mask must not survive the
+                // transition: fall back to a 1x1 zero texel (mode 0 everywhere).
+                static const std::uint8_t kNoLiquid = 0;
+                const auto packed = game::build_fine_liquid_mask(*cachedWed, tileAlpha);
+                const void *texels = packed ? static_cast<const void *>(packed->texels.data())
+                                            : static_cast<const void *>(&kNoLiquid);
+                const int width = packed ? packed->width : 1;
+                const int height = packed ? packed->height : 1;
+
                 gl.glTexImage2D(game::gl::TEXTURE_2D, 0, game::gl::R8,
-                                packed->width, packed->height, 0,
-                                game::gl::RED, game::gl::UNSIGNED_BYTE, packed->texels.data());
+                                width, height, 0,
+                                game::gl::RED, game::gl::UNSIGNED_BYTE, texels);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MIN_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
-                if (game::gl::check_error("area cell texture upload")) {
-                    LOG_INFO("Area cell texture uploaded: {}x{} (unit 2, tex {})",
-                             packed->width, packed->height, s_areaTexture);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
+                gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
+                // Publish the authored water tint (neutral grey when no water
+                // tile decoded — e.g. PVRZ overlay tilesets).
+                if (tintTiles > 0) {
+                    const auto inv = 1.0 / static_cast<double>(tintTiles);
+                    probe::set_area_water_tint(static_cast<float>(tintSum[0] * inv),
+                                               static_cast<float>(tintSum[1] * inv),
+                                               static_cast<float>(tintSum[2] * inv));
+                    LOG_INFO("Area water tint: ({:.3f}, {:.3f}, {:.3f}) from {} water tiles",
+                             tintSum[0] * inv, tintSum[1] * inv, tintSum[2] * inv, tintTiles);
                 } else {
-                    LOG_WARN("Area cell texture upload reported a GL error (likely wrong thread; see caveat)");
+                    probe::set_area_water_tint(0.5f, 0.5f, 0.5f);
+                }
+
+                if (packed && game::gl::check_error("area liquid texture upload")) {
+                    LOG_INFO("Fine liquid mask uploaded: {}x{} texels, {} unique overlay tiles decoded (unit 2, tex {})",
+                             width, height, tileAlphaCache.size(), s_areaTexture);
+                    // 8 world px per fine-mask texel.
+                    probe::set_area_world_size(static_cast<float>(width) * 8.0f,
+                                               static_cast<float>(height) * 8.0f);
+                } else if (!packed) {
+                    LOG_WARN("Fine liquid mask build failed; uploaded 1x1 no-liquid mask");
+                } else {
+                    LOG_WARN("Area liquid texture upload reported a GL error (likely wrong thread; see caveat)");
                 }
             }
         }

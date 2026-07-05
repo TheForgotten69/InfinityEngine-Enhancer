@@ -111,6 +111,7 @@ namespace iee::core {
             else if (iequals(key, "OverrideDir")) cfg.shaderOverrideDir = val;
             else if (iequals(key, "MagentaShaders")) cfg.debugMagentaShaders = val;
             else if (iequals(key, "EnableDebugHotkeys")) cfg.enableDebugHotkeys = parse_bool(val, cfg.enableDebugHotkeys);
+            else if (iequals(key, "EnableWaterEffect")) cfg.enableWaterEffect = parse_bool(val, cfg.enableWaterEffect);
             return;
         }
     }
@@ -206,6 +207,7 @@ namespace iee::core {
         f << "OverrideDir = " << cfg.shaderOverrideDir << "\n";
         f << "MagentaShaders = " << cfg.debugMagentaShaders << "\n";
         write_bool(f, "EnableDebugHotkeys", cfg.enableDebugHotkeys);
+        write_bool(f, "EnableWaterEffect", cfg.enableWaterEffect);
 
         return true;
     }

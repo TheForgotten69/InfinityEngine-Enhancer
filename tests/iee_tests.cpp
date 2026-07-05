@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string_view>
 #include <vector>
 
@@ -18,6 +20,7 @@
 #include "iee/game/runtime_types_x64.h"
 #include "iee/game/shader_override.h"
 #include "iee/game/tile_upscale.h"
+#include "iee/game/tis_palette.h"
 #include "iee/game/wed_runtime.h"
 
 namespace {
@@ -301,6 +304,7 @@ namespace {
         expect_eq(cfg.shaderOverrideDir, std::string("iee-shaders"), "override dir default");
         expect_true(cfg.debugMagentaShaders.empty(), "magenta list default empty");
         expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
+        expect_true(cfg.enableWaterEffect, "water effect defaults ON");
     }
 
     void test_config_shader_override_roundtrip() {
@@ -312,6 +316,7 @@ namespace {
             orig.shaderOverrideDir = "custom-shaders";
             orig.debugMagentaShaders = "spell1.glsl,spell2.glsl";
             orig.enableDebugHotkeys = true;
+            orig.enableWaterEffect = false;
 
             expect_true(iee::core::ConfigManager::save(tempPath, orig), "ConfigManager::save should succeed");
         }
@@ -323,6 +328,7 @@ namespace {
         expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"), "shaderOverrideDir should round-trip");
         expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"), "debugMagentaShaders should round-trip");
         expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
+        expect_true(!loaded.enableWaterEffect, "enableWaterEffect should round-trip as false");
 
         std::error_code ec;
         std::filesystem::remove(tempPath, ec);
@@ -341,8 +347,10 @@ namespace {
         constexpr std::size_t headerOffset = 0x0;
         constexpr std::size_t layerOffset = sizeof(WED_WedHeader_st);
         constexpr std::size_t tilemapOffset = layerOffset + 2 * sizeof(WED_LayerHeader_st);
+        constexpr std::size_t liquidTilemapOffset = tilemapOffset + 4 * sizeof(WED_TileData_st);
+        constexpr std::size_t liquidLookupOffset = liquidTilemapOffset + 4 * sizeof(WED_TileData_st);
 
-        std::vector<std::byte> bytes(tilemapOffset + 4 * sizeof(WED_TileData_st));
+        std::vector<std::byte> bytes(liquidLookupOffset + 4 * sizeof(std::uint16_t));
 
         WED_WedHeader_st header{};
         header.nFileType = 0x20444557;
@@ -364,13 +372,24 @@ namespace {
         liquidLayer.nTilesDown = 2;
         liquidLayer.rrTileSet = {'W', 'T', 'W', 'A', 'V', 'E', '0', '1'};
         liquidLayer.nNumUniqueTiles = 4;
-        liquidLayer.nOffsetToTileData = static_cast<std::uint32_t>(tilemapOffset);
+        liquidLayer.nOffsetToTileData = static_cast<std::uint32_t>(liquidTilemapOffset);
+        liquidLayer.nOffsetToTileList = static_cast<std::uint32_t>(liquidLookupOffset);
         write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &liquidLayer, sizeof(liquidLayer));
 
         std::array<WED_TileData_st, 4> tileData{};
         tileData[0].bFlags = 0x02;
         tileData[2].bFlags = 0x02;
         write_bytes(bytes, tilemapOffset, tileData.data(), sizeof(tileData));
+
+        std::array<WED_TileData_st, 4> liquidTileData{};
+        liquidTileData[0].nStartingTile = 3;
+        liquidTileData[1].nStartingTile = 0;
+        liquidTileData[2].nStartingTile = 2;
+        liquidTileData[3].nStartingTile = 500;  // lookup entry out of bounds
+        write_bytes(bytes, liquidTilemapOffset, liquidTileData.data(), sizeof(liquidTileData));
+
+        const std::array<std::uint16_t, 4> liquidTileLookup{21, 22, 23, 24};
+        write_bytes(bytes, liquidLookupOffset, liquidTileLookup.data(), sizeof(liquidTileLookup));
 
         CRes resource{};
         resource.pData = bytes.data();
@@ -398,6 +417,80 @@ namespace {
         expect_eq(overlayFlags, std::uint8_t{0x02}, "Overlay flags should be returned for covered base cells");
         expect_true(!base_cell_has_liquid_overlay(wed, 1, overlayFlags),
                     "Second base cell should not report liquid overlay coverage");
+
+        expect_true(wed.overlays[0].cellTileIndex.empty(),
+                    "Base overlay should not carry per-cell tile indices");
+        expect_eq(wed.overlays[1].cellTileIndex.size(), std::size_t{4},
+                  "Liquid overlay should carry one tile index per overlay cell");
+        expect_eq(wed.overlays[1].cellTileIndex[0], std::uint16_t{24},
+                  "Cell 0 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[1], std::uint16_t{21},
+                  "Cell 1 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[2], std::uint16_t{23},
+                  "Cell 2 tile index should resolve through the tile-index lookup");
+        expect_eq(wed.overlays[1].cellTileIndex[3], std::uint16_t{0xFFFF},
+                  "Out-of-bounds lookup entries should stay 0xFFFF");
+    }
+
+    void test_decode_palette_tile_alpha() {
+        using namespace iee::game;
+
+        std::vector<std::uint8_t> tile(kPaletteTileBytes, 0);
+
+        // BGRA palette entries. Entry 0 is transparent by index regardless of
+        // color; entry 1 is the green key; entries 2 and 3 are opaque colors,
+        // with entry 3 deliberately near-green.
+        const auto setEntry = [&](std::size_t i, std::uint8_t b, std::uint8_t g, std::uint8_t r) {
+            tile[i * 4 + 0] = b;
+            tile[i * 4 + 1] = g;
+            tile[i * 4 + 2] = r;
+            tile[i * 4 + 3] = 255;
+        };
+        setEntry(0, 255, 0, 0);
+        setEntry(1, 0, 255, 0);
+        setEntry(2, 255, 255, 255);
+        setEntry(3, 0, 255, 1);
+
+        std::uint8_t *indices = tile.data() + 1024;
+        std::fill(indices, indices + kTilePixels * kTilePixels, std::uint8_t{2});
+        indices[0] = 0;
+        indices[1] = 1;
+        indices[2] = 3;
+
+        const auto alpha = decode_palette_tile_alpha(tile.data(), tile.size());
+        expect_true(alpha.has_value(), "Full-size palette tile should decode");
+        expect_eq(alpha->opaque[0], std::uint8_t{0}, "Palette index 0 should be transparent");
+        expect_eq(alpha->opaque[1], std::uint8_t{0}, "Green-key palette entries should be transparent");
+        expect_eq(alpha->opaque[2], std::uint8_t{1}, "Near-green palette entries should stay opaque");
+        expect_eq(alpha->opaque[3], std::uint8_t{1}, "Ordinary palette entries should be opaque");
+        expect_eq(alpha->opaque[kTilePixels * kTilePixels - 1], std::uint8_t{1},
+                  "Last pixel should decode like any other");
+
+        expect_true(!decode_palette_tile_alpha(tile.data(), kPaletteTileBytes - 1).has_value(),
+                    "Undersized buffers should not decode as palette tiles");
+        expect_true(!decode_palette_tile_alpha(nullptr, kPaletteTileBytes).has_value(),
+                    "Null buffers should not decode");
+
+        // Average opaque color: half pure red, half pure blue -> (0.5, 0, 0.5).
+        std::vector<std::uint8_t> colorTile(kPaletteTileBytes, 0);
+        colorTile[2 * 4 + 2] = 255;  // entry 2: red (BGRA)
+        colorTile[3 * 4 + 0] = 255;  // entry 3: blue
+        std::uint8_t *colorIndices = colorTile.data() + 1024;
+        for (int i = 0; i < kTilePixels * kTilePixels; ++i) {
+            colorIndices[i] = (i < kTilePixels * kTilePixels / 2) ? 2 : 3;
+        }
+        const auto avg = palette_tile_average_color(colorTile.data(), colorTile.size());
+        expect_true(avg.has_value(), "Opaque tile should yield an average color");
+        if (avg) {
+            expect_true((*avg)[0] == 0.5f && (*avg)[1] == 0.0f && (*avg)[2] == 0.5f,
+                        "Average color should be the exact opaque-pixel mean");
+        }
+
+        // Fully transparent tile (all indices 0) -> no average color.
+        std::vector<std::uint8_t> emptyTile(kPaletteTileBytes, 0);
+        emptyTile[1] = 255;  // entry 0 green just to vary the palette
+        expect_true(!palette_tile_average_color(emptyTile.data(), emptyTile.size()).has_value(),
+                    "Fully transparent tiles should yield no average color");
     }
 
     void test_wed_screen_point_mapping() {
@@ -669,6 +762,163 @@ void test_area_texture_packing_size_mismatch() {
     expect_true(!iee::game::pack_area_cell_texture(wed).has_value(), "flag/dimension mismatch -> nullopt");
 }
 
+void test_area_liquid_texture_packing() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 2;
+    wed.baseHeight = 2;
+    wed.overlays.resize(3);
+    wed.overlays[1].liquidMode = iee::game::TileLiquidMode::Water;
+    wed.overlays[2].liquidMode = iee::game::TileLiquidMode::Lava;
+    // cell flags: bit N set = overlay N covers the cell
+    wed.baseOverlayFlags = {
+        0x00,        // no overlays -> mode 0
+        0x02,        // overlay 1 (water) -> mode 1
+        0x04,        // overlay 2 (lava) -> mode 2
+        0x06,        // overlays 1+2 -> lowest overlay index wins -> mode 1
+    };
+    const auto packed = iee::game::pack_area_liquid_texture(wed);
+    expect_true(packed.has_value(), "packs valid wed");
+    if (packed) {
+        expect_eq(packed->width, 2, "liquid width");
+        expect_eq(packed->height, 2, "liquid height");
+        expect_eq(packed->texels[0], std::uint8_t{0}, "no overlay -> 0");
+        expect_eq(packed->texels[1], std::uint8_t{1}, "water overlay -> 1");
+        expect_eq(packed->texels[2], std::uint8_t{2}, "lava overlay -> 2");
+        expect_eq(packed->texels[3], std::uint8_t{1}, "first liquid overlay wins");
+    }
+}
+
+void test_area_liquid_texture_packing_rejects_mismatch() {
+    iee::game::WedAreaInfo wed{};
+    wed.baseWidth = 3;
+    wed.baseHeight = 1;
+    wed.baseOverlayFlags = {0x00}; // wrong size
+    expect_true(!iee::game::pack_area_liquid_texture(wed).has_value(),
+                "flag/dimension mismatch -> nullopt");
+    iee::game::WedAreaInfo empty{};
+    expect_true(!iee::game::pack_area_liquid_texture(empty).has_value(), "empty -> nullopt");
+}
+
+void test_build_fine_liquid_mask() {
+    using namespace iee::game;
+
+    WedAreaInfo wed{};
+    wed.baseWidth = 2;
+    wed.baseHeight = 2;
+    wed.overlays.resize(2);
+    wed.overlays[1].liquidMode = TileLiquidMode::Water;
+    wed.overlays[1].width = 2;
+    wed.overlays[1].height = 2;
+    // Cells 0 and 2 carry the water overlay; cell 0 has a decodable tile,
+    // cell 2's tile fails to decode (full-cell fallback).
+    wed.baseOverlayFlags = {0x02, 0x00, 0x02, 0x00};
+    wed.overlays[1].cellTileIndex = {5, 0xFFFF, 7, 0xFFFF};
+
+    // Tile 5: left half opaque (pixel columns 0..31). On top of that, the 8x8
+    // block at texel (4,0) gets exactly 32 opaque pixels (majority -> liquid)
+    // and the block at (5,0) gets 31 (below majority -> land).
+    TileAlpha tile5{};
+    for (int y = 0; y < kTilePixels; ++y) {
+        for (int x = 0; x < 32; ++x) {
+            tile5.opaque[y * kTilePixels + x] = 1;
+        }
+    }
+    for (int i = 0; i < 32; ++i) {
+        tile5.opaque[(i / 8) * kTilePixels + 32 + (i % 8)] = 1;
+    }
+    for (int i = 0; i < 31; ++i) {
+        tile5.opaque[(i / 8) * kTilePixels + 40 + (i % 8)] = 1;
+    }
+
+    int providerCalls = 0;
+    const auto provider = [&](std::size_t overlayIndex, std::uint16_t tileIndex)
+            -> std::optional<TileAlpha> {
+        ++providerCalls;
+        expect_eq(overlayIndex, std::size_t{1}, "provider should be asked for the liquid overlay");
+        if (tileIndex == 5) return tile5;
+        return std::nullopt; // tile 7: decode failure
+    };
+
+    const auto mask = build_fine_liquid_mask(wed, provider);
+    expect_true(mask.has_value(), "fine mask should build for a valid wed");
+    if (!mask) return;
+
+    expect_eq(mask->width, 16, "fine mask width should be baseWidth * 8");
+    expect_eq(mask->height, 16, "fine mask height should be baseHeight * 8");
+    expect_eq(providerCalls, 2, "provider should be called once per flagged cell with a tile index");
+
+    const auto texel = [&](int x, int y) { return mask->texels[y * mask->width + x]; };
+
+    // Cell 0: painted silhouette.
+    expect_eq(texel(0, 0), std::uint8_t{1}, "opaque overlay pixels should stamp the liquid mode");
+    expect_eq(texel(3, 7), std::uint8_t{1}, "left half of tile 5 should be liquid");
+    expect_eq(texel(4, 0), std::uint8_t{1}, "exactly-half-opaque blocks should count as liquid");
+    expect_eq(texel(5, 0), std::uint8_t{0}, "below-majority blocks should stay land");
+    expect_eq(texel(6, 0), std::uint8_t{0}, "transparent overlay pixels should stay land");
+    expect_eq(texel(7, 7), std::uint8_t{0}, "right edge of tile 5 should stay land");
+
+    // Cell 1 (unflagged): all land.
+    expect_eq(texel(8, 0), std::uint8_t{0}, "unflagged cells should stay land");
+    expect_eq(texel(15, 7), std::uint8_t{0}, "unflagged cells should stay land at the far corner");
+
+    // Cell 2 (tile decode failed): full-cell fallback.
+    expect_eq(texel(0, 8), std::uint8_t{1}, "undecodable tiles should fall back to full-cell liquid");
+    expect_eq(texel(7, 15), std::uint8_t{1}, "full-cell fallback should cover the whole cell");
+
+    // Cell 3 (unflagged): all land.
+    expect_eq(texel(8, 8), std::uint8_t{0}, "unflagged cells should stay land");
+
+    // A flagged cell with no parsed tilemap at all also falls back to full-cell.
+    WedAreaInfo noTilemap = wed;
+    noTilemap.overlays[1].cellTileIndex.clear();
+    const auto fallbackMask = build_fine_liquid_mask(noTilemap, provider);
+    expect_true(fallbackMask.has_value(), "fine mask should build without a parsed tilemap");
+    if (fallbackMask) {
+        expect_eq(fallbackMask->texels[0], std::uint8_t{1},
+                  "missing tilemap should fall back to full-cell liquid");
+        expect_eq(fallbackMask->texels[7 * 16 + 7], std::uint8_t{1},
+                  "missing tilemap fallback should cover the whole cell");
+    }
+
+    WedAreaInfo empty{};
+    expect_true(!build_fine_liquid_mask(empty, provider).has_value(), "empty wed -> nullopt");
+}
+
+void test_fpseam_override_asset_contract() {
+    namespace fs = std::filesystem;
+    const fs::path assetPath = fs::path("assets") / "game-override" / "fpSEAM.glsl";
+    std::ifstream file(assetPath, std::ios::binary);
+    expect_true(static_cast<bool>(file), "fpSEAM override asset exists (run tests from repo root)");
+    if (!file) return;
+    std::ostringstream contents;
+    contents << file.rdbuf();
+    const std::string source = contents.str();
+
+    // Engine interface (from the live vanilla dump) must be fully preserved.
+    constexpr std::string_view vanillaInterface =
+        "uniform sampler2D uTex;\n"
+        "uniform vec2 uTcScale;\n"
+        "uniform vec4 uColorTone;\n"
+        "varying vec2 vTc;\n"
+        "varying vec2 vRef;\n"
+        "varying vec4 vColor;\n";
+    const auto contract = iee::game::check_interface_contract(vanillaInterface, source);
+    expect_true(contract.ok, "fpSEAM override preserves the engine interface");
+    for (const auto &missing : contract.missingIdentifiers) {
+        std::cerr << "  missing identifier: " << missing << '\n';
+    }
+
+    // Our feed contract.
+    for (const std::string_view name :
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeWaterTint", "uIeeAreaMask",
+          "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
+        expect_true(source.find(name) != std::string::npos,
+                    "fpSEAM override declares feed uniform");
+    }
+    expect_true(source.find("#version") == std::string::npos,
+                "no #version line (engine sources are ARB-era GLSL)");
+}
+
 int main() {
     test_parse_ida_pattern();
     test_rel32_target_checked();
@@ -680,6 +930,7 @@ int main() {
     test_config_shader_override_defaults();
     test_config_shader_override_roundtrip();
     test_parse_loaded_wed();
+    test_decode_palette_tile_alpha();
     test_tis_header_dimension_decoding();
     test_scale_selection_precedence();
     test_wed_screen_point_mapping();
@@ -693,6 +944,10 @@ int main() {
     test_override_registry();
     test_area_texture_packing();
     test_area_texture_packing_size_mismatch();
+    test_area_liquid_texture_packing();
+    test_area_liquid_texture_packing_rejects_mismatch();
+    test_build_fine_liquid_mask();
+    test_fpseam_override_asset_contract();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " test(s) failed\n";

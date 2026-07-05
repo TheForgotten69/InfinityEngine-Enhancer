@@ -85,6 +85,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 `src/iee/game/area_texture.*`
 
 - Host-safe packing of WED per-cell overlay flags into an R8 grid for GL upload.
+- Packs both raw overlay flags and per-cell liquid modes; the liquid variant
+  feeds the unit-2 mask texture consumed by the water shader override.
 
 ## Build Layout
 

@@ -1,6 +1,7 @@
 #include "hooks.h"
 
 #include <atomic>
+#include <memory>
 #include <windows.h>
 
 #include "app_context.h"
@@ -8,6 +9,7 @@
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "iee/features/tile_render.h"
+#include "iee/game/game_types.h"
 #include "iee/shader_probe.h"
 
 namespace iee::hooks {
@@ -44,6 +46,52 @@ namespace iee::hooks {
                 LOG_WARN("GL shader probes were not installed; will retry on subsequent frames");
             }
         }
+
+        // Publishes the view transform to the uniform feed. Reliable only
+        // while the engine is inside its world pass: rViewPort is transient
+        // (AdjustViewportForZoom recomputes it as rViewPortNotZoomed * m_fZoom
+        // around rendering) — frame-tick-time reads saw restored/stale rects,
+        // which broke every map (the reverted v12).
+        //
+        // The active area is RE-RESOLVED here, not trusted from LoadArea time:
+        // on transitions the engine can settle the visible-area pointer after
+        // LoadArea returns, which left the cache on the OLD area (mask glued
+        // to the screen, or no water at all). When the resolved area differs,
+        // re-cache the WED from here — the render thread, where the GL upload
+        // belongs anyway. Throttled so a transiently unreadable WED retries
+        // once a second instead of every draw.
+        void publish_view_state() noexcept {
+            if (!g_ctx) {
+                return;
+            }
+            auto *infGame = g_ctx->infGame.load(std::memory_order_relaxed);
+            if (!infGame) {
+                return;
+            }
+            const auto *resolved = area::resolve_active_area(infGame, *g_ctx->manifest);
+            if (!resolved) {
+                return;
+            }
+            if (resolved != g_ctx->activeArea.load()) {
+                static const game::CGameArea *s_lastRefreshTarget = nullptr;
+                static std::uint32_t s_lastRefreshTick = 0;
+                const auto now = GetTickCount();
+                if (resolved != s_lastRefreshTarget || now - s_lastRefreshTick > 1000) {
+                    s_lastRefreshTarget = resolved;
+                    s_lastRefreshTick = now;
+                    LOG_INFO("Active area changed after load; refreshing WED cache from the render thread");
+                    area::refresh_wed_cache(*g_ctx, infGame);
+                }
+            }
+            if (!std::atomic_load(&g_ctx->wed)) {
+                return;
+            }
+            area::ViewTransform view{};
+            if (area::read_view_transform(g_ctx->activeArea.load(), view)) {
+                probe::set_area_view(view.scrollX, view.scrollY,
+                                     view.viewWorldW, view.viewWorldH);
+            }
+        }
     }
 
     // LoadArea hook - reset area-specific state for new area detection
@@ -56,6 +104,7 @@ namespace iee::hooks {
         LOG_DEBUG("LoadArea called - resetting scale detection for new area");
 
         auto &ctx = *g_ctx;
+        ctx.infGame.store(thisPtr, std::memory_order_relaxed);
         ctx.reset_area_state();
         features::tile_render_state().reset();
         features::clear_disable_request();
@@ -73,11 +122,25 @@ namespace iee::hooks {
 
         auto *result = H_LoadArea.original()(thisPtr, pAreaNameString, a2, a3, a4);
         area::refresh_wed_cache(ctx, thisPtr);
+        // Seed the new area's transform immediately — otherwise the uniforms
+        // hold the PREVIOUS map's values until the first Seam-tone publish
+        // (visible as a one-to-few-frame glitch on area transitions). The
+        // rects may be mid-transition here; the world pass corrects them.
+        publish_view_state();
         return result;
     }
 
-    // DrawColorTone hook - simple passthrough with tracking
+    // DrawColorTone hook: the engine calls this throughout rendering (tile,
+    // sprite, font tones — decompile 464958/301145/245924). The Seam tone
+    // marks the tile pass on ALL map types (the engine's vanilla path and our
+    // upscale path both route through it), making it the reliable per-frame
+    // publish point with coherent viewport rects. Publish BEFORE the original:
+    // the original triggers the fpSEAM bind, which is when the uniform feed
+    // reads these values.
     static void Detour_DrawColorTone(int mode) {
+        if (mode == static_cast<int>(game::ShaderTone::Seam)) {
+            publish_view_state();
+        }
         H_DrawColorTone.original()(mode);
     }
 

@@ -11,7 +11,7 @@
 #include "iee/game/renderer.h"
 #include "iee/game/tile_upscale.h"
 #include "iee/game/tis_runtime.h"
-#include "iee/game/wed_runtime.h"
+#include "iee/shader_probe.h"
 
 namespace iee::features {
     namespace {
@@ -181,17 +181,12 @@ namespace iee::features {
             tone = static_cast<int>(ShaderTone::Seam);
         }
 
-        if (const auto wed = std::atomic_load(&ctx.wed)) {
+        if (std::atomic_load(&ctx.wed)) {
             const auto *activeArea = ctx.activeArea.load();
-            int offsetX = 0;
-            int offsetY = 0;
-            if (area::read_area_scroll(activeArea, offsetX, offsetY)) {
-                std::uint8_t overlayFlags = 0;
-                if (const auto cellIndex = game::base_cell_index_from_screen_point(*wed, x, y, offsetX, offsetY)) {
-                    if (game::base_cell_has_liquid_overlay(*wed, *cellIndex, overlayFlags)) {
-                        LOG_DEBUG_FAST("WED liquid coverage for cell {} flags=0x{:02X}", *cellIndex, overlayFlags);
-                    }
-                }
+            area::ViewTransform view{};
+            if (area::read_view_transform(activeArea, view)) {
+                probe::set_area_view(view.scrollX, view.scrollY,
+                                     view.viewWorldW, view.viewWorldH);
             }
         }
 

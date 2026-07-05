@@ -12,8 +12,26 @@ namespace iee::area {
     // manifest's CInfGame offsets (visible area index -> areas array -> master area).
     const game::CGameArea *resolve_active_area(void *infGame, const game::BuildManifest &manifest);
 
-    // Reads the area's CInfinity scroll offsets via safe_read.
+    // Reads the view's world position (CInfinity::m_ptCurrentPosExact) via safe_read.
     bool read_area_scroll(const game::CGameArea *area, int &outOffsetX, int &outOffsetY);
+
+    // Reads CInfinity::m_fZoom via the manifest offset (EEex docs +0x484).
+    bool read_area_zoom(const game::CGameArea *area, const game::BuildManifest &manifest, float &outZoom);
+
+    // The engine's exact screen->world affine transform, replicated from the
+    // decompiled CInfinity::ScreenToWorld — expressed resolution-independently:
+    // the engine's "screen" coords are UI-SCALED LOGICAL pixels (rViewPortNotZoomed
+    // is the logical window, e.g. 2364x1314 inside a 3840x2135 GL viewport), so
+    // the only safe currency for the shader is the view's WORLD-pixel size:
+    //   world = scroll + physicalPx * viewWorldSize / physicalViewportSize
+    struct ViewTransform {
+        float scrollX{};
+        float scrollY{};
+        float viewWorldW{};  // rViewPort.width  (world px visible)
+        float viewWorldH{};  // rViewPort.height
+    };
+
+    bool read_view_transform(const game::CGameArea *area, ViewTransform &out);
 
     // Re-resolves the active area after LoadArea and caches its parsed WED into ctx.
     void refresh_wed_cache(AppContext &ctx, void *infGame);

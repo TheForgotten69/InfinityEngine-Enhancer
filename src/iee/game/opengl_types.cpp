@@ -113,6 +113,7 @@ namespace iee::game::gl {
         glUniform1f       = reinterpret_cast<PFN_glUniform1f>      (get_ext_proc_address(opengl32, "glUniform1f"));
         glUniform1i       = reinterpret_cast<PFN_glUniform1i>      (get_ext_proc_address(opengl32, "glUniform1i"));
         glUniform2f       = reinterpret_cast<PFN_glUniform2f>      (get_ext_proc_address(opengl32, "glUniform2f"));
+        glUniform3f       = reinterpret_cast<PFN_glUniform3f>      (get_ext_proc_address(opengl32, "glUniform3f"));
         glActiveTexture   = reinterpret_cast<PFN_glActiveTexture>  (get_ext_proc_address(opengl32, "glActiveTexture"));
         glBindFramebuffer = reinterpret_cast<PFN_glBindFramebuffer>(get_ext_proc_address(opengl32, "glBindFramebuffer"));
         glIsProgram       = reinterpret_cast<PFN_glIsProgram>      (get_ext_proc_address(opengl32, "glIsProgram"));
