@@ -467,6 +467,27 @@ namespace {
                     "Undersized buffers should not decode as palette tiles");
         expect_true(!decode_palette_tile_alpha(nullptr, kPaletteTileBytes).has_value(),
                     "Null buffers should not decode");
+
+        // Average opaque color: half pure red, half pure blue -> (0.5, 0, 0.5).
+        std::vector<std::uint8_t> colorTile(kPaletteTileBytes, 0);
+        colorTile[2 * 4 + 2] = 255;  // entry 2: red (BGRA)
+        colorTile[3 * 4 + 0] = 255;  // entry 3: blue
+        std::uint8_t *colorIndices = colorTile.data() + 1024;
+        for (int i = 0; i < kTilePixels * kTilePixels; ++i) {
+            colorIndices[i] = (i < kTilePixels * kTilePixels / 2) ? 2 : 3;
+        }
+        const auto avg = palette_tile_average_color(colorTile.data(), colorTile.size());
+        expect_true(avg.has_value(), "Opaque tile should yield an average color");
+        if (avg) {
+            expect_true((*avg)[0] == 0.5f && (*avg)[1] == 0.0f && (*avg)[2] == 0.5f,
+                        "Average color should be the exact opaque-pixel mean");
+        }
+
+        // Fully transparent tile (all indices 0) -> no average color.
+        std::vector<std::uint8_t> emptyTile(kPaletteTileBytes, 0);
+        emptyTile[1] = 255;  // entry 0 green just to vary the palette
+        expect_true(!palette_tile_average_color(emptyTile.data(), emptyTile.size()).has_value(),
+                    "Fully transparent tiles should yield no average color");
     }
 
     void test_wed_screen_point_mapping() {
@@ -886,7 +907,7 @@ void test_fpseam_override_asset_contract() {
 
     // Our feed contract.
     for (const std::string_view name :
-         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeAreaMask",
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeWaterTint", "uIeeAreaMask",
           "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
         expect_true(source.find(name) != std::string::npos,
                     "fpSEAM override declares feed uniform");

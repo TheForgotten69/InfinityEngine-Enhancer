@@ -21,6 +21,7 @@ uniform highp	vec2		uIeeScroll;        // world px of viewport origin
 uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
+uniform highp	vec3		uIeeWaterTint;     // authored water color (avg of the area's water overlay tile)
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: fine liquid mask, 8px/texel
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
@@ -228,11 +229,11 @@ void main()
 		float spec = pow(clamp(dot(normal, halfVec), 0.0, 1.0), 64.0);
 
 		// Palette: water-hole texels carry no art color (transparent = black),
-		// so grade from a neutral tone there — the engine's own secondary
-		// WATER_ALPHA pass then blends the AUTHORED painted water on top and
-		// restores each area's palette (sea teal, river brown, ...). Partially
-		// opaque contour pixels still contribute their real art color.
-		vec3 artColor = mix(vec3(0.5), texColor.rgb, texColor.a);
+		// so grade from the AUTHORED water tint — the average color of the
+		// area's own water overlay tile, fed by the DLL (sea teal, river
+		// brown, ...; neutral grey when the overlay tile could not decode).
+		// Partially opaque contour pixels still contribute their real art.
+		vec3 artColor = mix(uIeeWaterTint, texColor.rgb, texColor.a);
 		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
 		// Normalize the art tone so dark night pixels still yield a usable hue;
 		// soften extremes so bright rim pixels can't smear the palette.
@@ -294,5 +295,17 @@ void main()
 	float grey = dot(texColor.rgb, vec3(0.299, 0.587, 0.114));
 	vec3 tone = grey * uColorTone.rgb;
 
-	gl_FragColor = vec4(mix(texColor.rgb, tone, uColorTone.a), texColor.a);
+	// The engine blends the painted-art secondary tile at WATER_ALPHA over
+	// flagged cells AFTER the base pass; at native strength it buries our
+	// water under static art (v17: fountains looked vanilla). Dampen that
+	// pass — its hue still glazes our water — leaving every other draw
+	// (fades on land, OFF state) untouched.
+	float alphaScale = 1.0;
+	if (uIeeEnabled > 0.5 && uIeeEnabled < 1.5 && cellMode > 0.5 &&
+	    vColor.a > 0.15 && vColor.a < 0.9)
+	{
+		alphaScale = 0.35;
+	}
+
+	gl_FragColor = vec4(mix(texColor.rgb, tone, uColorTone.a), texColor.a * alphaScale);
 }

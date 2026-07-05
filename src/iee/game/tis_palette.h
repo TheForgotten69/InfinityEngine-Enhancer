@@ -22,4 +22,12 @@ namespace iee::game {
     // buffer is not a palette tile.
     [[nodiscard]] std::optional<TileAlpha> decode_palette_tile_alpha(const std::uint8_t *data,
                                                                      std::size_t size);
+
+    // Average RGB (linear 0..1) of the OPAQUE pixels of a classic palette
+    // tile — the authored color identity of a liquid overlay tile (sea teal,
+    // sewer green, ...). Same transparency rule as decode_palette_tile_alpha.
+    // Returns nullopt when the buffer is not a palette tile or has no opaque
+    // pixels.
+    [[nodiscard]] std::optional<std::array<float, 3>> palette_tile_average_color(const std::uint8_t *data,
+                                                                                 std::size_t size);
 }

@@ -28,6 +28,10 @@ namespace iee::probe {
     // Published by area_state at area load; consumed by the uniform feed.
     void set_area_world_size(float widthPx, float heightPx) noexcept;
 
+    // Authored water color of the current area (average opaque RGB of its
+    // decoded liquid overlay tile, linear 0..1). Neutral 0.5 grey = unknown.
+    void set_area_water_tint(float r, float g, float b) noexcept;
+
     // Published by tile_render per tile draw; consumed by the uniform feed.
     // viewWorldW/H = rViewPort size (world px visible); the feed derives the
     // physical-per-world zoom from the live GL viewport.

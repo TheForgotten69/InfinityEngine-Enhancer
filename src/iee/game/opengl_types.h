@@ -79,6 +79,7 @@ using PFN_glGetUniformLocation = int (APIENTRY*)(unsigned program, const char* n
 using PFN_glUniform1f = void (APIENTRY*)(int location, float v0);
 using PFN_glUniform1i = void (APIENTRY*)(int location, int v0);
 using PFN_glUniform2f = void (APIENTRY*)(int location, float v0, float v1);
+using PFN_glUniform3f = void (APIENTRY*)(int location, float v0, float v1, float v2);
 using PFN_glActiveTexture = void (APIENTRY*)(unsigned texture);
 using PFN_glBindFramebuffer = void (APIENTRY*)(unsigned target, unsigned framebuffer);
 using PFN_glIsProgram = unsigned char (APIENTRY*)(unsigned program);
@@ -127,6 +128,7 @@ struct OpenGLFunctions {
     PFN_glUniform1f glUniform1f{};
     PFN_glUniform1i glUniform1i{};
     PFN_glUniform2f glUniform2f{};
+    PFN_glUniform3f glUniform3f{};
     PFN_glActiveTexture glActiveTexture{};
     PFN_glBindFramebuffer glBindFramebuffer{};
     PFN_glIsProgram glIsProgram{};

@@ -416,3 +416,32 @@ Drop the new `fpSEAM.glsl` into `override/`. F10 once (ON):
      texels are black);
    - slight spill outside flagged cells is allowed (soft cell gate).
 4. Regression: fades/transitions (vColor.a gate), pause tone, unflagged maps.
+
+### Phase 2.6 session v17 verdict (2026-07-05, AR2600)
+
+- Contour detection works ("works better", "really good detection"). Two
+  defects, one root cause — the engine's SECONDARY pass (painted art blended
+  at WATER_ALPHA over water cells, which v17 left vanilla):
+  - cells WITH a secondary tile (garden fountains, rocky river): painted art
+    buries our water -> "not replaced";
+  - cells WITHOUT one (open sea region): our water renders alone and the
+    neutral-grey grading shows raw -> flat teal "color change", with a hard
+    seam against neighbouring with-secondary cells.
+- v16 probe was immune because it discards that pass — consistent.
+
+## Phase 2.6 session v18 — authored water tint + secondary dampening
+
+Needs the NEW DLL BUNDLE (uniform feed changed) + the new fpSEAM.glsl.
+
+1. Log check on load: `Area water tint: (r, g, b) from N water tiles` —
+   the average color of the area's own water overlay tile, now fed as
+   uIeeWaterTint and used to grade the water in the holes.
+2. F10 ON at the v17 sea spot: the teal region should now carry the area's
+   authored water hue, and the hard seam between the two sea regions should
+   soften (both sides now share the same palette source).
+3. Fountains/rocky river: our water should show through — the secondary
+   painted pass is dampened to 35% (only on flagged cells while ON; OFF
+   stays byte-identical vanilla).
+4. Regression: area-transition fades over water cells (the dampening keys
+   off vColor.a in (0.15, 0.9) — a fade drawing tiles at those alphas over
+   water would dim; report if transitions look wrong), pause tone, OFF state.

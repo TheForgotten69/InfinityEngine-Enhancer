@@ -69,6 +69,7 @@ namespace iee::probe {
             int zoom{-2};          // uIeeZoom (float)
             int viewport{-2};      // uIeeViewport (vec2, physical px)
             int worldSizeInv{-2};  // uIeeWorldSizeInv (vec2, 1/world px)
+            int waterTint{-2};     // uIeeWaterTint (vec3, authored water color)
             int areaMask{-2};      // uIeeAreaMask (sampler2D -> unit 2)
             int normalMap{-2};     // uIeeNormalMap (sampler2D -> unit 3)
             int dudvMap{-2};       // uIeeDudvMap (sampler2D -> unit 4)
@@ -134,6 +135,11 @@ namespace iee::probe {
         // coords are UI-scaled logical px — confirmed live 2026-06-13).
         std::atomic<float> g_viewWorldW{0.0f};
         std::atomic<float> g_viewWorldH{0.0f};
+        // Authored water color of the current area's liquid overlay tile
+        // (average of its opaque pixels; neutral grey until an area provides one).
+        std::atomic<float> g_waterTintR{0.5f};
+        std::atomic<float> g_waterTintG{0.5f};
+        std::atomic<float> g_waterTintB{0.5f};
         // Diagnostics: how often the feed actually runs (stale-uniform check).
         std::atomic<unsigned> g_feedCount{0};
         // Effect gate fed to uIeeEnabled (0=off, 1=on, 2=alignment debug) and,
@@ -882,6 +888,7 @@ namespace iee::probe {
             if (locs.zoom == -2)         locs.zoom         = gl.glGetUniformLocation(program, "uIeeZoom");
             if (locs.viewport == -2)     locs.viewport     = gl.glGetUniformLocation(program, "uIeeViewport");
             if (locs.worldSizeInv == -2) locs.worldSizeInv = gl.glGetUniformLocation(program, "uIeeWorldSizeInv");
+            if (locs.waterTint == -2)    locs.waterTint    = gl.glGetUniformLocation(program, "uIeeWaterTint");
             if (locs.areaMask == -2)     locs.areaMask     = gl.glGetUniformLocation(program, "uIeeAreaMask");
             if (locs.normalMap == -2)    locs.normalMap    = gl.glGetUniformLocation(program, "uIeeNormalMap");
             if (locs.dudvMap == -2)      locs.dudvMap      = gl.glGetUniformLocation(program, "uIeeDudvMap");
@@ -945,6 +952,12 @@ namespace iee::probe {
                 if (w > 0.0f && h > 0.0f) {
                     gl.glUniform2f(locs.worldSizeInv, 1.0f / w, 1.0f / h);
                 }
+            }
+            if (locs.waterTint >= 0 && gl.glUniform3f) {
+                gl.glUniform3f(locs.waterTint,
+                               g_waterTintR.load(std::memory_order_relaxed),
+                               g_waterTintG.load(std::memory_order_relaxed),
+                               g_waterTintB.load(std::memory_order_relaxed));
             }
             if (locs.areaMask >= 0 && gl.glUniform1i) {
                 gl.glUniform1i(locs.areaMask, 2); // reserved unit (area_state upload)
@@ -1429,6 +1442,12 @@ namespace iee::probe {
     void set_area_world_size(float widthPx, float heightPx) noexcept {
         g_worldWidthPx.store(widthPx, std::memory_order_relaxed);
         g_worldHeightPx.store(heightPx, std::memory_order_relaxed);
+    }
+
+    void set_area_water_tint(float r, float g, float b) noexcept {
+        g_waterTintR.store(r, std::memory_order_relaxed);
+        g_waterTintG.store(g, std::memory_order_relaxed);
+        g_waterTintB.store(b, std::memory_order_relaxed);
     }
 
     void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept {

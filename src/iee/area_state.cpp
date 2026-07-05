@@ -229,7 +229,11 @@ namespace iee::area {
                 // Overlay tile alpha straight from the engine's loaded tilesets,
                 // memoized per unique (overlay, tile). Any unreadable step
                 // returns nullopt and the stamper keeps the full-cell fallback.
+                // Water tiles also contribute their average opaque color — the
+                // authored water tint fed to the shader as uIeeWaterTint.
                 std::unordered_map<std::uint32_t, std::optional<game::TileAlpha>> tileAlphaCache;
+                double tintSum[3] = {0.0, 0.0, 0.0};
+                std::size_t tintTiles = 0;
                 const auto &tileSets = areaSnapshot.m_cInfinity.pTileSets;
                 const auto tileAlpha = [&](std::size_t overlayIndex,
                                            std::uint16_t tileIndex) -> std::optional<game::TileAlpha> {
@@ -258,6 +262,16 @@ namespace iee::area {
                     }
                     slot = game::decode_palette_tile_alpha(
                             static_cast<const std::uint8_t *>(tileRes.pData), tileRes.nSize);
+                    if (slot && overlayIndex < cachedWed->overlays.size() &&
+                        cachedWed->overlays[overlayIndex].liquidMode == game::TileLiquidMode::Water) {
+                        if (const auto avg = game::palette_tile_average_color(
+                                    static_cast<const std::uint8_t *>(tileRes.pData), tileRes.nSize)) {
+                            tintSum[0] += (*avg)[0];
+                            tintSum[1] += (*avg)[1];
+                            tintSum[2] += (*avg)[2];
+                            ++tintTiles;
+                        }
+                    }
                     return slot;
                 };
 
@@ -277,6 +291,19 @@ namespace iee::area {
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
                 gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
+                // Publish the authored water tint (neutral grey when no water
+                // tile decoded — e.g. PVRZ overlay tilesets).
+                if (tintTiles > 0) {
+                    const auto inv = 1.0 / static_cast<double>(tintTiles);
+                    probe::set_area_water_tint(static_cast<float>(tintSum[0] * inv),
+                                               static_cast<float>(tintSum[1] * inv),
+                                               static_cast<float>(tintSum[2] * inv));
+                    LOG_INFO("Area water tint: ({:.3f}, {:.3f}, {:.3f}) from {} water tiles",
+                             tintSum[0] * inv, tintSum[1] * inv, tintSum[2] * inv, tintTiles);
+                } else {
+                    probe::set_area_water_tint(0.5f, 0.5f, 0.5f);
+                }
+
                 if (packed && game::gl::check_error("area liquid texture upload")) {
                     LOG_INFO("Fine liquid mask uploaded: {}x{} texels, {} unique overlay tiles decoded (unit 2, tex {})",
                              width, height, tileAlphaCache.size(), s_areaTexture);
