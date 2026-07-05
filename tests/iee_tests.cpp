@@ -304,6 +304,7 @@ namespace {
         expect_eq(cfg.shaderOverrideDir, std::string("iee-shaders"), "override dir default");
         expect_true(cfg.debugMagentaShaders.empty(), "magenta list default empty");
         expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
+        expect_true(cfg.enableWaterEffect, "water effect defaults ON");
     }
 
     void test_config_shader_override_roundtrip() {
@@ -315,6 +316,7 @@ namespace {
             orig.shaderOverrideDir = "custom-shaders";
             orig.debugMagentaShaders = "spell1.glsl,spell2.glsl";
             orig.enableDebugHotkeys = true;
+            orig.enableWaterEffect = false;
 
             expect_true(iee::core::ConfigManager::save(tempPath, orig), "ConfigManager::save should succeed");
         }
@@ -326,6 +328,7 @@ namespace {
         expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"), "shaderOverrideDir should round-trip");
         expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"), "debugMagentaShaders should round-trip");
         expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
+        expect_true(!loaded.enableWaterEffect, "enableWaterEffect should round-trip as false");
 
         std::error_code ec;
         std::filesystem::remove(tempPath, ec);

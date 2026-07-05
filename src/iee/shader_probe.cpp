@@ -1214,6 +1214,10 @@ namespace iee::probe {
 
         g_cfg = cfg;
 
+        // The water effect ships ON by default; the ini can disable it and
+        // the F10 debug cycle (when enabled) still overrides at runtime.
+        g_overrideEffectValue.store(cfg.enableWaterEffect ? 1.0f : 0.0f, std::memory_order_relaxed);
+
         configure_magenta_shaders(cfg.debugMagentaShaders);
         if (!g_magentaShaders.empty()) {
             std::string joined;

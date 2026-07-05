@@ -24,6 +24,7 @@ namespace iee::core {
         std::string shaderOverrideDir = "iee-shaders"; // relative to DLL dir
         std::string debugMagentaShaders;        // comma-separated fp names to flood magenta
         bool enableDebugHotkeys = false;        // F10 toggles uIeeEnabled on overridden programs
+        bool enableWaterEffect = true;          // start with the water replacement ON (uIeeEnabled = 1)
         // endregion
 
         bool enableVerboseLogging = false;
