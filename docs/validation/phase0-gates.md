@@ -473,3 +473,34 @@ Drop the new `fpSEAM.glsl` (no DLL change). F10 ON:
    also repainted those pixels; the base tile should already carry them.
 4. Please also take ONE F10-OFF screenshot of the v18 top-left teal square
    spot, to classify that bug.
+
+### Phase 2.6 session v19 verdict (2026-07-05)
+
+- Seam/fountains: all fixed. Remaining: color still neutral (tint pending),
+  teal slivers at water-body edges (both states), water reads "low quality"
+  (monochrome + strong white spec on the neutral grade), and AREA
+  TRANSITIONS break the mask (scrolls with camera / sometimes absent).
+- PVR tile probe verdict (user log): `+0x00 -> type=1003 nSize=5120
+  resref=WTWAVE loaded=1` — **pResTiles entries are CResInfTile wrappers;
+  the tile CRes is their first field, and WTWAVE is a CLASSIC PALETTE tile.**
+  The v18 decode failed to a missing dereference, not to PVRZ. No PVRZ/DXT
+  decode needed anywhere.
+
+## Phase 2.6 session v20 — tint engaged + transition re-resolve
+
+Needs the NEW DLL BUNDLE + new fpSEAM.glsl.
+
+1. Log on load: `Area water tint: (r, g, b) from N water tiles` MUST now
+   appear (missing dereference fixed) — the water grades from WTWAVE's
+   authored average color. This is the fix for "color very different".
+2. Per-overlay log lines (`overlay N: tileset=... mode=... cells=...`):
+   send them — an overlay with mode=None but cells>0 is the prime suspect
+   for the teal squares (engine draws it, we don't classify it).
+3. MAP TRANSITIONS: change areas several times, scroll immediately. The mask
+   must stay world-glued and water must appear on every water map. The view
+   publish now RE-RESOLVES the active area per world pass and re-caches the
+   WED from the render thread when it changes (log: "Active area changed
+   after load"). This replaces trust in LoadArea-time resolution.
+4. Teal edge slivers: should be gone (hole pixels up to one texel outside
+   flagged cells are now styled — the spill).
+5. Specular reduced; judge "low quality" again with the authored tint in.

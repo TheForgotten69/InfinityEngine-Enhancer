@@ -20,6 +20,9 @@ namespace iee {
         game::DrawApi draw{};
 
         std::atomic<const game::CGameArea *> activeArea{nullptr};
+        // CInfGame from the LoadArea hook; lets the render thread re-resolve
+        // the active area when transitions settle after LoadArea returns.
+        std::atomic<void *> infGame{nullptr};
         std::shared_ptr<const game::WedAreaInfo> wed{};
         game::ResrefBuffer lastLoggedWedArea{};
 

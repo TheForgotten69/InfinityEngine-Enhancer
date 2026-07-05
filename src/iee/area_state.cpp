@@ -201,6 +201,19 @@ namespace iee::area {
                      cachedWed->baseWidth,
                      cachedWed->baseHeight,
                      liquidMask);
+            // Per-overlay classification: an overlay the engine draws but we
+            // did NOT classify as liquid shows vanilla water through base-tile
+            // holes, unstyled (suspect for the v18/v19 teal squares).
+            for (std::size_t i = 1; i < cachedWed->overlays.size() && i <= 7; ++i) {
+                const auto &overlay = cachedWed->overlays[i];
+                if (overlay.tilesetResrefView().empty()) {
+                    continue;
+                }
+                LOG_INFO("  overlay {}: tileset={} mode={} cells={}",
+                         i, overlay.tilesetResrefView(),
+                         game::tile_liquid_mode_name(overlay.liquidMode),
+                         overlay.coverageCells);
+            }
             ctx.lastLoggedWedArea = cachedWed->areaResref;
         } else {
             LOG_DEBUG("Reloaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
@@ -254,8 +267,16 @@ namespace iee::area {
                     if (!core::safe_read(tileSet.pResTiles + tileIndex, resPtr) || !resPtr) {
                         return slot;
                     }
+                    // pResTiles entries are CResInfTile wrappers; the tile CRes
+                    // pointer is their FIRST field (decompile: CRes::Demand(
+                    // pResTiles[i]->_padding_); probe-verified 2026-07-05:
+                    // +0x00 -> type 1003, nSize 5120, resref WTWAVE, loaded).
+                    void *tileResPtr = nullptr;
+                    if (!core::safe_read(resPtr, tileResPtr) || !tileResPtr) {
+                        return slot;
+                    }
                     game::CRes tileRes{};
-                    if (!core::safe_read(resPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
+                    if (!core::safe_read(tileResPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
                         tileRes.nSize < game::kPaletteTileBytes ||
                         !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
                         // PVR-tile layout discovery (one per area): EE tiles have

@@ -209,7 +209,11 @@ void main()
 	float waterMask = 0.0;
 	if (uIeeEnabled > 0.5 && vColor.a > 0.9)
 	{
-		float cellSoft = smoothstep(0.02, 0.30, ieeCoverage(worldPos));
+		// Wide cell gate: hole pixels up to one mask texel OUTSIDE a flagged
+		// cell still count (coverage 0.2 from one neighbor tap) — authored
+		// water spills slightly past its cell, and unstyled spill showed the
+		// engine's raw teal overlay tile at water-body edges (v19 slivers).
+		float cellSoft = smoothstep(0.01, 0.08, ieeCoverage(worldPos));
 		waterMask = (1.0 - texColor.a) * cellSoft;
 	}
 
@@ -274,8 +278,9 @@ void main()
 		foam += smoothstep(0.80, 0.95, waveH) * foamTex * 0.7;
 		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.75);
 
-		// Sun glitter + lava glow.
-		water += spec * mix(0.35, 0.9, waveH);
+		// Sun glitter + lava glow (kept subtle: strong white spec on the
+		// neutral grade read as monochrome noise in v19).
+		water += spec * mix(0.15, 0.45, waveH);
 		if (emissive > 0.0)
 		{
 			float pulse = 0.5 + 0.5 * sin(t * 1.1 + waveH * 6.0);

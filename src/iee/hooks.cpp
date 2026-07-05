@@ -52,8 +52,38 @@ namespace iee::hooks {
         // (AdjustViewportForZoom recomputes it as rViewPortNotZoomed * m_fZoom
         // around rendering) — frame-tick-time reads saw restored/stale rects,
         // which broke every map (the reverted v12).
+        //
+        // The active area is RE-RESOLVED here, not trusted from LoadArea time:
+        // on transitions the engine can settle the visible-area pointer after
+        // LoadArea returns, which left the cache on the OLD area (mask glued
+        // to the screen, or no water at all). When the resolved area differs,
+        // re-cache the WED from here — the render thread, where the GL upload
+        // belongs anyway. Throttled so a transiently unreadable WED retries
+        // once a second instead of every draw.
         void publish_view_state() noexcept {
-            if (!g_ctx || !std::atomic_load(&g_ctx->wed)) {
+            if (!g_ctx) {
+                return;
+            }
+            auto *infGame = g_ctx->infGame.load(std::memory_order_relaxed);
+            if (!infGame) {
+                return;
+            }
+            const auto *resolved = area::resolve_active_area(infGame, *g_ctx->manifest);
+            if (!resolved) {
+                return;
+            }
+            if (resolved != g_ctx->activeArea.load()) {
+                static const game::CGameArea *s_lastRefreshTarget = nullptr;
+                static std::uint32_t s_lastRefreshTick = 0;
+                const auto now = GetTickCount();
+                if (resolved != s_lastRefreshTarget || now - s_lastRefreshTick > 1000) {
+                    s_lastRefreshTarget = resolved;
+                    s_lastRefreshTick = now;
+                    LOG_INFO("Active area changed after load; refreshing WED cache from the render thread");
+                    area::refresh_wed_cache(*g_ctx, infGame);
+                }
+            }
+            if (!std::atomic_load(&g_ctx->wed)) {
                 return;
             }
             area::ViewTransform view{};
@@ -74,6 +104,7 @@ namespace iee::hooks {
         LOG_DEBUG("LoadArea called - resetting scale detection for new area");
 
         auto &ctx = *g_ctx;
+        ctx.infGame.store(thisPtr, std::memory_order_relaxed);
         ctx.reset_area_state();
         features::tile_render_state().reset();
         features::clear_disable_request();
