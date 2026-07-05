@@ -258,6 +258,50 @@ namespace iee::area {
                     if (!core::safe_read(resPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
                         tileRes.nSize < game::kPaletteTileBytes ||
                         !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
+                        // PVR-tile layout discovery (one per area): EE tiles have
+                        // nSize == 12 ({page,u,v}); the page's CResPVR pointer
+                        // lives somewhere in the CResInfTile — dump the pointer
+                        // chain so the tint decode can wire against certainty.
+                        static game::ResrefBuffer s_dumpedArea{};
+                        if (!same_resref(cachedWed->areaResrefView(), s_dumpedArea)) {
+                            s_dumpedArea = cachedWed->areaResref;
+                            LOG_INFO("PVR tile probe: overlay={} tile={} res@0x{:X} type={} nSize={} pData@0x{:X}",
+                                     overlayIndex, tileIndex,
+                                     reinterpret_cast<std::uintptr_t>(resPtr),
+                                     tileRes.type, tileRes.nSize,
+                                     reinterpret_cast<std::uintptr_t>(tileRes.pData));
+                            if (tileRes.pData && tileRes.nSize == 12 &&
+                                core::is_readable(tileRes.pData, 12)) {
+                                const auto *entry = static_cast<const std::uint32_t *>(tileRes.pData);
+                                LOG_INFO("PVR tile probe: entry = page {}, u {}, v {}",
+                                         entry[0], entry[1], entry[2]);
+                            }
+                            // Walk the CResInfTile's first 16 qwords; any that
+                            // point at a CRes-shaped object gets its type/nSize
+                            // logged — the CResPVR candidate will show a large
+                            // nSize (compressed PVRZ) or a PVR resref.
+                            const auto *slots = static_cast<void *const *>(resPtr);
+                            for (int i = 0; i < 16; ++i) {
+                                void *candidate = nullptr;
+                                if (!core::safe_read(slots + i, candidate) || !candidate) {
+                                    continue;
+                                }
+                                game::CRes candidateRes{};
+                                if (!core::safe_read(candidate, candidateRes)) {
+                                    continue;
+                                }
+                                game::ResrefBuffer candidateResref{};
+                                if (candidateRes.resref) {
+                                    (void) game::read_runtime_resref(candidateRes.resref, candidateResref);
+                                }
+                                LOG_INFO("PVR tile probe: +0x{:02X} -> 0x{:X} type={} nSize={} resref={} loaded={}",
+                                         i * 8,
+                                         reinterpret_cast<std::uintptr_t>(candidate),
+                                         candidateRes.type, candidateRes.nSize,
+                                         game::resref_view(candidateResref),
+                                         static_cast<int>(candidateRes.bLoaded));
+                            }
+                        }
                         return slot;
                     }
                     slot = game::decode_palette_tile_alpha(
