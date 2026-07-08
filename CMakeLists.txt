@@ -25,6 +25,10 @@ include(CTest)
 include(FetchContent)
 
 function(iee_configure_target target)
+    if(WIN32)
+        # windows.h min/max macros break std::min/std::max/numeric_limits.
+        target_compile_definitions(${target} PRIVATE NOMINMAX)
+    endif()
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive-)
         if(IEE_WARNINGS_AS_ERRORS)

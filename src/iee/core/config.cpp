@@ -22,8 +22,9 @@ namespace iee::core {
     }
 
     static bool iequals(std::string a, std::string b) {
-        std::transform(a.begin(), a.end(), a.begin(), ::tolower);
-        std::transform(b.begin(), b.end(), b.begin(), ::tolower);
+        const auto lower = [](unsigned char c) { return static_cast<char>(::tolower(c)); };
+        std::transform(a.begin(), a.end(), a.begin(), lower);
+        std::transform(b.begin(), b.end(), b.begin(), lower);
         return a == b;
     }
 
