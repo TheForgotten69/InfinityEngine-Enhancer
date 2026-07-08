@@ -182,7 +182,7 @@ namespace iee::features {
             tone = static_cast<int>(ShaderTone::Seam);
         }
 
-        if (std::atomic_load(&ctx.wed)) {
+        if (ctx.wed.load()) {
             const auto *activeArea = ctx.activeArea.load();
             area::ViewTransform view{};
             if (area::read_view_transform(activeArea, view)) {

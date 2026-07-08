@@ -179,7 +179,7 @@ namespace iee::area {
     void refresh_wed_cache(AppContext &ctx, void *infGame) {
         reset_gpu_area_state();
         ctx.activeArea.store(nullptr);
-        std::atomic_store(&ctx.wed, std::shared_ptr<const game::WedAreaInfo>{});
+        ctx.wed.store(std::shared_ptr<const game::WedAreaInfo>{});
 
         try {
             const auto *area = resolve_active_area(infGame, *ctx.manifest);
@@ -211,7 +211,7 @@ namespace iee::area {
             game::WedAreaInfo wed{};
             if (!game::parse_loaded_wed(wedResource.baseclass_0, wed)) {
                 game::ResrefBuffer areaResref{};
-                game::read_runtime_resref(areaSnapshot.m_resref.m_resRef.data(), areaResref);
+                (void)game::read_runtime_resref(areaSnapshot.m_resref.m_resRef.data(), areaResref);
                 LOG_WARN("LoadArea: failed to parse loaded WED for area {}", game::resref_view(areaResref));
                 return;
             }
@@ -219,8 +219,8 @@ namespace iee::area {
             const auto liquidMask = game::liquid_overlay_mask(wed);
             auto wedSnapshot = std::make_shared<const game::WedAreaInfo>(std::move(wed));
             ctx.activeArea.store(area);
-            std::atomic_store(&ctx.wed, std::move(wedSnapshot));
-            const auto cachedWed = std::atomic_load(&ctx.wed);
+            ctx.wed.store(std::move(wedSnapshot));
+            const auto cachedWed = ctx.wed.load();
 
             if (!same_resref(cachedWed->areaResrefView(), ctx.lastLoggedWedArea)) {
                 LOG_INFO("Loaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",

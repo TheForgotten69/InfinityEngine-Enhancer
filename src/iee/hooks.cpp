@@ -89,7 +89,7 @@ namespace iee::hooks {
                     area::refresh_wed_cache(*g_ctx, infGame);
                 }
             }
-            if (!std::atomic_load(&g_ctx->wed)) {
+            if (!g_ctx->wed.load()) {
                 return;
             }
             area::ViewTransform view{};
