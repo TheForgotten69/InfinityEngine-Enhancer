@@ -1,5 +1,10 @@
 #include "build_manifest.h"
 
+#ifdef _WIN64
+#include <windows.h>
+#include <vector>
+#endif
+
 namespace iee::game {
     namespace {
         constexpr bool is_hex_char(char c) noexcept {
@@ -51,6 +56,7 @@ namespace iee::game {
             {
                 "BGEE 2.6.6.x",
                 {"BGEE", ""},
+                {2, 6, 6},
                 {
                     "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 48 FD FF FF",
                     "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
@@ -93,7 +99,58 @@ namespace iee::game {
         return std::nullopt;
     }
 
-    const BuildManifest *detect_manifest() noexcept {
-        return &current_manifest();
+    std::optional<std::reference_wrapper<const BuildManifest> >
+    find_manifest_for_version(std::uint16_t major, std::uint16_t minor, std::uint16_t patch) noexcept {
+        for (const auto &manifest: kKnownBuilds) {
+            if (manifest.executableVersion.matches(major, minor, patch)) {
+                return manifest;
+            }
+        }
+        return std::nullopt;
     }
-}
+
+    const BuildManifest *detect_manifest(ExecutableVersion *detectedVersion) noexcept {
+        if (detectedVersion) *detectedVersion = {};
+#ifdef _WIN64
+        try {
+            wchar_t executablePath[MAX_PATH]{};
+            const auto pathLength = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            if (pathLength == 0 || pathLength >= MAX_PATH) {
+                return nullptr;
+            }
+
+            DWORD ignored = 0;
+            const auto versionBytes = GetFileVersionInfoSizeW(executablePath, &ignored);
+            if (versionBytes == 0) {
+                return nullptr;
+            }
+
+            std::vector<std::byte> versionData(versionBytes);
+            if (!GetFileVersionInfoW(executablePath, 0, versionBytes, versionData.data())) {
+                return nullptr;
+            }
+
+            VS_FIXEDFILEINFO *fixedInfo = nullptr;
+            UINT fixedInfoBytes = 0;
+            if (!VerQueryValueW(versionData.data(), L"\\", reinterpret_cast<void **>(&fixedInfo), &fixedInfoBytes) ||
+                !fixedInfo || fixedInfoBytes < sizeof(VS_FIXEDFILEINFO) || fixedInfo->dwSignature != 0xFEEF04BD) {
+                return nullptr;
+            }
+
+            const auto major = static_cast<std::uint16_t>(HIWORD(fixedInfo->dwFileVersionMS));
+            const auto minor = static_cast<std::uint16_t>(LOWORD(fixedInfo->dwFileVersionMS));
+            const auto patch = static_cast<std::uint16_t>(HIWORD(fixedInfo->dwFileVersionLS));
+            if (detectedVersion) *detectedVersion = {major, minor, patch};
+            if (const auto manifest = find_manifest_for_version(major, minor, patch)) {
+                return &manifest->get();
+            }
+            return nullptr;
+        } catch (...) {
+            return nullptr;
+        }
+#else
+        (void)detectedVersion;
+        return nullptr;
+#endif
+    }
+} // namespace iee::game

@@ -41,7 +41,11 @@ namespace iee::game {
             return false;
         }
 
-        if (!tilesetSnapshot.baseclass_0.pData || tilesetSnapshot.baseclass_0.nSize == 0 || resourceSnapshot.tileIndex < 0) {
+        if (!tilesetSnapshot.baseclass_0.pData ||
+            tilesetSnapshot.baseclass_0.nSize < sizeof(PVRZTileEntry) ||
+            tilesetSnapshot.baseclass_0.nCount == 0 ||
+            resourceSnapshot.tileIndex < 0 ||
+            static_cast<std::uint32_t>(resourceSnapshot.tileIndex) >= tilesetSnapshot.baseclass_0.nCount) {
             return false;
         }
 
@@ -54,10 +58,11 @@ namespace iee::game {
         out.resource = resource;
         out.tileset = resourceSnapshot.tis;
         out.table = table;
+        out.entry = entry;
         out.header = tilesetSnapshot.h;
         out.index = resourceSnapshot.tileIndex;
         out.tileDataBlockLen = tilesetSnapshot.baseclass_0.nSize;
-        out.runtimeTileDimension = tilesetSnapshot.baseclass_0.nCount;
+        out.tileCount = tilesetSnapshot.baseclass_0.nCount;
 
         return true;
     }

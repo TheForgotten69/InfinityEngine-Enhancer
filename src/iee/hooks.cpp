@@ -1,7 +1,7 @@
 #include "hooks.h"
 
 #include <atomic>
-#include <memory>
+#include <exception>
 #include <windows.h>
 
 #include "app_context.h"
@@ -19,7 +19,9 @@ namespace iee::hooks {
     using Fn_DrawColorTone = void (*)(int);
 
     // Hook management - initialize MinHook
-    static core::HookInit hkInit;  // Required for MinHook initialization
+    // Intentionally explicit lifetime: a static smart-pointer destructor would
+    // call MinHook from the Windows loader lock if the loader skipped ShutdownBindings.
+    static core::HookInit *hkInit = nullptr;
     static core::Hook<Fn_LoadArea> H_LoadArea;
     static core::Hook<Fn_RenderTexture> H_RenderTexture;
     static core::Hook<Fn_DrawColorTone> H_DrawColorTone;
@@ -60,10 +62,14 @@ namespace iee::hooks {
         // re-cache the WED from here — the render thread, where the GL upload
         // belongs anyway. Throttled so a transiently unreadable WED retries
         // once a second instead of every draw.
-        void publish_view_state() noexcept {
+        void publish_view_state() {
             if (!g_ctx) {
                 return;
             }
+            // This hook runs inside the world render pass with a current GL
+            // context. Flush even when active-area resolution is temporarily
+            // unavailable so a queued no-liquid transition clears stale data.
+            (void)area::flush_pending_gpu_upload();
             auto *infGame = g_ctx->infGame.load(std::memory_order_relaxed);
             if (!infGame) {
                 return;
@@ -88,45 +94,52 @@ namespace iee::hooks {
             }
             area::ViewTransform view{};
             if (area::read_view_transform(g_ctx->activeArea.load(), view)) {
-                probe::set_area_view(view.scrollX, view.scrollY,
-                                     view.viewWorldW, view.viewWorldH);
+                probe::set_area_view(view.scrollX, view.scrollY, view.viewWorldW, view.viewWorldH);
             }
         }
-    }
+    } // namespace
 
     // LoadArea hook - reset area-specific state for new area detection
     static void *Detour_LoadArea(void *thisPtr, void *pAreaNameString, unsigned char a2, unsigned char a3,
                                  unsigned char a4) {
+        const auto original = H_LoadArea.original();
         if (!g_ctx) {
-            return H_LoadArea.original()(thisPtr, pAreaNameString, a2, a3, a4);
+            return original(thisPtr, pAreaNameString, a2, a3, a4);
         }
 
-        LOG_DEBUG("LoadArea called - resetting scale detection for new area");
-
         auto &ctx = *g_ctx;
-        ctx.infGame.store(thisPtr, std::memory_order_relaxed);
-        ctx.reset_area_state();
-        features::tile_render_state().reset();
-        features::clear_disable_request();
+        try {
+            LOG_DEBUG("LoadArea called - resetting scale detection for new area");
+            ctx.infGame.store(thisPtr, std::memory_order_relaxed);
+            ctx.reset_area_state();
+            area::reset_gpu_area_state();
+            features::tile_render_state().reset();
+            features::clear_disable_request();
 
-        // Re-enable RenderTexture hook for new area detection
-        if (!ctx.isRenderHookActive) {
-            try {
+            // Re-enable RenderTexture hook for new area detection.
+            if (!ctx.isRenderHookActive) {
                 H_RenderTexture.enable();
                 ctx.isRenderHookActive = true;
                 LOG_DEBUG("Re-enabled RenderTexture hook for new area detection");
-            } catch (const std::exception &e) {
-                LOG_WARN("Failed to re-enable RenderTexture hook: {}", e.what());
             }
+        } catch (const std::exception &e) {
+            LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path");
         }
 
-        auto *result = H_LoadArea.original()(thisPtr, pAreaNameString, a2, a3, a4);
-        area::refresh_wed_cache(ctx, thisPtr);
-        // Seed the new area's transform immediately — otherwise the uniforms
-        // hold the PREVIOUS map's values until the first Seam-tone publish
-        // (visible as a one-to-few-frame glitch on area transitions). The
-        // rects may be mid-transition here; the world pass corrects them.
-        publish_view_state();
+        auto *result = original(thisPtr, pAreaNameString, a2, a3, a4);
+        try {
+            area::refresh_wed_cache(ctx, thisPtr);
+            // Seed CPU transform state; the next Seam pass owns the GL upload.
+            publish_view_state();
+        } catch (const std::exception &e) {
+            LOG_ERROR("LoadArea post-dispatch failed; the feature remains disabled for this area: {}", e.what());
+            area::reset_gpu_area_state();
+        } catch (...) {
+            LOG_ERROR("LoadArea post-dispatch failed; the feature remains disabled for this area");
+            area::reset_gpu_area_state();
+        }
         return result;
     }
 
@@ -138,24 +151,36 @@ namespace iee::hooks {
     // the original triggers the fpSEAM bind, which is when the uniform feed
     // reads these values.
     static void Detour_DrawColorTone(int mode) {
-        if (mode == static_cast<int>(game::ShaderTone::Seam)) {
-            publish_view_state();
+        try {
+            if (mode == static_cast<int>(game::ShaderTone::Seam)) {
+                publish_view_state();
+            }
+        } catch (...) {
+            // Rendering must never depend on IEE diagnostics or uniform state.
         }
         H_DrawColorTone.original()(mode);
     }
 
     // RenderTexture hook - thin dispatch into the tile upscale feature
     static void Detour_RenderTexture(void *thisPtr, int texId, void *unused, int x, int y, unsigned long flags) {
+        const auto original = H_RenderTexture.original();
         if (!g_ctx || !g_ctx->manifest) {
-            return; // Context destroyed, don't process
+            original(thisPtr, texId, unused, x, y, flags);
+            return;
         }
-        install_shader_probes_once();
 
         auto &ctx = *g_ctx;
-
-        const bool handled = features::render_tile(ctx, thisPtr, texId, unused, x, y, flags);
+        bool handled = false;
+        try {
+            install_shader_probes_once();
+            handled = features::render_tile(ctx, thisPtr, texId, unused, x, y, flags);
+        } catch (const std::exception &e) {
+            LOG_ERROR("RenderTexture enhancement failed; using the engine renderer: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("RenderTexture enhancement failed; using the engine renderer");
+        }
         if (!handled) {
-            H_RenderTexture.original()(thisPtr, texId, unused, x, y, flags);
+            original(thisPtr, texId, unused, x, y, flags);
         }
 
         // Feature modules request hook disable (e.g. standard tiles detected);
@@ -165,12 +190,11 @@ namespace iee::hooks {
         // and rendering is single-threaded, so disabling after is equivalent.
         if (features::should_disable_render_hook()) {
             features::clear_disable_request();
-            try {
-                H_RenderTexture.disable();
+            if (H_RenderTexture.disable()) {
                 ctx.isRenderHookActive = false;
                 LOG_DEBUG("RenderTexture hook disabled on feature request");
-            } catch (const std::exception &e) {
-                LOG_WARN("Failed to disable RenderTexture hook: {}", e.what());
+            } else {
+                LOG_WARN("Failed to disable RenderTexture hook");
             }
         }
     }
@@ -179,16 +203,17 @@ namespace iee::hooks {
         g_ctx = &ctx;
 
         try {
-            H_LoadArea.create(reinterpret_cast<void *>(ctx.addrs.LoadArea), (void *) &Detour_LoadArea);
+            if (!hkInit) hkInit = new core::HookInit();
+            H_LoadArea.create(reinterpret_cast<void *>(ctx.addrs.LoadArea), (void *)&Detour_LoadArea);
             LOG_INFO("LoadArea hook created");
 
-            H_RenderTexture.create(reinterpret_cast<void *>(ctx.addrs.RenderTexture), (void *) &Detour_RenderTexture);
+            H_RenderTexture.create(reinterpret_cast<void *>(ctx.addrs.RenderTexture), (void *)&Detour_RenderTexture);
             LOG_INFO("RenderTexture hook created");
 
             if (ctx.draw.DrawColorTone) {
                 try {
                     H_DrawColorTone.create(reinterpret_cast<void *>(ctx.draw.DrawColorTone),
-                                           (void *) &Detour_DrawColorTone);
+                                           (void *)&Detour_DrawColorTone);
                     H_DrawColorTone.enable();
                     LOG_INFO("DrawColorTone hook installed");
                 } catch (const std::exception &e) {
@@ -212,23 +237,43 @@ namespace iee::hooks {
             return true;
         } catch (const std::exception &e) {
             LOG_ERROR("Exception during hook installation: {}", e.what());
+            (void)H_DrawColorTone.remove();
+            (void)H_RenderTexture.remove();
+            (void)H_LoadArea.remove();
+            g_ctx = nullptr;
+            delete hkInit;
+            hkInit = nullptr;
             return false;
         } catch (...) {
             LOG_ERROR("Unknown exception during hook installation");
+            (void)H_DrawColorTone.remove();
+            (void)H_RenderTexture.remove();
+            (void)H_LoadArea.remove();
+            g_ctx = nullptr;
+            delete hkInit;
+            hkInit = nullptr;
             return false;
         }
     }
 
-    void uninstall_all() {
-        LOG_INFO("Uninstalling all hooks...");
+    void uninstall_all() noexcept {
+        try {
+            LOG_INFO("Uninstalling all hooks...");
+        } catch (...) {
+        }
 
-        H_DrawColorTone.disable();
-        H_RenderTexture.disable();
-        H_LoadArea.disable();
+        (void)H_DrawColorTone.remove();
+        (void)H_RenderTexture.remove();
+        (void)H_LoadArea.remove();
 
         g_ctx = nullptr;
+        delete hkInit;
+        hkInit = nullptr;
 
-        LOG_INFO("Hook cleanup complete");
+        try {
+            LOG_INFO("Hook cleanup complete");
+        } catch (...) {
+        }
     }
 
     void prepare_for_shutdown() noexcept {
@@ -236,14 +281,8 @@ namespace iee::hooks {
             g_ctx->isRenderHookActive = false;
         }
 
-        H_DrawColorTone.disable();
-        H_RenderTexture.disable();
-        H_LoadArea.disable();
-
-        g_ctx = nullptr;
+        uninstall_all();
     }
 
-    bool is_active() {
-        return g_ctx != nullptr && g_ctx->isRenderHookActive;
-    }
-}
+    bool is_active() { return g_ctx != nullptr && g_ctx->isRenderHookActive; }
+} // namespace iee::hooks

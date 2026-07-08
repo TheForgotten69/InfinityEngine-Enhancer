@@ -16,6 +16,32 @@ Render authored 4x tile assets while keeping the engine's 64x64 screen-space qua
 
 The header is authoritative when present. Standard tilesets can legitimately have `header == null`, so table-based detection is also an expected deterministic path. Heuristics are there only as a final safety net.
 
+The value at `+0x14` is TIS metadata. The PVRZ header describes the atlas page
+and does not replace this logical tile-size field. The current implementation
+supports 64- and 256-pixel authored tiles.
+
+## Future: Generic Authored Tile Sizes (64/128/256/512)
+
+The classifier should be generalized to accept the explicit power-of-two set
+`{64, 128, 256, 512}`, compute `scale = tileDimension / 64`, and use the same
+accepted values for the PVR entry-table fallback. Do not accept arbitrary
+dimensions merely because they are divisible by 64.
+
+Acceptance checks for this feature:
+
+- Header metadata wins when present.
+- Table inference must be unambiguous across sampled entries.
+- `u + tileDimension` and `v + tileDimension` must remain within the actual
+  PVRZ atlas dimensions.
+- The screen quad and all WED/ARE coordinates remain 64x64.
+- Tests cover every size, atlas edges, malformed counts, and mixed metadata.
+- Runtime state is per tileset, not just per area, so a mod with mixed TIS
+  resources cannot inherit the first tileset's scale.
+
+The last point is the main architectural follow-up: the existing area-wide
+scale cache is sufficient for ordinary maps but too coarse for fully general
+mod content.
+
 ## Area Scope
 
 Scale detection is area-scoped.

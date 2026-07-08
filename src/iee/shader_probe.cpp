@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -19,6 +20,7 @@
 
 #include <spdlog/fmt/fmt.h>
 
+#include "area_state.h"
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
@@ -110,6 +112,18 @@ namespace iee::probe {
         core::Hook<Fn_glLinkProgramARB>      g_glLinkProgramARBHook;
         core::Hook<Fn_glUseProgramObjectARB> g_glUseProgramObjectARBHook;
         core::Hook<Fn_glBindFramebuffer>     g_glBindFramebufferHook;
+
+        void remove_probe_hooks() noexcept {
+            (void) g_glBindFramebufferHook.remove();
+            (void) g_glUseProgramObjectARBHook.remove();
+            (void) g_glLinkProgramARBHook.remove();
+            (void) g_glCompileShaderARBHook.remove();
+            (void) g_glShaderSourceARBHook.remove();
+            (void) g_glUseProgramHook.remove();
+            (void) g_glLinkProgramHook.remove();
+            (void) g_glCompileShaderHook.remove();
+            (void) g_glShaderSourceHook.remove();
+        }
         // endregion
 
         // region Module-level state
@@ -287,9 +301,9 @@ namespace iee::probe {
         // endregion
 
         // region Caller info (dbghelp)
-        CallerInfo current_caller_info() noexcept {
+        CallerInfo caller_info(std::uintptr_t caller) {
             CallerInfo info{};
-            info.caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+            info.caller = caller;
             const auto module = core::get_module_span(nullptr);
             if (module) {
                 const auto moduleBase = reinterpret_cast<std::uintptr_t>(module->base);
@@ -373,7 +387,7 @@ namespace iee::probe {
         // endregion
 
         // region Dump helper
-        void dump_shader_to_disk(const std::string &name, const std::string &fullSource) noexcept {
+        void dump_shader_to_disk(const std::string &name, const std::string &fullSource) {
             if (g_dumpDir.empty()) return;
             std::error_code ec;
             std::filesystem::create_directories(g_dumpDir, ec);
@@ -394,7 +408,9 @@ namespace iee::probe {
 
         // region Detour: glShaderSource (CHANGE 3)
         static void APIENTRY detour_glShaderSource(unsigned shader, int count,
-                                                   const char* const* string, const int* length) {
+                                                   const char* const* string, const int* length) noexcept {
+            bool forwarded = false;
+            try {
             const std::string fullSource = gather_full_source(count, string, length);
             const auto name = game::extract_shader_name(fullSource, "");
             std::string substituted;
@@ -446,10 +462,16 @@ namespace iee::probe {
             } else {
                 g_glShaderSourceHook.original()(shader, count, string, length);
             }
+            forwarded = true;
+            } catch (...) {
+                if (!forwarded) g_glShaderSourceHook.original()(shader, count, string, length);
+            }
         }
 
         static void APIENTRY detour_glShaderSourceARB(unsigned shader, int count,
-                                                      const char* const* string, const int* length) {
+                                                      const char* const* string, const int* length) noexcept {
+            bool forwarded = false;
+            try {
             const std::string fullSource = gather_full_source(count, string, length);
             const auto name = game::extract_shader_name(fullSource, "");
             std::string substituted;
@@ -501,11 +523,16 @@ namespace iee::probe {
             } else {
                 g_glShaderSourceARBHook.original()(shader, count, string, length);
             }
+            forwarded = true;
+            } catch (...) {
+                if (!forwarded) g_glShaderSourceARBHook.original()(shader, count, string, length);
+            }
         }
         // endregion
 
         // region Detour: glCompileShader (CHANGE 4)
-        static void APIENTRY detour_glCompileShader(unsigned shader) {
+        static void APIENTRY detour_glCompileShader(unsigned shader) noexcept {
+            try {
             g_glCompileShaderHook.original()(shader);
 
             const auto &gl = game::gl::get_gl_functions();
@@ -578,9 +605,13 @@ namespace iee::probe {
             if (!infoLog.empty()) {
                 LOG_INFO("GL shader compile log: shader={} log={}", shader, infoLog);
             }
+            } catch (...) {
+                // The engine compile already ran; diagnostics and fallback are optional.
+            }
         }
 
-        static void APIENTRY detour_glCompileShaderARB(unsigned shader) {
+        static void APIENTRY detour_glCompileShaderARB(unsigned shader) noexcept {
+            try {
             g_glCompileShaderARBHook.original()(shader);
 
             const auto &gl = game::gl::get_gl_functions();
@@ -648,6 +679,9 @@ namespace iee::probe {
                      preview.empty() ? "<empty>" : preview);
             if (!infoLog.empty()) {
                 LOG_INFO("GL shader compile log (ARB): shader={} log={}", shader, infoLog);
+            }
+            } catch (...) {
+                // The engine compile already ran; diagnostics and fallback are optional.
             }
         }
         // endregion
@@ -792,7 +826,8 @@ namespace iee::probe {
         // endregion
 
         // region Detour: glLinkProgram (CHANGE 5 — program tracking)
-        static void APIENTRY detour_glLinkProgram(unsigned program) {
+        static void APIENTRY detour_glLinkProgram(unsigned program) noexcept {
+            try {
             g_glLinkProgramHook.original()(program);
 
             const auto &gl = game::gl::get_gl_functions();
@@ -823,9 +858,13 @@ namespace iee::probe {
             }
 
             link_program_introspect(program, false);
+            } catch (...) {
+                // The engine link already ran; introspection must not affect it.
+            }
         }
 
-        static void APIENTRY detour_glLinkProgramARB(unsigned program) {
+        static void APIENTRY detour_glLinkProgramARB(unsigned program) noexcept {
+            try {
             g_glLinkProgramARBHook.original()(program);
 
             const auto &gl = game::gl::get_gl_functions();
@@ -855,11 +894,14 @@ namespace iee::probe {
             }
 
             link_program_introspect(program, true);
+            } catch (...) {
+                // The engine link already ran; introspection must not affect it.
+            }
         }
         // endregion
 
         // region Uniform feed helper
-        void feed_uniforms_to_program(unsigned program) noexcept {
+        void feed_uniforms_to_program(unsigned program) {
             const auto &gl = game::gl::get_gl_functions();
             if (!gl.glGetUniformLocation || !gl.glUniform1f) return;
 
@@ -906,7 +948,14 @@ namespace iee::probe {
             // Feed values — program is currently bound (we are post-original in glUseProgram)
             g_feedCount.fetch_add(1, std::memory_order_relaxed);
             const float timeValue = g_uniformTime.load(std::memory_order_relaxed);
-            const float enabledValue = g_overrideEffectValue.load(std::memory_order_relaxed);
+            float enabledValue = g_overrideEffectValue.load(std::memory_order_relaxed);
+            if (locs.areaMask >= 0 && !area::bind_area_texture()) {
+                enabledValue = 0.0f;
+            }
+            if ((locs.normalMap >= 0 || locs.dudvMap >= 0 || locs.foamMap >= 0) &&
+                !water::ensure_water_textures_bound()) {
+                enabledValue = 0.0f;
+            }
             if (locs.time >= 0) {
                 gl.glUniform1f(locs.time, timeValue);
             }
@@ -975,9 +1024,12 @@ namespace iee::probe {
         // endregion
 
         // region Detour: glUseProgram (CHANGE 5 — uniform feed)
-        static void APIENTRY detour_glUseProgram(unsigned program) {
-            const auto callerInfo = current_caller_info();
+        static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
+            bool forwarded = false;
+            try {
+            const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
             g_glUseProgramHook.original()(program);
+            forwarded = true;
 
             // Uniform feed (post-original, program is now bound)
             if (program != 0) {
@@ -995,12 +1047,13 @@ namespace iee::probe {
             {
                 std::lock_guard lock(g_probeMutex);
                 auto &record = g_programRecords[program];
-                shouldLog = !record.callerLogged.contains(callerInfo.caller);
+                shouldLog = !record.callerLogged.contains(caller);
                 record.useLogged = true;
-                record.callerLogged.emplace(callerInfo.caller, true);
+                record.callerLogged.emplace(caller, true);
             }
 
             if (shouldLog) {
+                const auto callerInfo = caller_info(caller);
                 LOG_INFO("GL program bind: program={} {}",
                          program, caller_summary(callerInfo));
 
@@ -1060,11 +1113,17 @@ namespace iee::probe {
                     }
                 }
             }
+            } catch (...) {
+                if (!forwarded) g_glUseProgramHook.original()(program);
+            }
         }
 
-        static void APIENTRY detour_glUseProgramObjectARB(unsigned program) {
-            const auto callerInfo = current_caller_info();
+        static void APIENTRY detour_glUseProgramObjectARB(unsigned program) noexcept {
+            bool forwarded = false;
+            try {
+            const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
             g_glUseProgramObjectARBHook.original()(program);
+            forwarded = true;
 
             // Uniform feed (post-original, program is now bound)
             if (program != 0) {
@@ -1082,12 +1141,13 @@ namespace iee::probe {
             {
                 std::lock_guard lock(g_probeMutex);
                 auto &record = g_programRecords[program];
-                shouldLog = !record.callerLogged.contains(callerInfo.caller);
+                shouldLog = !record.callerLogged.contains(caller);
                 record.useLogged = true;
-                record.callerLogged.emplace(callerInfo.caller, true);
+                record.callerLogged.emplace(caller, true);
             }
 
             if (shouldLog) {
+                const auto callerInfo = caller_info(caller);
                 LOG_INFO("GL program bind (ARB): program={} {}",
                          program, caller_summary(callerInfo));
 
@@ -1146,6 +1206,9 @@ namespace iee::probe {
                     }
                 }
             }
+            } catch (...) {
+                if (!forwarded) g_glUseProgramObjectARBHook.original()(program);
+            }
         }
         // endregion
 
@@ -1170,7 +1233,7 @@ namespace iee::probe {
         return caps;
     }
 
-    void log_shader_runtime_capabilities() noexcept {
+    void log_shader_runtime_capabilities() {
         const auto caps = detect_shader_runtime_capabilities();
         LOG_INFO("Shader runtime readiness:");
         LOG_INFO("  Base GL API: {}",           caps.baseGlReady ? "ready" : "missing required functions");
@@ -1191,7 +1254,9 @@ namespace iee::probe {
         // region V5 gate probe: does the engine ever bind FBOs itself?
         std::set<unsigned long long> g_fboBindsLogged;
 
-        void APIENTRY detour_glBindFramebuffer(unsigned target, unsigned framebuffer) {
+        void APIENTRY detour_glBindFramebuffer(unsigned target, unsigned framebuffer) noexcept {
+            bool forwarded = false;
+            try {
             if (framebuffer != 0) {
                 const auto key = (static_cast<unsigned long long>(target) << 32) | framebuffer;
                 bool shouldLog = false;
@@ -1204,11 +1269,16 @@ namespace iee::probe {
                 }
             }
             g_glBindFramebufferHook.original()(target, framebuffer);
+            forwarded = true;
+            } catch (...) {
+                if (!forwarded) g_glBindFramebufferHook.original()(target, framebuffer);
+            }
         }
         // endregion
     }
 
     bool install_shader_probes(const core::EngineConfig &cfg) noexcept {
+        try {
         std::lock_guard lock(g_probeMutex);
         if (g_shaderProbesInstalled) return true;
 
@@ -1318,22 +1388,18 @@ namespace iee::probe {
                                                    reinterpret_cast<void *>(&detour_glUseProgramObjectARB));
                 g_glUseProgramObjectARBHook.enable();
             }
-            if (gl.glBindFramebuffer) {
+            if (cfg.enableVerboseLogging && gl.glBindFramebuffer) {
                 g_glBindFramebufferHook.create(reinterpret_cast<void *>(gl.glBindFramebuffer),
                                                reinterpret_cast<void *>(&detour_glBindFramebuffer));
                 g_glBindFramebufferHook.enable();
             }
         } catch (const std::exception &e) {
             LOG_WARN("Failed to install GL shader probes: {}", e.what());
-            g_glBindFramebufferHook.disable();
-            g_glUseProgramObjectARBHook.disable();
-            g_glLinkProgramARBHook.disable();
-            g_glCompileShaderARBHook.disable();
-            g_glShaderSourceARBHook.disable();
-            g_glUseProgramHook.disable();
-            g_glLinkProgramHook.disable();
-            g_glCompileShaderHook.disable();
-            g_glShaderSourceHook.disable();
+            remove_probe_hooks();
+            return false;
+        } catch (...) {
+            LOG_WARN("Failed to install GL shader probes with an unknown exception");
+            remove_probe_hooks();
             return false;
         }
 
@@ -1341,29 +1407,36 @@ namespace iee::probe {
         g_sweepPending.store(true, std::memory_order_relaxed);
         LOG_INFO("Installed GL shader probes");
         return true;
+        } catch (const std::exception &e) {
+            remove_probe_hooks();
+            LOG_ERROR("GL shader probe initialization failed: {}", e.what());
+            return false;
+        } catch (...) {
+            remove_probe_hooks();
+            LOG_ERROR("GL shader probe initialization failed with an unknown exception");
+            return false;
+        }
     }
 
     void uninstall_shader_probes() noexcept {
-        std::lock_guard lock(g_probeMutex);
-        g_glBindFramebufferHook.disable();
-        g_glUseProgramObjectARBHook.disable();
-        g_glLinkProgramARBHook.disable();
-        g_glCompileShaderARBHook.disable();
-        g_glShaderSourceARBHook.disable();
-        g_glUseProgramHook.disable();
-        g_glLinkProgramHook.disable();
-        g_glCompileShaderHook.disable();
-        g_glShaderSourceHook.disable();
-        g_shaderRecords.clear();
-        g_programRecords.clear();
-        g_overriddenPrograms.clear();
-        g_pendingFallback.clear();
-        g_dumpedShaders.clear();
-        g_fboBindsLogged.clear();
-        g_shaderProbesInstalled = false;
+        remove_probe_hooks();
+        try {
+            std::lock_guard lock(g_probeMutex);
+            g_shaderRecords.clear();
+            g_programRecords.clear();
+            g_overriddenPrograms.clear();
+            g_pendingFallback.clear();
+            g_dumpedShaders.clear();
+            g_fboBindsLogged.clear();
+            g_shaderProbesInstalled = false;
+            g_sweepPending.store(false, std::memory_order_relaxed);
+        } catch (...) {
+            // Hooks are already gone; shutdown must not escape into the loader.
+        }
     }
 
     void on_frame_tick(float secondsSinceStart) noexcept {
+        try {
         g_uniformTime.store(secondsSinceStart, std::memory_order_relaxed);
 
         // Deferred program sweep: runs at the frame boundary (SDL swap detour)
@@ -1433,6 +1506,9 @@ namespace iee::probe {
                      g_feedCount.load(std::memory_order_relaxed));
         }
         f10WasDown = f10Down;
+        } catch (...) {
+            // Frame presentation and the original swap must never depend on probes.
+        }
     }
 
     void set_override_effect_enabled(bool enabled) noexcept {

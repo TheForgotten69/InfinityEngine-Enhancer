@@ -6,7 +6,7 @@
 
 namespace iee::core {
     class HookInit {
-    public:
+      public:
         HookInit() {
             const auto s = MH_Initialize();
             if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED)
@@ -20,11 +20,10 @@ namespace iee::core {
         HookInit &operator=(const HookInit &) = delete;
     };
 
-    template<class T>
-    class Hook {
+    template <class T> class Hook {
         static_assert(std::is_pointer_v<T>, "T must be a function pointer");
 
-    public:
+      public:
         Hook() = default;
 
         Hook(void *target, void *detour) { create(target, detour); }
@@ -44,13 +43,28 @@ namespace iee::core {
             enabled_ = true;
         }
 
-        void disable() noexcept {
-            if (!created_ || !enabled_) return;
-            MH_DisableHook(target_);
+        bool disable() noexcept {
+            if (!created_ || !enabled_) return true;
+            const auto status = MH_DisableHook(target_);
+            if (status != MH_OK && status != MH_ERROR_DISABLED) return false;
             enabled_ = false;
+            return true;
         }
 
-        ~Hook() { disable(); }
+        bool remove() noexcept {
+            if (!created_) return true;
+            if (!disable()) return false;
+            const auto status = MH_RemoveHook(target_);
+            if (status != MH_OK && status != MH_ERROR_NOT_CREATED) return false;
+            target_ = nullptr;
+            original_ = nullptr;
+            created_ = false;
+            return true;
+        }
+
+        // Hook teardown is explicit. Static hook destructors run under the DLL
+        // loader lock, where calling MinHook can deadlock.
+        ~Hook() = default;
 
         T original() const noexcept { return original_; }
 
@@ -62,7 +76,7 @@ namespace iee::core {
 
         Hook &operator=(Hook &&o) noexcept {
             if (this == &o) return *this;
-            disable();
+            (void)remove();
             target_ = o.target_;
             o.target_ = nullptr;
             original_ = o.original_;
@@ -74,10 +88,10 @@ namespace iee::core {
             return *this;
         }
 
-    private:
+      private:
         void *target_ = nullptr;
         T original_ = nullptr;
         bool created_ = false;
         bool enabled_ = false;
     };
-}
+} // namespace iee::core

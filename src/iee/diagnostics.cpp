@@ -41,12 +41,14 @@ namespace iee::diagnostics {
         const auto dataPointer = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.pData : nullptr;
         const auto dataSize = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.nSize : 0U;
         const auto dataCount = haveTilesetSnapshot ? tilesetSnapshot.baseclass_0.nCount : 0U;
-        const auto page = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].page : -1;
-        const auto u = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].u : -1;
-        const auto v = (tileInfo.table && tileInfo.index >= 0) ? tileInfo.table[tileInfo.index].v : -1;
+        const auto hasEntry = tileInfo.table && tileInfo.index >= 0 &&
+                              static_cast<std::uint32_t>(tileInfo.index) < tileInfo.tileCount;
+        const auto page = hasEntry ? tileInfo.entry.page : -1;
+        const auto u = hasEntry ? tileInfo.entry.u : -1;
+        const auto v = hasEntry ? tileInfo.entry.v : -1;
 
         if (detectedTileDimension) {
-            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} runtimeTileDimension=0x{:X} tileIndex={} page={} uv=({}, {}) detectedTileDimension=0x{:X}",
+            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} tileCount=0x{:X} tileIndex={} page={} uv=({}, {}) detectedTileDimension=0x{:X}",
                      reason,
                      reinterpret_cast<std::uintptr_t>(vidTile),
                      reinterpret_cast<std::uintptr_t>(tileInfo.resource),
@@ -55,14 +57,14 @@ namespace iee::diagnostics {
                      reinterpret_cast<std::uintptr_t>(dataPointer),
                      dataSize,
                      dataCount,
-                     tileInfo.runtimeTileDimension,
+                     tileInfo.tileCount,
                      tileInfo.index,
                      page,
                      u,
                      v,
                      *detectedTileDimension);
         } else {
-            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} runtimeTileDimension=0x{:X} tileIndex={} page={} uv=({}, {})",
+            LOG_WARN("{}: vidTile=0x{:X} resource=0x{:X} tileset=0x{:X} header=0x{:X} pData=0x{:X} nSize=0x{:X} nCount=0x{:X} tileCount=0x{:X} tileIndex={} page={} uv=({}, {})",
                      reason,
                      reinterpret_cast<std::uintptr_t>(vidTile),
                      reinterpret_cast<std::uintptr_t>(tileInfo.resource),
@@ -71,7 +73,7 @@ namespace iee::diagnostics {
                      reinterpret_cast<std::uintptr_t>(dataPointer),
                      dataSize,
                      dataCount,
-                     tileInfo.runtimeTileDimension,
+                     tileInfo.tileCount,
                      tileInfo.index,
                      page,
                      u,

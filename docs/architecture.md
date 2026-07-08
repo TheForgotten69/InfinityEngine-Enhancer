@@ -8,13 +8,14 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/game/build_manifest.*`
 
-- Declares build-specific patterns, fallback RVAs, runtime offsets, and verified render callsites.
+- Declares the executable version, build-specific patterns, reference RVAs, runtime offsets, and verified render callsites.
 - The current manifest is BGEE `2.6.6.x`.
 
 `src/iee/game/game_addrs.*`
 
 - Resolves `CInfGame::LoadArea` and `CVidTile::RenderTexture`.
-- Uses manifest patterns first, then configured or manifest RVAs as fallback.
+- Scans executable PE sections and accepts only one match for each required signature.
+- Reference RVAs are diagnostic evidence only; missing or ambiguous signatures abort initialization.
 
 `src/iee/game/renderer.*`
 
@@ -56,7 +57,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 `src/iee/area_state.*`
 
 - Active-area resolution (manifest-driven CInfGame offsets), scroll reads, and
-  the post-LoadArea WED cache refresh + area cell texture upload.
+  the post-LoadArea WED cache refresh plus render-thread area-texture queue.
+- GL objects are recreated when the current WGL context changes.
 
 `src/iee/features/tile_render.*`
 
@@ -79,8 +81,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/frame_hook.*`
 
-- Frame boundary via the SDL2 `SDL_GL_SwapWindow` export; drives the probe's
-  per-frame tick.
+- Frame boundary via `SDL_GL_SwapWindow`, with `gdi32!SwapBuffers` as the
+  validated statically-linked-SDL fallback; drives the probe's per-frame tick.
 
 `src/iee/game/area_texture.*`
 
@@ -94,7 +96,8 @@ The CMake graph is split on purpose:
 
 - `iee_common` is host-safe and can be compiled in WSL for tests.
 - `InfinityEngine-Enhancer` is Windows-only and links MinHook, `psapi`, and `opengl32`.
-- `release_bundle` packages the DLL, EEex loader script, and sample INI into one directory.
+- `release_bundle` packages the DLL, EEex loader script, sample INI, shader
+  assets, game override, and water textures into one directory.
 
 This keeps reverse-engineering and parsing code testable without requiring a Windows toolchain for every edit.
 
@@ -103,6 +106,9 @@ This keeps reverse-engineering and parsing code testable without requiring a Win
 - Use WSL for code analysis, docs, and host tests.
 - Use Windows or CI for final DLL validation.
 - Unknown or incompatible builds should fail during manifest/address/callsite resolution instead of reaching gameplay with bad hooks.
+- A loader that calls `FreeLibrary` must invoke exported `ShutdownBindings`
+  first; MinHook, logging, and GL teardown are deliberately never run from
+  `DllMain` under the Windows loader lock.
 
 ## Archival Code
 

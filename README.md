@@ -1,10 +1,10 @@
 # InfinityEngine-Enhancer
 
-`InfinityEngine-Enhancer` is an EEex-loaded Windows DLL that extends Infinity Engine tile rendering without changing ARE/WED coordinates. The current supported target is BGEE `2.6.6.x`.
+`InfinityEngine-Enhancer` is an EEex-loaded Windows DLL that extends Infinity Engine tile rendering without changing ARE/WED coordinates. The validated target is BGEE `2.6.6.x`; newer executables, including BGEE 2.7, are detected and rejected until their manifests are validated.
 
 ## What It Does
 
-The first supported feature is 4x TIS/PVRZ tile upscaling. Scale detection is header-first:
+The first supported feature is 4x TIS/PVRZ tile upscaling, with an optional WED-masked water shader. Scale detection is header-first:
 
 - `TIS header + 0x14 == 0x40` means standard tiles
 - `TIS header + 0x14 == 0x100` means authored 4x tiles
@@ -22,9 +22,9 @@ Some standard tilesets legitimately have no live header pointer. In those cases 
 
 1. Install [EEex](https://github.com/Bubb13/EEex).
 2. Download the release bundle from [Releases](../../releases).
-3. Copy `InfinityEngine-Enhancer.dll` into the game root.
-4. Copy [M_IEEE.lua](tools/M_IEEE.lua) into the game's `override` directory.
-5. Optionally start from [InfinityEngine-Enhancer.sample.ini](tools/InfinityEngine-Enhancer.sample.ini).
+3. Copy `InfinityEngine-Enhancer.dll`, `iee-shaders/`, and `iee-textures/` into the game root.
+4. Copy [M_IEEE.lua](tools/M_IEEE.lua) and the contents of `game-override/` into the game's `override` directory.
+5. Optionally copy [InfinityEngine-Enhancer.sample.ini](tools/InfinityEngine-Enhancer.sample.ini) to the game root as `InfinityEngine-Enhancer.ini` and customize it.
 
 The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.log` next to the game executable.
 
@@ -57,4 +57,3 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
 ## License
 
 See [LICENSE](LICENSE).
-

@@ -4,7 +4,7 @@
 namespace iee::hooks {
     bool install_all(AppContext &ctx);
 
-    void uninstall_all();
+    void uninstall_all() noexcept;
 
     void prepare_for_shutdown() noexcept;
 

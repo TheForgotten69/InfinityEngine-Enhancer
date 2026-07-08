@@ -1,9 +1,11 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace iee::core {
@@ -27,8 +29,27 @@ namespace iee::core {
                        std::span<const std::byte> needle,
                        const std::vector<bool> &mask);
 
+    struct PatternMatchResult {
+        void *address{};
+        std::size_t count{};
+
+        [[nodiscard]] bool unique() const noexcept { return address != nullptr && count == 1; }
+    };
+
+    // Finds every occurrence up to the point where ambiguity is established.
+    // count is 0, 1, or 2 (2 means "two or more").
+    [[nodiscard]] PatternMatchResult find_pattern_unique(std::span<const std::byte> haystack,
+                                                         std::span<const std::byte> needle,
+                                                         const std::vector<bool> &mask);
+
     // Convenience: find in a module by pattern string. Returns nullptr if not found.
     void *find_first_in_module(void *module_handle, std::string_view ida_pattern);
+
+    // Safe hook-resolution variant: returns an address only when the pattern has
+    // exactly one match in the module image. matchCount is saturated at 2.
+    void *find_unique_in_module(void *module_handle,
+                                std::string_view ida_pattern,
+                                std::size_t *matchCount = nullptr);
 
     // Decode a relative 32-bit displacement target (e.g., call/jmp rel32).
     // addr = instruction address; disp_offset = offset of the displacement inside the instruction.
@@ -46,8 +67,9 @@ namespace iee::core {
 
     template<class T>
     bool safe_read(const void *p, T &out) {
+        static_assert(std::is_trivially_copyable_v<T>, "safe_read requires a trivially-copyable type");
         if (!is_readable(p, sizeof(T))) return false;
-        out = *static_cast<const T *>(p);
+        std::memcpy(&out, p, sizeof(T));
         return true;
     }
 }
