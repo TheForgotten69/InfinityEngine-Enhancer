@@ -79,7 +79,8 @@ namespace iee::game {
 
     OverrideCheck check_interface_contract(std::string_view originalSource,
                                            std::string_view replacementSource) {
-        OverrideCheck result{.ok = true};
+        OverrideCheck result{};
+        result.ok = true;
         for (const auto &name : declared_interface_identifiers(originalSource)) {
             if (!contains_as_identifier(replacementSource, name)) {
                 result.ok = false;

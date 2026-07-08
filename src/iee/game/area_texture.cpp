@@ -7,7 +7,9 @@ namespace iee::game {
         if (expected == 0 || wed.baseOverlayFlags.size() != expected) {
             return std::nullopt;
         }
-        AreaCellTexture out{.width = wed.baseWidth, .height = wed.baseHeight};
+        AreaCellTexture out{};
+        out.width = wed.baseWidth;
+        out.height = wed.baseHeight;
         out.texels = wed.baseOverlayFlags;
         return out;
     }
@@ -17,7 +19,9 @@ namespace iee::game {
         if (expected == 0 || wed.baseOverlayFlags.size() != expected) {
             return std::nullopt;
         }
-        AreaCellTexture out{.width = wed.baseWidth, .height = wed.baseHeight};
+        AreaCellTexture out{};
+        out.width = wed.baseWidth;
+        out.height = wed.baseHeight;
         out.texels.resize(expected, 0);
         for (std::size_t cell = 0; cell < expected; ++cell) {
             const std::uint8_t flags = wed.baseOverlayFlags[cell];
@@ -41,8 +45,9 @@ namespace iee::game {
         }
 
         constexpr int kBlock = kTilePixels / kFineMaskTexelsPerCell; // 8x8 pixels per texel
-        AreaCellTexture out{.width = wed.baseWidth * kFineMaskTexelsPerCell,
-                            .height = wed.baseHeight * kFineMaskTexelsPerCell};
+        AreaCellTexture out{};
+        out.width = wed.baseWidth * kFineMaskTexelsPerCell;
+        out.height = wed.baseHeight * kFineMaskTexelsPerCell;
         out.texels.resize(std::size_t{static_cast<std::size_t>(out.width)} * out.height, 0);
 
         for (std::size_t cell = 0; cell < cellCount; ++cell) {
