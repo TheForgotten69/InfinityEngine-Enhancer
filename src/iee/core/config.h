@@ -12,12 +12,6 @@ namespace iee::core {
 
         // endregion
 
-        // region Cached addresses (auto-generated from pattern scanning)
-        std::uintptr_t cachedLoadAreaRVA = 0x27E710;
-        std::uintptr_t cachedRenderTextureRVA = 0x4247E0;
-
-        //endregion
-
         // region Shader overrides (Phase 0)
         bool enableShaderOverrides = false;     // master switch for source replacement
         bool dumpEngineShaders = true;          // archive originals to <dll dir>/iee-shader-dumps/

@@ -1,6 +1,7 @@
 #include "frame_hook.h"
 
 #include <atomic>
+#include <exception>
 #include <windows.h>
 
 #include "iee/core/hooking.h"
@@ -82,13 +83,19 @@ namespace iee::frame {
             return false;
         } catch (const std::exception &e) {
             LOG_WARN("Frame hook install failed: {}", e.what());
+            (void) g_sdlSwapHook.remove();
+            (void) g_gdiSwapHook.remove();
+            return false;
+        } catch (...) {
+            (void) g_sdlSwapHook.remove();
+            (void) g_gdiSwapHook.remove();
             return false;
         }
     }
 
     void uninstall() noexcept {
-        g_sdlSwapHook.disable();
-        g_gdiSwapHook.disable();
+        (void) g_sdlSwapHook.remove();
+        (void) g_gdiSwapHook.remove();
     }
 
     unsigned long long frame_count() noexcept {

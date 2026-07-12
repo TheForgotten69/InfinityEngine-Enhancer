@@ -16,7 +16,7 @@ namespace iee::probe {
     };
 
     [[nodiscard]] ShaderRuntimeCapabilities detect_shader_runtime_capabilities() noexcept;
-    void log_shader_runtime_capabilities() noexcept;
+    void log_shader_runtime_capabilities();
     bool install_shader_probes(const core::EngineConfig &cfg) noexcept;
     void uninstall_shader_probes() noexcept;
     // Called once per frame by the frame hook (Task 8); advances uIeeTime.

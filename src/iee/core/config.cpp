@@ -1,9 +1,7 @@
 #include "config.h"
 #include "logger.h"
 #include <algorithm>
-#include <charconv>
 #include <fstream>
-#include <optional>
 #ifdef _WIN64
 #include <windows.h>
 #endif
@@ -24,8 +22,9 @@ namespace iee::core {
     }
 
     static bool iequals(std::string a, std::string b) {
-        std::transform(a.begin(), a.end(), a.begin(), ::tolower);
-        std::transform(b.begin(), b.end(), b.begin(), ::tolower);
+        const auto lower = [](unsigned char c) { return static_cast<char>(::tolower(c)); };
+        std::transform(a.begin(), a.end(), a.begin(), lower);
+        std::transform(b.begin(), b.end(), b.begin(), lower);
         return a == b;
     }
 
@@ -39,31 +38,6 @@ namespace iee::core {
         try { return std::stof(s); } catch (...) { return def; }
     }
 
-    static std::optional<std::uint32_t> parse_u32_dec_or_hex(std::string s) {
-        s = trim(std::move(s));
-        if (s.rfind("0x", 0) == 0 || s.rfind("0X", 0) == 0) {
-            std::uint32_t v{};
-            auto *b = s.data() + 2;
-            auto *e = s.data() + s.size();
-            if (std::from_chars(b, e, v, 16).ec == std::errc{}) return v;
-            return std::nullopt;
-        }
-        {
-            std::uint32_t v{};
-            auto *b = s.data();
-            auto *e = s.data() + s.size();
-            if (std::from_chars(b, e, v, 10).ec == std::errc{}) return v;
-        }
-        {
-            std::uint32_t v{};
-            auto *b = s.data();
-            auto *e = s.data() + s.size();
-            if (std::from_chars(b, e, v, 16).ec == std::errc{}) return v;
-        }
-        return std::nullopt;
-    }
-
-
     static void apply_kv(EngineConfig &cfg,
                          const std::string &section,
                          const std::string &key,
@@ -74,16 +48,6 @@ namespace iee::core {
             return;
         }
 
-        // [Auto-Generated] - cached addresses from pattern scanning
-        if (iequals(section, "auto-generated")) {
-            if (iequals(key, "CachedLoadAreaRVA")) {
-                if (auto v = parse_u32_dec_or_hex(val)) cfg.cachedLoadAreaRVA = *v;
-            } else if (iequals(key, "CachedRenderTextureRVA")) {
-                if (auto v = parse_u32_dec_or_hex(val)) cfg.cachedRenderTextureRVA = *v;
-            }
-            return;
-        }
-
         // [Rendering]
         if (iequals(section, "rendering")) {
             if (iequals(key, "EnableAnisotropicFiltering"))
@@ -91,16 +55,6 @@ namespace iee::core {
                     val, cfg.enableAnisotropicFiltering);
             else if (iequals(key, "MaxAnisotropy")) cfg.maxAnisotropy = parse_float(val, cfg.maxAnisotropy);
             else if (iequals(key, "LODBias")) cfg.lodBias = parse_float(val, cfg.lodBias);
-            return;
-        }
-
-        // [Addresses]
-        if (iequals(section, "addresses")) {
-            if (iequals(key, "FallbackLoadAreaRVA")) {
-                if (auto v = parse_u32_dec_or_hex(val)) cfg.cachedLoadAreaRVA = *v;
-            } else if (iequals(key, "FallbackRenderTextureRVA")) {
-                if (auto v = parse_u32_dec_or_hex(val)) cfg.cachedRenderTextureRVA = *v;
-            }
             return;
         }
 
@@ -181,25 +135,15 @@ namespace iee::core {
 
         f << "; InfinityEngine-Enhancer configuration\n";
         f << "; Lines starting with ';' or '#' are comments.\n";
-        f << "; You can use decimal or hex (0x...) for RVAs.\n\n";
+        f << "; Hook addresses are resolved from the validated build manifest.\n\n";
 
         write_section(f, "Core");
         write_bool(f, "VerboseLogs", cfg.enableVerboseLogging);
-
-        write_section(f, "Auto-Generated");
-        f << "CachedLoadAreaRVA = 0x" << std::hex << cfg.cachedLoadAreaRVA << std::dec << "\n";
-        f << "CachedRenderTextureRVA = 0x" << std::hex << cfg.cachedRenderTextureRVA << std::dec << "\n";
 
         write_section(f, "Rendering");
         write_bool(f, "EnableAnisotropicFiltering", cfg.enableAnisotropicFiltering);
         f << "MaxAnisotropy = " << cfg.maxAnisotropy << "\n";
         f << "LODBias = " << cfg.lodBias << "\n";
-
-        write_section(f, "Addresses");
-        f << "FallbackLoadAreaRVA = 0x" << std::hex << std::uppercase
-                << static_cast<std::uint32_t>(cfg.cachedLoadAreaRVA) << std::dec << "\n";
-        f << "FallbackRenderTextureRVA = 0x" << std::hex << std::uppercase
-                << static_cast<std::uint32_t>(cfg.cachedRenderTextureRVA) << std::dec << "\n";
 
         write_section(f, "Shaders");
         write_bool(f, "EnableOverrides", cfg.enableShaderOverrides);

@@ -8,18 +8,29 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   host-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
 
       - name: Configure host tests
-        run: cmake -S . -B build -DBUILD_TESTING=ON
+        run: >-
+          cmake -S . -B build
+          -DBUILD_TESTING=ON
+          -DIEE_WARNINGS_AS_ERRORS=ON
+          -DIEE_ENABLE_SANITIZERS=ON
 
       - name: Build host tests
         run: cmake --build build --target iee_tests --parallel
@@ -32,21 +43,28 @@ jobs:
     # Pinned: windows-latest rolled over to the VS2026 image, which no longer
     # ships VS2022 — the validated toolchain for this project's generator.
     runs-on: windows-2022
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v3
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
 
       - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: x64
 
       - name: Configure CMake
-        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DIEE_BUILD_WINDOWS_DLL=ON -DBUILD_TESTING=ON
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DIEE_BUILD_WINDOWS_DLL=ON
+          -DBUILD_TESTING=ON
+          -DIEE_WARNINGS_AS_ERRORS=ON
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
@@ -68,35 +86,60 @@ jobs:
       - name: Verify release bundle contents
         shell: pwsh
         run: |
-          $required = @(
-            "build/release-bundle/InfinityEngine-Enhancer.dll",
-            "build/release-bundle/M_IEEE.lua",
-            "build/release-bundle/InfinityEngine-Enhancer.sample.ini"
-          )
-          foreach ($path in $required) {
-            if (-not (Test-Path $path)) {
-              throw "Missing release bundle file: $path"
+          $root = (Resolve-Path "build/release-bundle").Path
+          $expected = @(
+            "InfinityEngine-Enhancer.dll"
+            "InfinityEngine-Enhancer.sample.ini"
+            "M_IEEE.lua"
+            "game-override/fpSEAM.glsl"
+            "iee-shaders/fpSELECT.glsl"
+            "iee-textures/iee_water_dudv.rgba"
+            "iee-textures/iee_water_foam.rgba"
+            "iee-textures/iee_water_normal.rgba"
+          ) | Sort-Object
+          $actual = Get-ChildItem $root -File -Recurse | ForEach-Object {
+            [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+          } | Sort-Object
+          $difference = Compare-Object $expected $actual
+          if ($difference) {
+            $difference | Format-Table | Out-String | Write-Error
+            throw "Release bundle content differs from the allow-list"
+          }
+          foreach ($path in $actual) {
+            if ((Get-Item (Join-Path $root $path)).Length -eq 0) {
+              throw "Release bundle contains an empty file: $path"
             }
           }
 
       - name: Archive release bundle
         shell: pwsh
-        run: Compress-Archive -Path build/release-bundle/* -DestinationPath build/InfinityEngine-Enhancer-bundle.zip -Force
+        run: |
+          $archive = "build/InfinityEngine-Enhancer-bundle.zip"
+          Compress-Archive -Path build/release-bundle/* -DestinationPath $archive -Force
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  InfinityEngine-Enhancer-bundle.zip" | Set-Content build/SHA256SUMS -Encoding utf8NoBOM
 
       - name: Upload release bundle
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
-          path: build/InfinityEngine-Enhancer-bundle.zip
+          path: |
+            build/InfinityEngine-Enhancer-bundle.zip
+            build/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
 
   alpha-release:
     if: github.ref == 'refs/heads/main'
     needs: windows-build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
       - name: Download release bundle
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
           path: artifact
@@ -107,38 +150,47 @@ jobs:
 
       - name: Delete existing alpha release
         continue-on-error: true
-        run: gh release delete alpha --yes
+        run: gh release delete alpha --cleanup-tag --yes
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
 
       - name: Create alpha release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           tag_name: alpha
+          target_commitish: ${{ github.sha }}
           name: "Alpha Build (${{ steps.version.outputs.sha }})"
-          files: artifact/InfinityEngine-Enhancer-bundle.zip
+          files: |
+            artifact/InfinityEngine-Enhancer-bundle.zip
+            artifact/SHA256SUMS
+          fail_on_unmatched_files: true
           body: |
             Alpha build from commit ${{ github.sha }}
 
-            This bundle contains the DLL, EEex loader script, and sample INI.
+            This rolling prerelease contains the DLL, EEex loader script,
+            configuration, shader overrides, and water texture assets.
           prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   release:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: windows-build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
       - name: Download release bundle
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: InfinityEngine-Enhancer-bundle-${{ github.sha }}
           path: artifact
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
-          files: artifact/InfinityEngine-Enhancer-bundle.zip
+          files: |
+            artifact/InfinityEngine-Enhancer-bundle.zip
+            artifact/SHA256SUMS
+          fail_on_unmatched_files: true
           draft: true

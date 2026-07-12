@@ -51,11 +51,12 @@ namespace iee::features {
         }
 
         // Bounds check the tile index before accessing
-        if (tileInfo.index < 0) {
+        if (tileInfo.index < 0 ||
+            static_cast<std::uint32_t>(tileInfo.index) >= tileInfo.tileCount) {
             return false;
         }
 
-        const auto &entry = tileInfo.table[tileInfo.index];
+        const auto &entry = tileInfo.entry;
         int U0 = entry.u, V0 = entry.v;
 
         // Detect area scale from authored TIS metadata first, with heuristics as a fallback.
@@ -181,7 +182,7 @@ namespace iee::features {
             tone = static_cast<int>(ShaderTone::Seam);
         }
 
-        if (std::atomic_load(&ctx.wed)) {
+        if (ctx.wed.load()) {
             const auto *activeArea = ctx.activeArea.load();
             area::ViewTransform view{};
             if (area::read_view_transform(activeArea, view)) {

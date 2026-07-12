@@ -23,14 +23,14 @@ namespace iee {
         // CInfGame from the LoadArea hook; lets the render thread re-resolve
         // the active area when transitions settle after LoadArea returns.
         std::atomic<void *> infGame{nullptr};
-        std::shared_ptr<const game::WedAreaInfo> wed{};
+        std::atomic<std::shared_ptr<const game::WedAreaInfo>> wed{};
         game::ResrefBuffer lastLoggedWedArea{};
 
         bool isRenderHookActive{false};
 
         void reset_area_state() {
             activeArea.store(nullptr);
-            std::atomic_store(&wed, std::shared_ptr<const game::WedAreaInfo>{});
+            wed.store(std::shared_ptr<const game::WedAreaInfo>{});
             lastLoggedWedArea.fill('\0');
         }
 

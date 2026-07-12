@@ -32,7 +32,7 @@ namespace iee::game {
         std::string_view renderTexture{};
     };
 
-    struct FallbackRvas {
+    struct ReferenceRvas {
         std::uintptr_t loadArea{};
         std::uintptr_t renderTexture{};
     };
@@ -47,19 +47,33 @@ namespace iee::game {
         std::uintptr_t infinityZoom{};
     };
 
+    struct ExecutableVersion {
+        std::uint16_t major{};
+        std::uint16_t minor{};
+        std::uint16_t patch{};
+
+        [[nodiscard]] constexpr bool matches(std::uint16_t candidateMajor,
+                                             std::uint16_t candidateMinor,
+                                             std::uint16_t candidatePatch) const noexcept {
+            return major == candidateMajor && minor == candidateMinor && patch == candidatePatch;
+        }
+    };
+
     struct BuildManifest {
         std::string_view buildId{};
         std::array<std::string_view, 2> supportedGames{};
+        ExecutableVersion executableVersion{};
         PatternSet patterns{};
-        FallbackRvas fallbacks{};
+        ReferenceRvas referenceRvas{};
         RuntimeOffsets offsets{};
         std::array<BranchInstructionDesc, 11> renderTextureCallsites{};
 
         [[nodiscard]] constexpr bool validate() const noexcept {
-            if (buildId.empty() || patterns.loadArea.empty() || patterns.renderTexture.empty()) {
+            if (buildId.empty() || executableVersion.major == 0 ||
+                patterns.loadArea.empty() || patterns.renderTexture.empty()) {
                 return false;
             }
-            if (!fallbacks.loadArea || !fallbacks.renderTexture) {
+            if (!referenceRvas.loadArea || !referenceRvas.renderTexture) {
                 return false;
             }
             if (!offsets.vidTileResource || !offsets.tisLinearTilesFlag || !offsets.tisHeaderTileDimension) {
@@ -85,5 +99,11 @@ namespace iee::game {
     [[nodiscard]] std::optional<std::reference_wrapper<const BuildManifest> > find_manifest(std::string_view buildId)
     noexcept;
 
-    [[nodiscard]] const BuildManifest *detect_manifest() noexcept;
+    [[nodiscard]] std::optional<std::reference_wrapper<const BuildManifest> >
+    find_manifest_for_version(std::uint16_t major, std::uint16_t minor, std::uint16_t patch) noexcept;
+
+    // Selects a manifest from the main executable's fixed file version. Unknown
+    // versions are deliberately unsupported and return nullptr before scanning
+    // or installing any hooks.
+    [[nodiscard]] const BuildManifest *detect_manifest(ExecutableVersion *detectedVersion = nullptr) noexcept;
 }

@@ -475,8 +475,17 @@ WIP-era fpSEAM liquid patch was still compiled in from the user's install),
 so file-level replacement through the game's resource system is a third,
 DLL-free delivery path for shader source.
 
-### 10.10 Tooling idea (testing, unscheduled)
+### 10.10 Tooling ideas (testing, unscheduled)
 
 `DrawReadPixels` is documented and resolvable — a hotkey-triggered screenshot
 capture would enable before/after regression comparisons of shader changes
 without external tools. Cheap to add to the Phase 0 debug toolkit if wanted.
+
+Additional tooling recorded 2026-07-08 (from the stabilisation review):
+
+- Offline TIS/PVRZ/WED validator: dimensions, table counts, atlas bounds, and
+  overlay diagnostics for modded content before it reaches the runtime.
+- GL state-leak assertions in debug builds (guard save/restore verification).
+- Performance counters for hook time, uploads, shader binds, and cache misses.
+- Texture-parameter caching keyed by GL object generation, not a recycled
+  texture ID alone.

@@ -19,10 +19,11 @@ namespace iee::game {
         const CResTile *resource{};
         const CResTileSet *tileset{};
         const PVRZTileEntry *table{};
+        PVRZTileEntry entry{};
         const TisFileHeader *header{};
         int index{-1};
         uint32_t tileDataBlockLen{};
-        uint32_t runtimeTileDimension{};
+        uint32_t tileCount{};
     };
 
     [[nodiscard]] bool get_tile_info(void *vidTile,

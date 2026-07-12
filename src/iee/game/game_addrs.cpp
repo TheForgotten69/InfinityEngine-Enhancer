@@ -6,6 +6,8 @@
 
 namespace iee::game {
     bool resolve_addresses(GameAddresses &out, const core::EngineConfig &cfg, const BuildManifest &manifest) {
+        (void) cfg;
+        out = {};
         auto moduleInfo = core::get_module_span(nullptr);
         if (!moduleInfo || !moduleInfo->base || !moduleInfo->size) {
             LOG_ERROR("Failed to get module information");
@@ -19,14 +21,14 @@ namespace iee::game {
         LOG_DEBUG("Attempting pattern scanning with build manifest patterns...");
 
         LOG_DEBUG("Searching for LoadArea pattern...");
+        std::size_t loadAreaMatches = 0;
         out.LoadArea = reinterpret_cast<std::uintptr_t>(
-            core::find_first_in_module(nullptr, manifest.patterns.loadArea)
-        );
+            core::find_unique_in_module(nullptr, manifest.patterns.loadArea, &loadAreaMatches));
 
         LOG_DEBUG("Searching for RenderTexture pattern...");
+        std::size_t renderTextureMatches = 0;
         out.RenderTexture = reinterpret_cast<std::uintptr_t>(
-            core::find_first_in_module(nullptr, manifest.patterns.renderTexture)
-        );
+            core::find_unique_in_module(nullptr, manifest.patterns.renderTexture, &renderTextureMatches));
 
         const bool success = out.LoadArea && out.RenderTexture;
 
@@ -38,45 +40,26 @@ namespace iee::game {
             LOG_DEBUG("  LoadArea: 0x{:X} (RVA: 0x{:X})", out.LoadArea, foundLoadAreaRVA);
             LOG_DEBUG("  RenderTexture: 0x{:X} (RVA: 0x{:X})", out.RenderTexture, foundRenderTextureRVA);
 
-            if (foundLoadAreaRVA == manifest.fallbacks.loadArea) {
-                LOG_DEBUG("  LoadArea RVA matches manifest fallback 0x{:X}", manifest.fallbacks.loadArea);
+            if (foundLoadAreaRVA == manifest.referenceRvas.loadArea) {
+                LOG_DEBUG("  LoadArea RVA matches manifest reference 0x{:X}", manifest.referenceRvas.loadArea);
             } else {
-                LOG_WARN("  LoadArea RVA differs from manifest fallback 0x{:X}", manifest.fallbacks.loadArea);
+                LOG_WARN("  LoadArea RVA differs from manifest reference 0x{:X}", manifest.referenceRvas.loadArea);
             }
 
-            if (foundRenderTextureRVA == manifest.fallbacks.renderTexture) {
-                LOG_DEBUG("  RenderTexture RVA matches manifest fallback 0x{:X}", manifest.fallbacks.renderTexture);
+            if (foundRenderTextureRVA == manifest.referenceRvas.renderTexture) {
+                LOG_DEBUG("  RenderTexture RVA matches manifest reference 0x{:X}", manifest.referenceRvas.renderTexture);
             } else {
-                LOG_WARN("  RenderTexture RVA differs from manifest fallback 0x{:X}",
-                         manifest.fallbacks.renderTexture);
+                LOG_WARN("  RenderTexture RVA differs from manifest reference 0x{:X}",
+                         manifest.referenceRvas.renderTexture);
             }
 
             out.initialized = true;
         } else {
-            LOG_WARN("Pattern scanning failed - using configured or manifest fallback RVAs");
-            if (!out.LoadArea) {
-                LOG_DEBUG("  LoadArea pattern not found");
-            }
-            if (!out.RenderTexture) {
-                LOG_DEBUG("  RenderTexture pattern not found");
-            }
-        }
-
-        if (!success) {
-            const auto fallbackLoadAreaRva = cfg.cachedLoadAreaRVA != 0
-                                                 ? cfg.cachedLoadAreaRVA
-                                                 : manifest.fallbacks.loadArea;
-            const auto fallbackRenderTextureRva = cfg.cachedRenderTextureRVA != 0
-                                                      ? cfg.cachedRenderTextureRVA
-                                                      : manifest.fallbacks.renderTexture;
-
-            out.LoadArea = moduleBase + fallbackLoadAreaRva;
-            out.RenderTexture = moduleBase + fallbackRenderTextureRva;
-            out.initialized = out.LoadArea != 0 && out.RenderTexture != 0;
-
-            LOG_DEBUG("Fallback addresses:");
-            LOG_DEBUG("  LoadArea: 0x{:X} (RVA: 0x{:X})", out.LoadArea, fallbackLoadAreaRva);
-            LOG_DEBUG("  RenderTexture: 0x{:X} (RVA: 0x{:X})", out.RenderTexture, fallbackRenderTextureRva);
+            LOG_ERROR("Build signature validation failed; refusing unsafe reference RVAs");
+            LOG_ERROR("  LoadArea matches: {}", loadAreaMatches);
+            LOG_ERROR("  RenderTexture matches: {}", renderTextureMatches);
+            out = {};
+            return false;
         }
 
         return out.initialized;

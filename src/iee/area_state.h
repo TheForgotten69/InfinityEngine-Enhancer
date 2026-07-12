@@ -35,4 +35,19 @@ namespace iee::area {
 
     // Re-resolves the active area after LoadArea and caches its parsed WED into ctx.
     void refresh_wed_cache(AppContext &ctx, void *infGame);
+
+    // Publishes an immediate CPU-side no-liquid generation. The next render
+    // thread flush replaces any previous area's GPU mask before drawing.
+    void reset_gpu_area_state() noexcept;
+
+    // Uploads the latest CPU-prepared area mask into the current GL context.
+    // Safe to call every Seam pass; work occurs only for a new generation or
+    // a recreated context.
+    bool flush_pending_gpu_upload() noexcept;
+
+    // Ensures the latest generation is uploaded and binds it to reserved unit 2.
+    bool bind_area_texture() noexcept;
+
+    // Best-effort explicit shutdown; never call from DllMain.
+    void release_gpu_area_resources() noexcept;
 }

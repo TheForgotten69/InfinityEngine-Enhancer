@@ -504,3 +504,10 @@ Needs the NEW DLL BUNDLE + new fpSEAM.glsl.
 4. Teal edge slivers: should be gone (hole pixels up to one texel outside
    flagged cells are now styled — the spill).
 5. Specular reduced; judge "low quality" again with the authored tint in.
+
+### v20 verdict (user confirmation, 2026-07-08)
+
+PASS — the user reports that v20 fixed the remaining issue. Treat the tint,
+transition re-resolution, and edge-spill changes as the validated baseline.
+Retain the diagnostic checks above for regression testing on new game builds and
+unusual modded WED/TIS combinations.

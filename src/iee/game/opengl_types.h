@@ -150,6 +150,11 @@ struct OpenGLFunctions {
 
 // Get the global OpenGL function table
 OpenGLFunctions& get_gl_functions() noexcept;
+#ifdef _WIN32
+// Returns the context current on the calling thread, or nullptr. GL resources
+// must never be reused across a context change.
+HGLRC current_context() noexcept;
+#endif
 // endregion
 
 } // namespace iee::game::gl

@@ -9,9 +9,10 @@ The manifest layer isolates build-specific facts from feature logic. Adding a bu
 Each manifest carries:
 
 - Build identifier
+- Executable file version
 - Supported game labels
 - Pattern strings for `LoadArea` and `RenderTexture`
-- Fallback RVAs
+- Reference RVAs for validation and diagnostics
 - Runtime offsets
 - Render callsite descriptors
 
@@ -37,7 +38,7 @@ Supported games:
 
 - `BGEE`
 
-Fallback RVAs:
+Reference RVAs (not runtime fallbacks):
 
 - `LoadArea = 0x27E710`
 - `RenderTexture = 0x4247E0`
@@ -57,9 +58,33 @@ Runtime caveats for the current manifest:
 ## Adding Another Build
 
 1. Confirm the hook target RVAs or patterns.
-2. Revalidate the render callsites and instruction kinds.
-3. Revalidate `CVidTile::pRes`, TIS header field offset, and the linear-tiles flag.
-4. Add the new manifest entry.
-5. Extend tests if the new build needs new instruction or structure cases.
+2. Record the executable file version and verify each signature is unique in executable sections.
+3. Revalidate the render callsites and instruction kinds.
+4. Revalidate `CVidTile::pRes`, TIS header field offset, and the linear-tiles flag.
+5. Add the new manifest entry.
+6. Extend tests and run an in-game smoke test.
 
 If a new build cannot satisfy those checks, do not guess. Leave it unsupported and fail early.
+
+## Version Gating And Self-Scanning
+
+The runtime identifies the executable by its fixed file version and refuses to
+install hooks unless that version has a known manifest and both hook signatures
+are unique within the executable's code sections. This is the intended default
+for unknown builds (e.g. BGEE 2.7): detect, report as unsupported, and leave
+the game untouched.
+
+The runtime cannot safely infer structure offsets and render callsites from an
+arbitrary future executable — a byte pattern can be present but semantically
+wrong. Supporting a new build therefore stays a two-stage process:
+
+- automatic probe: executable version, signature match counts, target
+  prologues, and render-callsite opcode validation;
+- reviewed manifest: accept the build only after those results and an in-game
+  smoke test agree.
+
+A useful future feature is a `CompatibilityReport` probe-only mode (or
+companion CLI) that emits one JSON/Markdown report for an unknown build without
+installing hooks. Remotely downloaded manifests are not acceptable unless
+signed; otherwise a compromised manifest becomes arbitrary code execution
+inside the game process.

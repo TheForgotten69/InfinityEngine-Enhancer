@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "iee/core/pattern_scanner.h"
+
 namespace iee::game {
     namespace {
         constexpr std::uint32_t kMaxTableSamples = 32;
@@ -26,15 +28,18 @@ namespace iee::game {
     }
 
     std::optional<ScaleDetectionResult> detect_scale_from_tile_table(const TileInfo &tileInfo) {
-        if (!tileInfo.table || tileInfo.runtimeTileDimension == 0) {
+        if (!tileInfo.table || tileInfo.tileCount == 0) {
             return std::nullopt;
         }
 
-        const auto sampleCount = std::min<std::uint32_t>(tileInfo.runtimeTileDimension, kMaxTableSamples);
+        const auto sampleCount = std::min<std::uint32_t>(tileInfo.tileCount, kMaxTableSamples);
         std::uint32_t smallestPositiveStep = 0;
 
         for (std::uint32_t i = 0; i < sampleCount; ++i) {
-            const auto &entry = tileInfo.table[i];
+            PVRZTileEntry entry{};
+            if (!core::safe_read(tileInfo.table + i, entry)) {
+                return std::nullopt;
+            }
 
             const auto consider = [&](std::int32_t candidate) {
                 if (candidate <= 0) {
@@ -67,11 +72,12 @@ namespace iee::game {
     }
 
     bool is_upscaled_by_heuristics(const TileInfo &tileInfo, int textureId) {
-        if (!tileInfo.table || tileInfo.index < 0) {
+        if (!tileInfo.table || tileInfo.index < 0 ||
+            static_cast<std::uint32_t>(tileInfo.index) >= tileInfo.tileCount) {
             return false;
         }
 
-        const auto &entry = tileInfo.table[tileInfo.index];
+        const auto &entry = tileInfo.entry;
         return entry.u > UpscaleThresholds::UV_THRESHOLD ||
                entry.v > UpscaleThresholds::UV_THRESHOLD ||
                textureId > UpscaleThresholds::TEXTURE_ID_THRESHOLD;

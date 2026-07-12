@@ -4,11 +4,14 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <utility>
 
 namespace iee::game {
     namespace {
         constexpr std::uint32_t kWedFileType = 0x20444557;     // "WED "
         constexpr std::uint32_t kWedFileVersion = 0x332E3156;  // "V1.3"
+        constexpr std::uint32_t kMaxWedLayers = 8;             // base + seven flag-addressable overlays
+        constexpr std::size_t kMaxWedCells = 4 * 1024 * 1024;  // malformed-resource allocation ceiling
 
         template<typename T>
         bool read_struct(const std::byte *base, std::size_t size, std::size_t offset, T &out) noexcept {
@@ -18,17 +21,6 @@ namespace iee::game {
 
             std::memcpy(&out, base + offset, sizeof(T));
             return true;
-        }
-
-        ResrefBuffer copy_resref(const char (&raw)[8]) noexcept {
-            ResrefBuffer out{};
-            out.fill('\0');
-            for (std::size_t i = 0; i < 8; ++i) {
-                const auto c = raw[i];
-                if (c == '\0') break;
-                out[i] = c;
-            }
-            return out;
         }
 
         ResrefBuffer copy_resref(const std::array<std::uint8_t, 8> &raw) noexcept {
@@ -66,7 +58,8 @@ namespace iee::game {
             return false;
         }
 
-        if (header.nFileType != kWedFileType || header.nFileVersion != kWedFileVersion) {
+        if (header.nFileType != kWedFileType || header.nFileVersion != kWedFileVersion ||
+            header.nLayers == 0 || header.nLayers > kMaxWedLayers) {
             return false;
         }
 
@@ -74,8 +67,19 @@ namespace iee::game {
             (void) read_runtime_resref(resource.resref, out.areaResref);
         }
 
+        const auto layerHeadersOffset = static_cast<std::size_t>(header.nOffsetToLayerHeaders);
+        const auto layerHeadersBytes = static_cast<std::size_t>(header.nLayers) * sizeof(WED_LayerHeader_st);
+        if (layerHeadersOffset > size || layerHeadersBytes > size - layerHeadersOffset) {
+            return false;
+        }
+
         out.overlayCount = header.nLayers;
-        out.overlays.reserve(header.nLayers);
+        try {
+            out.overlays.reserve(header.nLayers);
+        } catch (...) {
+            out = {};
+            return false;
+        }
 
         for (std::uint32_t i = 0; i < header.nLayers; ++i) {
             WED_LayerHeader_st entry{};
@@ -94,7 +98,12 @@ namespace iee::game {
             overlay.tilemapOffset = entry.nOffsetToTileData;
             overlay.tileIndexLookupOffset = entry.nOffsetToTileList;
             overlay.liquidMode = classify_liquid_tileset(overlay.tilesetResrefView());
-            out.overlays.push_back(std::move(overlay));
+            try {
+                out.overlays.push_back(std::move(overlay));
+            } catch (...) {
+                out = {};
+                return false;
+            }
         }
 
         if (out.overlays.empty()) {
@@ -108,15 +117,29 @@ namespace iee::game {
         if (cellCount == 0) {
             return true;
         }
+        if (cellCount > kMaxWedCells) {
+            out = {};
+            return false;
+        }
 
-        out.baseOverlayFlags.resize(cellCount, 0);
         const auto baseTilemapOffset = static_cast<std::size_t>(out.overlays.front().tilemapOffset);
+        const auto baseTilemapBytes = cellCount * sizeof(WED_TileData_st);
+        if (baseTilemapOffset > size || baseTilemapBytes > size - baseTilemapOffset) {
+            out = {};
+            return false;
+        }
+        try {
+            out.baseOverlayFlags.resize(cellCount, 0);
+        } catch (...) {
+            out = {};
+            return false;
+        }
         for (std::size_t cell = 0; cell < cellCount; ++cell) {
             WED_TileData_st tilemap{};
             const auto tilemapOffset = baseTilemapOffset + cell * sizeof(WED_TileData_st);
             if (!read_struct(base, size, tilemapOffset, tilemap)) {
-                out.baseOverlayFlags.clear();
-                return true;
+                out = {};
+                return false;
             }
 
             out.baseOverlayFlags[cell] = tilemap.bFlags;
@@ -139,7 +162,16 @@ namespace iee::game {
             if (overlayCells == 0) {
                 continue;
             }
-            overlay.cellTileIndex.assign(overlayCells, 0xFFFF);
+            if (overlayCells > kMaxWedCells) {
+                out = {};
+                return false;
+            }
+            try {
+                overlay.cellTileIndex.assign(overlayCells, 0xFFFF);
+            } catch (...) {
+                out = {};
+                return false;
+            }
             for (std::size_t cell = 0; cell < overlayCells; ++cell) {
                 WED_TileData_st tilemap{};
                 const auto entryOffset = static_cast<std::size_t>(overlay.tilemapOffset) +

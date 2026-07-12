@@ -62,6 +62,34 @@ namespace {
                     "Pattern mask should mark wildcard positions");
     }
 
+    void test_unique_pattern_matching() {
+        const std::array<std::byte, 8> haystack{
+            std::byte{0x48}, std::byte{0x8B}, std::byte{0x01}, std::byte{0x90},
+            std::byte{0x48}, std::byte{0x8B}, std::byte{0x02}, std::byte{0x90},
+        };
+        const std::array<std::byte, 3> needle{
+            std::byte{0x48},
+            std::byte{0x8B},
+            std::byte{0x00},
+        };
+        const std::vector<bool> wildcardMask{true, true, false};
+
+        const auto ambiguous = iee::core::find_pattern_unique(haystack, needle, wildcardMask);
+        expect_eq(ambiguous.count, std::size_t{2}, "Ambiguous signatures should report two-or-more matches");
+        expect_true(!ambiguous.unique(), "Ambiguous signatures must not be accepted as hook targets");
+
+        const std::array<std::byte, 3> exactNeedle{
+            std::byte{0x48},
+            std::byte{0x8B},
+            std::byte{0x01},
+        };
+        const std::vector<bool> exactMask{true, true, true};
+        const auto unique = iee::core::find_pattern_unique(haystack, exactNeedle, exactMask);
+        expect_eq(unique.count, std::size_t{1}, "A single signature occurrence should be reported once");
+        expect_true(unique.unique() && unique.address == haystack.data(),
+                    "A unique signature should return its exact address");
+    }
+
     void test_rel32_target_checked() {
         std::array<std::byte, 32> callBytes{};
         auto *callInstruction = callBytes.data() + 4;
@@ -85,9 +113,11 @@ namespace {
     void test_manifest_loading() {
         const auto &manifest = iee::game::current_manifest();
         expect_true(manifest.validate(), "Current build manifest should validate");
-        expect_eq(manifest.fallbacks.loadArea, std::uintptr_t{0x27E710}, "LoadArea fallback RVA should match");
-        expect_eq(manifest.fallbacks.renderTexture, std::uintptr_t{0x4247E0},
-                  "RenderTexture fallback RVA should match");
+        expect_true(manifest.executableVersion.matches(2, 6, 6),
+                    "Current manifest should require a BGEE 2.6.6 executable");
+        expect_eq(manifest.referenceRvas.loadArea, std::uintptr_t{0x27E710}, "LoadArea reference RVA should match");
+        expect_eq(manifest.referenceRvas.renderTexture, std::uintptr_t{0x4247E0},
+                  "RenderTexture reference RVA should match");
 
         const auto found = iee::game::find_manifest("BGEE 2.6.6.x");
         expect_true(found.has_value(), "Known build manifest should be discoverable by id");
@@ -95,6 +125,10 @@ namespace {
             expect_eq(found->get().offsets.tisHeaderTileDimension, std::uintptr_t{0x14},
                       "Manifest should carry the TIS header tile dimension offset");
         }
+        expect_true(iee::game::find_manifest_for_version(2, 6, 6).has_value(),
+                    "BGEE 2.6.6 should resolve by executable version");
+        expect_true(!iee::game::find_manifest_for_version(2, 7, 3).has_value(),
+                    "Unknown BGEE 2.7 builds must fail closed until validated");
     }
 
     void test_runtime_type_layouts() {
@@ -279,9 +313,6 @@ namespace {
             out << "EnableAnisotropicFiltering = false\n";
             out << "MaxAnisotropy = 4.0\n";
             out << "LODBias = -0.5\n\n";
-            out << "[Addresses]\n";
-            out << "FallbackLoadAreaRVA = 0x27E710\n";
-            out << "FallbackRenderTextureRVA = 4343776\n";
         }
 
         iee::core::EngineConfig cfg{};
@@ -290,8 +321,6 @@ namespace {
         expect_true(!cfg.enableAnisotropicFiltering, "Rendering bool should parse");
         expect_eq(cfg.maxAnisotropy, 4.0f, "Floating-point values should parse");
         expect_eq(cfg.lodBias, -0.5f, "Negative float values should parse");
-        expect_eq(cfg.cachedLoadAreaRVA, std::uintptr_t{0x27E710}, "Hex fallback load RVA should parse");
-        expect_eq(cfg.cachedRenderTextureRVA, std::uintptr_t{4343776}, "Decimal fallback render RVA should parse");
 
         std::error_code ec;
         std::filesystem::remove(tempPath, ec);
@@ -326,7 +355,8 @@ namespace {
         expect_true(loaded.enableShaderOverrides, "enableShaderOverrides should round-trip as true");
         expect_true(!loaded.dumpEngineShaders, "dumpEngineShaders should round-trip as false");
         expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"), "shaderOverrideDir should round-trip");
-        expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"), "debugMagentaShaders should round-trip");
+        expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"),
+                  "debugMagentaShaders should round-trip");
         expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
         expect_true(!loaded.enableWaterEffect, "enableWaterEffect should round-trip as false");
 
@@ -385,7 +415,7 @@ namespace {
         liquidTileData[0].nStartingTile = 3;
         liquidTileData[1].nStartingTile = 0;
         liquidTileData[2].nStartingTile = 2;
-        liquidTileData[3].nStartingTile = 500;  // lookup entry out of bounds
+        liquidTileData[3].nStartingTile = 500; // lookup entry out of bounds
         write_bytes(bytes, liquidTilemapOffset, liquidTileData.data(), sizeof(liquidTileData));
 
         const std::array<std::uint16_t, 4> liquidTileLookup{21, 22, 23, 24};
@@ -418,8 +448,7 @@ namespace {
         expect_true(!base_cell_has_liquid_overlay(wed, 1, overlayFlags),
                     "Second base cell should not report liquid overlay coverage");
 
-        expect_true(wed.overlays[0].cellTileIndex.empty(),
-                    "Base overlay should not carry per-cell tile indices");
+        expect_true(wed.overlays[0].cellTileIndex.empty(), "Base overlay should not carry per-cell tile indices");
         expect_eq(wed.overlays[1].cellTileIndex.size(), std::size_t{4},
                   "Liquid overlay should carry one tile index per overlay cell");
         expect_eq(wed.overlays[1].cellTileIndex[0], std::uint16_t{24},
@@ -430,6 +459,29 @@ namespace {
                   "Cell 2 tile index should resolve through the tile-index lookup");
         expect_eq(wed.overlays[1].cellTileIndex[3], std::uint16_t{0xFFFF},
                   "Out-of-bounds lookup entries should stay 0xFFFF");
+
+        auto tooManyLayers = bytes;
+        auto invalidHeader = header;
+        invalidHeader.nLayers = 9;
+        write_bytes(tooManyLayers, headerOffset, &invalidHeader, sizeof(invalidHeader));
+        resource.pData = tooManyLayers.data();
+        resource.nSize = static_cast<std::uint32_t>(tooManyLayers.size());
+        expect_true(!parse_loaded_wed(resource, wed), "WED files with more than eight layers should fail closed");
+        expect_true(wed.empty(), "A rejected WED should not leave partially parsed state");
+
+        auto excessiveDimensions = bytes;
+        auto invalidBaseLayer = baseLayer;
+        invalidBaseLayer.nTilesAcross = 0xFFFF;
+        invalidBaseLayer.nTilesDown = 0xFFFF;
+        write_bytes(excessiveDimensions, layerOffset, &invalidBaseLayer, sizeof(invalidBaseLayer));
+        resource.pData = excessiveDimensions.data();
+        resource.nSize = static_cast<std::uint32_t>(excessiveDimensions.size());
+        expect_true(!parse_loaded_wed(resource, wed), "Excessive WED dimensions should be rejected before allocation");
+
+        resource.pData = bytes.data();
+        resource.nSize = static_cast<std::uint32_t>(tilemapOffset + 3 * sizeof(WED_TileData_st));
+        expect_true(!parse_loaded_wed(resource, wed),
+                    "A truncated base tilemap should fail instead of returning partial data");
     }
 
     void test_decode_palette_tile_alpha() {
@@ -521,7 +573,7 @@ namespace {
             {17, 3420796, 805484},
         }};
         tileInfo.table = table.data();
-        tileInfo.runtimeTileDimension = static_cast<std::uint32_t>(table.size());
+        tileInfo.tileCount = static_cast<std::uint32_t>(table.size());
 
         const auto detection = detect_scale_from_tile_table(tileInfo);
         expect_true(!detection.has_value(),
@@ -638,7 +690,7 @@ namespace {
 
         auto heuristicInfo = make_tile_info(0x80, 20000, 4096, 4096);
         heuristicInfo.header = nullptr;
-        heuristicInfo.runtimeTileDimension = 1;
+        heuristicInfo.tileCount = 1;
         const auto heuristicDetection = iee::game::detect_preferred_scale_hint(heuristicInfo, 20000, manifest);
         expect_true(heuristicDetection.has_value(), "Heuristics should still exist as a final fallback");
         if (heuristicDetection) {
@@ -874,8 +926,7 @@ void test_build_fine_liquid_mask() {
     const auto fallbackMask = build_fine_liquid_mask(noTilemap, provider);
     expect_true(fallbackMask.has_value(), "fine mask should build without a parsed tilemap");
     if (fallbackMask) {
-        expect_eq(fallbackMask->texels[0], std::uint8_t{1},
-                  "missing tilemap should fall back to full-cell liquid");
+        expect_eq(fallbackMask->texels[0], std::uint8_t{1}, "missing tilemap should fall back to full-cell liquid");
         expect_eq(fallbackMask->texels[7 * 16 + 7], std::uint8_t{1},
                   "missing tilemap fallback should cover the whole cell");
     }
@@ -895,13 +946,12 @@ void test_fpseam_override_asset_contract() {
     const std::string source = contents.str();
 
     // Engine interface (from the live vanilla dump) must be fully preserved.
-    constexpr std::string_view vanillaInterface =
-        "uniform sampler2D uTex;\n"
-        "uniform vec2 uTcScale;\n"
-        "uniform vec4 uColorTone;\n"
-        "varying vec2 vTc;\n"
-        "varying vec2 vRef;\n"
-        "varying vec4 vColor;\n";
+    constexpr std::string_view vanillaInterface = "uniform sampler2D uTex;\n"
+                                                  "uniform vec2 uTcScale;\n"
+                                                  "uniform vec4 uColorTone;\n"
+                                                  "varying vec2 vTc;\n"
+                                                  "varying vec2 vRef;\n"
+                                                  "varying vec4 vColor;\n";
     const auto contract = iee::game::check_interface_contract(vanillaInterface, source);
     expect_true(contract.ok, "fpSEAM override preserves the engine interface");
     for (const auto &missing : contract.missingIdentifiers) {
@@ -910,17 +960,16 @@ void test_fpseam_override_asset_contract() {
 
     // Our feed contract.
     for (const std::string_view name :
-         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom",          "uIeeViewport", "uIeeWorldSizeInv", "uIeeWaterTint", "uIeeAreaMask",
-          "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
-        expect_true(source.find(name) != std::string::npos,
-                    "fpSEAM override declares feed uniform");
+         {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom", "uIeeViewport", "uIeeWorldSizeInv", "uIeeWaterTint",
+          "uIeeAreaMask", "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
+        expect_true(source.find(name) != std::string::npos, "fpSEAM override declares feed uniform");
     }
-    expect_true(source.find("#version") == std::string::npos,
-                "no #version line (engine sources are ARB-era GLSL)");
+    expect_true(source.find("#version") == std::string::npos, "no #version line (engine sources are ARB-era GLSL)");
 }
 
 int main() {
     test_parse_ida_pattern();
+    test_unique_pattern_matching();
     test_rel32_target_checked();
     test_manifest_loading();
     test_runtime_type_layouts();

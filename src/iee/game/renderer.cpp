@@ -114,6 +114,7 @@ namespace iee::game {
     }
 
     bool ensure_texture_params(const core::EngineConfig &cfg, const DrawApi &api, int textureId) {
+        (void) api;
         auto &gl = gl::get_gl_functions();
         if (!gl.valid) {
             return false;

@@ -14,6 +14,8 @@ if(MSVC)
 endif()
 
 option(IEE_BUILD_WINDOWS_DLL "Build the EEex DLL target" ${WIN32})
+option(IEE_WARNINGS_AS_ERRORS "Treat project warnings as errors" OFF)
+option(IEE_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 
 if(IEE_BUILD_WINDOWS_DLL AND NOT WIN32)
     message(FATAL_ERROR "IEE_BUILD_WINDOWS_DLL requires a Windows toolchain")
@@ -21,6 +23,32 @@ endif()
 
 include(CTest)
 include(FetchContent)
+
+function(iee_configure_target target)
+    if(WIN32)
+        # windows.h min/max macros break std::min/std::max/numeric_limits.
+        target_compile_definitions(${target} PRIVATE NOMINMAX)
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+        if(IEE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE /WX)
+        endif()
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+        if(IEE_WARNINGS_AS_ERRORS)
+            target_compile_options(${target} PRIVATE -Werror)
+        endif()
+    endif()
+
+    if(IEE_ENABLE_SANITIZERS)
+        if(WIN32 OR NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            message(FATAL_ERROR "IEE_ENABLE_SANITIZERS requires Clang or GCC on a non-Windows host")
+        endif()
+        target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    endif()
+endfunction()
 
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Disable FetchContent updates after the initial clone" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -31,7 +59,7 @@ set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
-    GIT_TAG v1.15.3
+    GIT_TAG 6fa36017cfd5731d617e1a934f0e5ea9c4445b13 # v1.15.3
 )
 FetchContent_MakeAvailable(spdlog)
 
@@ -86,13 +114,18 @@ target_link_libraries(iee_common
         spdlog::spdlog
 )
 
+if(WIN32)
+    target_link_libraries(iee_common PUBLIC version)
+endif()
+
 target_compile_features(iee_common PUBLIC cxx_std_20)
+iee_configure_target(iee_common)
 
 if(IEE_BUILD_WINDOWS_DLL)
     FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
-        GIT_TAG v1.3.4
+        GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
     )
     FetchContent_MakeAvailable(minhook)
 
@@ -128,6 +161,7 @@ if(IEE_BUILD_WINDOWS_DLL)
     )
 
     set_target_properties(InfinityEngine-Enhancer PROPERTIES OUTPUT_NAME "InfinityEngine-Enhancer")
+    iee_configure_target(InfinityEngine-Enhancer)
 
     set(IEE_RELEASE_BUNDLE_DIR "${CMAKE_BINARY_DIR}/release-bundle")
     add_custom_target(release_bundle
@@ -160,5 +194,6 @@ if(BUILD_TESTING)
     )
 
     target_link_libraries(iee_tests PRIVATE iee_common)
+    iee_configure_target(iee_tests)
     add_test(NAME iee_tests COMMAND iee_tests WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 endif()
