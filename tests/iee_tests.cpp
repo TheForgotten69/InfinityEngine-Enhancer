@@ -1020,7 +1020,7 @@ void test_tis_header_dimension_decoding() {
 void test_supported_tile_dimensions_are_inferred_dynamically() {
   using namespace iee::game;
 
-  for (const auto [dimension, expectedScale] :
+  for (const auto& [dimension, expectedScale] :
        std::array<std::pair<std::uint32_t, int>, 4>{{
            {TisTileDimensions::Standard, 1},
            {TisTileDimensions::Upscaled2x, 2},
