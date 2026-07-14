@@ -18,6 +18,7 @@
 #include "iee/game/opengl_types.h"
 #include "iee/game/resref_runtime.h"
 #include "iee/game/tile_liquid.h"
+#include "iee/game/tis_palette.h"
 #include "iee/game/wed_runtime.h"
 #include "iee/shader_probe.h"
 

@@ -1,8 +1,11 @@
 #include "shader_diagnostics.h"
 
-#include <dbghelp.h>
-#include <spdlog/fmt/fmt.h>
+// clang-format off
 #include <windows.h>
+#include <dbghelp.h>  // requires windows.h first
+// clang-format on
+
+#include <spdlog/fmt/fmt.h>
 
 #include <array>
 #include <cctype>
