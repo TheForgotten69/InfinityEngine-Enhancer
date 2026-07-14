@@ -7,7 +7,7 @@ precision highp float;
 #endif
 
 // fpSEAM.glsl
-// IEE_V2_FPSEAM_WATER — world-space, WED-mask-gated water.
+// World-space, WED-mask-gated liquid replacement.
 // uIeeEnabled < 0.5 reproduces the vanilla fpSEAM output exactly.
 
 uniform lowp	sampler2D	uTex;
@@ -22,7 +22,7 @@ uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform highp	vec3		uIeeWaterTint;     // authored water color (avg of the area's water overlay tile)
-uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: fine liquid mask, 8px/texel
+uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: one liquid mode per 64px WED cell
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
 uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
@@ -123,16 +123,16 @@ vec3 ieeWaterNormal(vec2 worldPos, float t)
 	return normalize(vec3(n.x, n.y, max(n.z, 0.3) * 2.2));
 }
 
-// Liquid coverage (0 = land, 1 = liquid) at a world position. The mask is the
-// painted overlay-tile silhouette at 8px/texel, so this IS the water contour.
+// Liquid coverage (0 = land, 1 = liquid) at a world position. The WED cell
+// mask is an outer bound; the base tile's alpha supplies the authored contour.
 float ieeLiquidAt(vec2 worldPos)
 {
 	float mode = texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0;
 	return mode > 0.5 ? 1.0 : 0.0;
 }
 
-// Soft coverage: center tap plus 4 taps one mask texel (8px) away. 1 inside
-// the painted water, 0 on land, a one-texel soft rim along the contour.
+// Sample 8px around the fragment so authored holes can cross a cell boundary
+// without exposing the engine's generic liquid overlay.
 float ieeCoverage(vec2 worldPos)
 {
 	float cover = ieeLiquidAt(worldPos);
@@ -168,9 +168,8 @@ void main()
 		cellMode = floor(texture2D(uIeeAreaMask, worldPos * uIeeWorldSizeInv).r * 255.0 + 0.5);
 	}
 
-	// v16 alpha-contour probe (uIeeEnabled = 2.0, was the alignment gradient —
-	// alignment passed v7). Tests the theory that the base tile's texture
-	// alpha IS the painted water contour inside flagged cells:
+	// Contour diagnostic (uIeeEnabled = 2.0). The base tile's texture alpha is
+	// the painted water contour inside flagged cells:
 	//   magenta = transparent texel (water hole -> real water)
 	//   dark blue = opaque texel (painted land art)
 	//   untinted = unflagged cell
@@ -201,7 +200,7 @@ void main()
 
 	vec4 texColor = seamSample(vTc);
 
-	// Water mask (v16-verified): inside flagged cells the engine draws the
+	// Inside flagged cells the engine draws the
 	// base tile with TRANSPARENT pixels exactly where water composites
 	// through — the tile's own alpha is the painted contour. Restrict to the
 	// opaque base pass: the WATER_ALPHA secondary pass and fades carry
@@ -212,7 +211,7 @@ void main()
 		// Wide cell gate: hole pixels up to one mask texel OUTSIDE a flagged
 		// cell still count (coverage 0.2 from one neighbor tap) — authored
 		// water spills slightly past its cell, and unstyled spill showed the
-		// engine's raw teal overlay tile at water-body edges (v19 slivers).
+		// engine's raw overlay tile at water-body edges.
 		float cellSoft = smoothstep(0.01, 0.08, ieeCoverage(worldPos));
 		waterMask = (1.0 - texColor.a) * cellSoft;
 	}
@@ -279,7 +278,7 @@ void main()
 		water = mix(water, foamColor, clamp(foam, 0.0, 1.0) * 0.75);
 
 		// Sun glitter + lava glow (kept subtle: strong white spec on the
-		// neutral grade read as monochrome noise in v19).
+		// neutral grade can otherwise read as monochrome noise).
 		water += spec * mix(0.15, 0.45, waveH);
 		if (emissive > 0.0)
 		{
@@ -302,9 +301,9 @@ void main()
 
 	// The engine blends the painted-art secondary tile at WATER_ALPHA over
 	// flagged cells AFTER the base pass; at native strength it buries our
-	// water under static art (v17: fountains looked vanilla), and cells
+	// water under static art, and cells
 	// WITHOUT a secondary tile render our water alone — the two populations
-	// looked different (v18 color seam). Suppress the pass entirely while ON
+	// look different. Suppress the pass entirely while ON
 	// so every water cell shares one source of truth; OFF and ALIGN keep it.
 	float alphaScale = 1.0;
 	if (uIeeEnabled > 0.5 && uIeeEnabled < 1.5 && cellMode > 0.5 &&

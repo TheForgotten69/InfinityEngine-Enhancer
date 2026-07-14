@@ -137,7 +137,9 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/features/tile_render.cpp
         src/iee/frame_hook.cpp
         src/iee/hooks.cpp
+        src/iee/shader_diagnostics.cpp
         src/iee/shader_probe.cpp
+        src/iee/shader_uniform_bridge.cpp
         src/iee/water_textures.cpp
         src/iee/game/opengl_types.cpp
         src/iee/game/renderer.cpp
@@ -168,10 +170,9 @@ if(IEE_BUILD_WINDOWS_DLL)
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_RELEASE_BUNDLE_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_RELEASE_BUNDLE_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:InfinityEngine-Enhancer>" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.dll"
-        COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/shaders" "${IEE_RELEASE_BUNDLE_DIR}/iee-shaders"
-        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-override" "${IEE_RELEASE_BUNDLE_DIR}/game-override"
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/override" "${IEE_RELEASE_BUNDLE_DIR}/override"
+        COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/override/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-textures" "${IEE_RELEASE_BUNDLE_DIR}/iee-textures"
         DEPENDS InfinityEngine-Enhancer
         VERBATIM

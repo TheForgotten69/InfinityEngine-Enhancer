@@ -32,7 +32,7 @@ Operational instructions for AI coding agents working in this repository.
 - `0x40` means standard tiles; `0x100` means authored 4x tiles.
 - `CResTileSet::h` is optional. Standard tilesets can have `header == null` while still exposing a valid 12-byte PVR entry table through `pData`. A null header does not imply missing deterministic metadata.
 - Deterministic detection order for this build is:
-  `TIS header -> PVR entry table smallest positive step -> legacy heuristic fallback`
+  `TIS header -> PVR entry table coordinate-grid GCD -> legacy heuristic fallback`
 - `+0x1DC` is only the current linear-tiles tone flag for this build.
 
 ## Runtime Facts — Renderer / GL
@@ -57,8 +57,9 @@ Operational instructions for AI coding agents working in this repository.
 - `src/iee/game/tis_runtime.*` holds explicit runtime views.
 - `src/iee/game/tile_upscale.*` holds scale selection logic.
 - `docs/` contains the architecture and reverse-engineering notes future agents should read first.
+- `docs/threading-model.md` defines callback ownership, GL-thread rules, and ABI exception boundaries.
 - `docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md` is the graphics roadmap: four feature pillars, validation gates (V1-V6), and the full evaluated/dropped/rejected idea ledger. Read it before proposing any rendering feature — most ideas have already been evaluated there.
-- `shaders/InfinityEngine-Enhancer.cpp` is archival research code only.
+- Unsupported experiments live under `docs/archive/prototypes/` and are never production sources.
 
 ## Done Means
 

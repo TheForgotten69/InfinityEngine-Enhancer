@@ -1,3 +1,4 @@
+// ARCHIVED PROTOTYPE: EEex is the supported loader; this injector is not shipped.
 #include <windows.h>
 #include <string>
 #include <vector>

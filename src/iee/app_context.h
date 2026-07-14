@@ -11,32 +11,32 @@
 #include "iee/game/wed_runtime.h"
 
 namespace iee {
-    // Shared infrastructure only. Per-feature state lives in the owning feature
-    // module (e.g. features::tile_render_state()).
-    struct AppContext {
-        core::EngineConfig cfg{};
-        const game::BuildManifest *manifest{};
-        game::GameAddresses addrs{};
-        game::DrawApi draw{};
+// Shared infrastructure only. Per-feature state lives in the owning feature
+// module (e.g. features::tile_render_state()).
+struct AppContext {
+  core::EngineConfig cfg{};
+  const game::BuildManifest* manifest{};
+  game::GameAddresses addrs{};
+  game::DrawApi draw{};
 
-        std::atomic<const game::CGameArea *> activeArea{nullptr};
-        // CInfGame from the LoadArea hook; lets the render thread re-resolve
-        // the active area when transitions settle after LoadArea returns.
-        std::atomic<void *> infGame{nullptr};
-        std::atomic<std::shared_ptr<const game::WedAreaInfo>> wed{};
-        game::ResrefBuffer lastLoggedWedArea{};
+  std::atomic<const game::CGameArea*> activeArea{nullptr};
+  // CInfGame from the LoadArea hook; lets the render thread re-resolve
+  // the active area when transitions settle after LoadArea returns.
+  std::atomic<void*> infGame{nullptr};
+  std::atomic<std::shared_ptr<const game::WedAreaInfo>> wed{};
+  game::ResrefBuffer lastLoggedWedArea{};
 
-        bool isRenderHookActive{false};
+  std::atomic<bool> isRenderHookActive{false};
 
-        void reset_area_state() {
-            activeArea.store(nullptr);
-            wed.store(std::shared_ptr<const game::WedAreaInfo>{});
-            lastLoggedWedArea.fill('\0');
-        }
+  void reset_area_state() {
+    activeArea.store(nullptr);
+    wed.store(std::shared_ptr<const game::WedAreaInfo>{});
+    lastLoggedWedArea.fill('\0');
+  }
 
-        void reset_all_state() {
-            reset_area_state();
-            isRenderHookActive = false;
-        }
-    };
-}
+  void reset_all_state() {
+    reset_area_state();
+    isRenderHookActive.store(false, std::memory_order_relaxed);
+  }
+};
+}  // namespace iee

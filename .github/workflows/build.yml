@@ -90,9 +90,8 @@ jobs:
           $expected = @(
             "InfinityEngine-Enhancer.dll"
             "InfinityEngine-Enhancer.sample.ini"
-            "M_IEEE.lua"
-            "game-override/fpSEAM.glsl"
-            "iee-shaders/fpSELECT.glsl"
+            "override/M_IEEE.lua"
+            "override/fpSEAM.glsl"
             "iee-textures/iee_water_dudv.rgba"
             "iee-textures/iee_water_foam.rgba"
             "iee-textures/iee_water_normal.rgba"

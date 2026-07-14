@@ -511,3 +511,8 @@ PASS — the user reports that v20 fixed the remaining issue. Treat the tint,
 transition re-resolution, and edge-spill changes as the validated baseline.
 Retain the diagnostic checks above for regression testing on new game builds and
 unusual modded WED/TIS combinations.
+
+Current production note: the overlay-pixel fine mask from the failed v15
+experiment has been removed. The runtime now uploads the compact WED cell mask
+as the outer bound and uses the base tile's alpha as the validated painted
+contour. Palette overlay tiles remain sampled only for authored water tint.
