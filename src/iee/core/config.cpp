@@ -63,6 +63,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
   if (iequals(section, "core")) {
     if (iequals(key, "VerboseLogs"))
       cfg.enableVerboseLogging = parse_bool(val, cfg.enableVerboseLogging);
+    else if (iequals(key, "PerformanceLogs"))
+      cfg.enablePerformanceLogging = parse_bool(val, cfg.enablePerformanceLogging);
     return;
   }
 
@@ -156,6 +158,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
 
   write_section(f, "Core");
   write_bool(f, "VerboseLogs", cfg.enableVerboseLogging);
+  write_bool(f, "PerformanceLogs", cfg.enablePerformanceLogging);
 
   write_section(f, "Rendering");
   write_bool(f, "EnableAnisotropicFiltering", cfg.enableAnisotropicFiltering);

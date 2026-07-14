@@ -3,7 +3,9 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstddef>
 
 #include "build_manifest.h"
 #include "iee/core/config.h"
@@ -13,6 +15,26 @@
 
 namespace iee::game {
 namespace {
+constexpr std::size_t kConfiguredTextureCapacity = 64;
+std::atomic<bool> g_textureCacheResetRequested{false};
+
+struct TextureConfigurationCache {
+  struct Entry {
+    int sourceTextureId{};
+    int glTextureName{};
+  };
+
+  HGLRC context{};
+  std::array<Entry, kConfiguredTextureCapacity> entries{};
+  std::size_t size{};
+  std::size_t nextReplacement{};
+};
+
+TextureConfigurationCache& texture_configuration_cache() noexcept {
+  static TextureConfigurationCache cache;
+  return cache;
+}
+
 const char* instruction_kind_name(BranchInstructionKind kind) noexcept {
   switch (kind) {
     case BranchInstructionKind::CallRel32:
@@ -127,9 +149,37 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
 
   int boundTexture = 0;
   gl.glGetIntegerv(gl::TEXTURE_BINDING_2D, &boundTexture);
-  if (!checkError("querying GL_TEXTURE_BINDING_2D") || boundTexture == 0) {
+  if (!checkError("querying GL_TEXTURE_BINDING_2D") || boundTexture <= 0) {
     LOG_WARN("No GL texture is bound for source texture {}", sourceTextureId);
     return false;
+  }
+
+  auto& cache = texture_configuration_cache();
+  if (g_textureCacheResetRequested.exchange(false, std::memory_order_acquire)) {
+    cache = {};
+  }
+  const auto currentContext = gl::current_context();
+  if (cache.context != currentContext) {
+    cache = {.context = currentContext};
+  }
+
+  const auto configuredEnd = cache.entries.begin() + static_cast<std::ptrdiff_t>(cache.size);
+  const auto configured = std::find_if(
+      cache.entries.begin(), configuredEnd, [&](const TextureConfigurationCache::Entry& entry) {
+        return entry.sourceTextureId == sourceTextureId && entry.glTextureName == boundTexture;
+      });
+  if (configured != configuredEnd) {
+    // Texture names can be recycled. These sentinels differ from a newly
+    // created texture's defaults and force a reconfigure if the same
+    // source/name pair now refers to a replacement object.
+    int wrapS = 0;
+    int minFilter = 0;
+    gl.glGetTexParameteriv(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, &wrapS);
+    gl.glGetTexParameteriv(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, &minFilter);
+    if (checkError("validating cached texture parameters") &&
+        wrapS == static_cast<int>(gl::CLAMP_TO_EDGE) && minFilter == static_cast<int>(gl::LINEAR)) {
+      return true;
+    }
   }
 
   const auto setInteger = [&](unsigned parameter, int value, const char* operation) {
@@ -163,6 +213,22 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
               sourceTextureId, boundTexture,
               cfg.enableAnisotropicFiltering ? cfg.maxAnisotropy : 1.0f, cfg.lodBias);
   }
+
+  if (configured == configuredEnd) {
+    const auto insertionIndex =
+        cache.size < cache.entries.size() ? cache.size++ : cache.nextReplacement;
+    cache.entries[insertionIndex] = {
+        .sourceTextureId = sourceTextureId,
+        .glTextureName = boundTexture,
+    };
+    if (cache.size == cache.entries.size()) {
+      cache.nextReplacement = (insertionIndex + 1) % cache.entries.size();
+    }
+  }
   return true;
+}
+
+void request_texture_configuration_cache_reset() noexcept {
+  g_textureCacheResetRequested.store(true, std::memory_order_release);
 }
 }  // namespace iee::game

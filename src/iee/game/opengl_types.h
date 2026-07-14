@@ -17,7 +17,9 @@ constexpr unsigned TEXTURE_WRAP_T = 0x2803;
 constexpr unsigned CLAMP_TO_EDGE = 0x812F;
 constexpr unsigned TEXTURE_MIN_FILTER = 0x2801;
 constexpr unsigned TEXTURE_MAG_FILTER = 0x2800;
+constexpr unsigned TEXTURE_MAX_LEVEL = 0x813D;
 constexpr unsigned LINEAR = 0x2601;
+constexpr unsigned LINEAR_MIPMAP_LINEAR = 0x2703;
 constexpr unsigned NEAREST = 0x2600;
 constexpr unsigned REPEAT = 0x2901;
 constexpr unsigned RGBA8 = 0x8058;
@@ -32,6 +34,14 @@ constexpr unsigned RED = 0x1903;
 constexpr unsigned UNSIGNED_BYTE = 0x1401;
 constexpr unsigned UNPACK_ALIGNMENT = 0x0CF5;
 constexpr unsigned FRAMEBUFFER = 0x8D40;
+constexpr unsigned COMPRESSED_RGB_S3TC_DXT1_EXT = 0x83F0;
+constexpr unsigned COMPRESSED_RGBA_S3TC_DXT1_EXT = 0x83F1;
+constexpr unsigned COMPRESSED_RGBA_S3TC_DXT5_EXT = 0x83F3;
+constexpr unsigned COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT = 0x8C4D;
+constexpr unsigned COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT = 0x8C4F;
+constexpr unsigned COMPRESSED_RG_RGTC2 = 0x8DBD;
+constexpr unsigned COMPRESSED_RGBA_BPTC_UNORM = 0x8E8C;
+constexpr unsigned COMPRESSED_SRGB_ALPHA_BPTC_UNORM = 0x8E8D;
 
 // OpenGL error codes
 constexpr unsigned GL_NO_ERROR = 0x0000;
@@ -83,6 +93,10 @@ using PFN_glUniform1i = void(APIENTRY*)(int location, int v0);
 using PFN_glUniform2f = void(APIENTRY*)(int location, float v0, float v1);
 using PFN_glUniform3f = void(APIENTRY*)(int location, float v0, float v1, float v2);
 using PFN_glActiveTexture = void(APIENTRY*)(unsigned texture);
+using PFN_glCompressedTexImage2D = void(APIENTRY*)(unsigned target, int level,
+                                                   unsigned internalformat, int width, int height,
+                                                   int border, int imageSize, const void* data);
+using PFN_glGenerateMipmap = void(APIENTRY*)(unsigned target);
 using PFN_glBindFramebuffer = void(APIENTRY*)(unsigned target, unsigned framebuffer);
 using PFN_glIsProgram = unsigned char(APIENTRY*)(unsigned program);
 using PFN_glShaderSourceARB = void(APIENTRY*)(unsigned shader, int count, const char* const* string,
@@ -130,6 +144,8 @@ struct OpenGLFunctions {
   PFN_glUniform2f glUniform2f{};
   PFN_glUniform3f glUniform3f{};
   PFN_glActiveTexture glActiveTexture{};
+  PFN_glCompressedTexImage2D glCompressedTexImage2D{};
+  PFN_glGenerateMipmap glGenerateMipmap{};
   PFN_glBindFramebuffer glBindFramebuffer{};
   PFN_glIsProgram glIsProgram{};
   PFN_glShaderSourceARB glShaderSourceARB{};
@@ -145,6 +161,7 @@ struct OpenGLFunctions {
   bool readyForSourcePatching{false};
   bool arbShaderObjectsAvailable{false};
   bool textureUploadAvailable{false};
+  bool compressedTextureUploadAvailable{false};
 
   bool initialize() noexcept;
 };

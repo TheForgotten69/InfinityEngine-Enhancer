@@ -74,8 +74,9 @@ static DWORD WINAPI InitThread(LPVOID) {
     if (cfg.enableVerboseLogging) {
       LOG_DEBUG(
           "Rendering config: linear=true, anisotropic={}, maxAnisotropy={:.1f}, "
-          "LOD bias={:.2f}",
-          ctx.cfg.enableAnisotropicFiltering, ctx.cfg.maxAnisotropy, ctx.cfg.lodBias);
+          "LOD bias={:.2f}, performanceLogs={}",
+          ctx.cfg.enableAnisotropicFiltering, ctx.cfg.maxAnisotropy, ctx.cfg.lodBias,
+          ctx.cfg.enablePerformanceLogging);
     }
 
     if (!game::resolve_addresses(ctx.addrs, ctx.cfg, *ctx.manifest)) {
@@ -126,11 +127,15 @@ static DWORD WINAPI InitThread(LPVOID) {
 
 static void CleanupHooks() noexcept {
   if (g_appContext) {
+    // Stop engine callbacks before releasing any state they can reach. EEex
+    // invokes ShutdownBindings before FreeLibrary; this ordering also keeps
+    // explicit shutdown safe if rendering has only just quiesced.
+    hooks::prepare_for_shutdown();
     frame::uninstall();
     probe::uninstall_shader_probes();
+    hooks::uninstall_all();
     area::release_gpu_area_resources();
     water::release_water_textures();
-    hooks::prepare_for_shutdown();
     g_appContext->reset_all_state();
     g_appContext.reset();
   }

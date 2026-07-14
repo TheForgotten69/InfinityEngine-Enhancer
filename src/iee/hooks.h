@@ -2,11 +2,14 @@
 #include "app_context.h"
 
 namespace iee::hooks {
-    bool install_all(AppContext &ctx);
+bool install_all(AppContext& ctx);
 
-    void uninstall_all() noexcept;
+void uninstall_all() noexcept;
 
-    void prepare_for_shutdown() noexcept;
+// Disables engine entry-point hooks without uninitializing MinHook. The
+// caller must remove other MinHook-backed subsystems, then call
+// uninstall_all().
+void prepare_for_shutdown() noexcept;
 
-    bool is_active();
-}
+bool is_active();
+}  // namespace iee::hooks

@@ -47,7 +47,9 @@ Operational instructions for AI coding agents working in this repository.
 - Hook `CVidTile::RenderTexture`, not `CVidCell::RenderTexture`.
 - `LoadArea` is the area boundary and resets scale detection.
 - **Never detour `CVisibilityMap::BltFogOWar3d`** — crashes on any modification (stack canary, confirmed experimentally). `CInfinity::RenderFog` is setup-only but is safe to hook as a bracket around the fog pass.
-- Any new hook target RVA/pattern goes through `build_manifest`, never ad-hoc constants. Known existing violation to fix: the `CInfGame` area offsets hardcoded in `hooks.cpp`.
+- Any new hook target RVA/pattern or build-specific runtime offset goes through
+  `build_manifest`, never ad-hoc constants. The `CInfGame` visible-area, area
+  array, and master-area offsets already follow this rule.
 - `feature/wip` is inspiration only, not a base: its shader probe and slot table are valid; its per-tile-uniform feeding design is the documented failure (uniforms were never wired at draw time).
 - If you need live runtime facts, add DLL logging. Ghidra is useful for offline layout review but cannot answer live process-state questions on its own.
 

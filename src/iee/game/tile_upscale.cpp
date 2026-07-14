@@ -5,8 +5,6 @@
 #include <numeric>
 #include <vector>
 
-#include "iee/core/pattern_scanner.h"
-
 namespace iee::game {
 namespace {
 constexpr std::uint32_t kMaxTableSamples = 32;
@@ -42,7 +40,7 @@ std::optional<ScaleDetectionResult> infer_scale_from_tile_table(const TileInfo& 
 
   for (std::uint32_t i = 0; i < sampleCount; ++i) {
     PVRZTileEntry entry{};
-    if (!core::safe_read(tileInfo.table + i, entry)) {
+    if (!read_tis_tile_entry(tileInfo, i, entry)) {
       return std::nullopt;
     }
     if (entry.page < 0 || entry.u < 0 || entry.v < 0 || entry.u > kMaxAtlasCoordinate ||

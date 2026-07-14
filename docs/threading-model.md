@@ -10,8 +10,9 @@ shutdown are treated as separate producers so ownership remains clear.
 - `DrawColorTone(Seam)` is the world-pass publication point. It resolves the active area, publishes
   the view transform once per frame, and flushes pending area textures while a GL context is current.
 - The swap hook advances the frame counter and refreshes time-dependent uniforms.
-- Shader/program records are protected by `g_probeMutex`. OpenGL and file I/O are performed after
-  copying the required record state, never while that mutex is held.
+- Shader/program records are protected by `g_probeMutex`. Steady-state OpenGL introspection and
+  shader-dump I/O copy the required record state and release that mutex first. One-time probe
+  installation is serialized before those records become visible.
 - Area snapshot publication is protected by `g_areaGpuMutex`; GL upload uses a copied
   `shared_ptr<const AreaGpuSnapshot>` after releasing the mutex.
 - Uniform inputs are independent relaxed atomics. They are a latest-value snapshot, not a
@@ -26,8 +27,10 @@ all exceptions only at those ABI boundaries, preserve the original engine call e
 treat diagnostics as optional. Internal helpers use ordinary typed errors or return values and do
 not silently convert a failed OpenGL operation into success.
 
-`ShutdownBindings` must run before unloading the DLL. It removes hooks before clearing shared state;
-`DllMain` never performs MinHook, logger, or OpenGL teardown while the Windows loader lock is held.
+`ShutdownBindings` must run before unloading the DLL. It first disables engine entry-point hooks,
+then removes frame and OpenGL probes, removes the engine hooks, and only then uninitializes MinHook
+and clears shared state. `DllMain` never performs MinHook, logger, or OpenGL teardown while the
+Windows loader lock is held.
 
 ## Runtime Invariants
 

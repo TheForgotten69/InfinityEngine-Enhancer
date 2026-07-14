@@ -1,5 +1,14 @@
 # Phase 0 Gate Evidence
 
+> **Status: Living historical evidence log.** Sessions are intentionally kept
+> in chronological order, including rejected hypotheses. The current production
+> water baseline is [Phase 2.6 v20](#phase-26-session-v20--tint-engaged--transition-re-resolve):
+> base-tile alpha supplies the authored contour, the WED cell mask is an outer
+> bound, authored overlay color supplies the tint when decodable, and active-area
+> state is re-resolved during the world render pass. The Phase 2.5 overlay-pixel
+> fine-mask premise was rejected in the
+> [v15 verdict](#phase-25-session-v15-verdict-2026-07-05-ar2600--overlay-tile-is-not-the-contour).
+
 Build: `2eae2e4`   Date: 2026-06-11   Game: BGEE 2.6.6.x (Steam)
 
 ## Session 1 verdicts (recorded from live logs)

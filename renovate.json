@@ -1,0 +1,16 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["custom.regex"],
+  "dependencyDashboard": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Update commit-pinned CMake FetchContent dependencies",
+      "managerFilePatterns": ["/^CMakeLists\\.txt$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) versioning=(?<versioning>\\S+)\\s+GIT_TAG\\s+(?<currentDigest>[a-f0-9]{40})\\s+#\\s+(?<currentValue>v?\\S+)"
+      ]
+    }
+  ]
+}

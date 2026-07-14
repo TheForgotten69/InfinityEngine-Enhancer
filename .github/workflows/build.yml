@@ -92,6 +92,7 @@ jobs:
             "InfinityEngine-Enhancer.sample.ini"
             "override/M_IEEE.lua"
             "override/fpSEAM.glsl"
+            "iee-textures/README.md"
             "iee-textures/iee_water_dudv.rgba"
             "iee-textures/iee_water_foam.rgba"
             "iee-textures/iee_water_normal.rgba"

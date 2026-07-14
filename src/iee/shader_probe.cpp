@@ -45,6 +45,7 @@ struct ShaderRecord {
 
 struct ProgramRecord {
   bool linkLogged{};
+  bool introspected{};
   std::unordered_set<std::uintptr_t> callerLogged;
 };
 
@@ -96,12 +97,34 @@ std::unordered_map<unsigned, ProgramRecord> g_programRecords;
 std::unordered_map<unsigned, uniforms::Locations> g_overriddenPrograms;
 std::set<std::string> g_dumpedShaders;  // names already written to disk
 bool g_shaderProbesInstalled = false;
+bool g_waterOverrideActiveLogged = false;
+bool g_waterOverrideMissingLogged = false;
+std::atomic<HGLRC> g_programContext{nullptr};
 core::EngineConfig g_cfg;
 std::filesystem::path g_dumpDir;
 
 // Set by install; consumed by the first frame tick (sweep runs at the
 // frame boundary, never mid-draw).
 std::atomic<bool> g_sweepPending{false};
+
+bool ensure_program_context() {
+  const auto context = game::gl::current_context();
+  if (context == g_programContext.load(std::memory_order_acquire)) return false;
+
+  std::lock_guard lock(g_probeMutex);
+  if (context == g_programContext.load(std::memory_order_relaxed)) return false;
+
+  // Shader and program names are scoped to a WGL context and may be reused by
+  // a replacement context. Never carry classifications or uniform locations
+  // across that boundary.
+  g_shaderRecords.clear();
+  g_programRecords.clear();
+  g_overriddenPrograms.clear();
+  g_waterOverrideActiveLogged = false;
+  g_waterOverrideMissingLogged = false;
+  g_programContext.store(context, std::memory_order_release);
+  return true;
+}
 
 std::string sanitize_preview(std::string text) {
   for (char& ch : text) {
@@ -222,6 +245,7 @@ std::optional<int> infer_program_slot(std::string_view vertexShaderName,
 
 void submit_shader_source(unsigned shader, int count, const char* const* strings,
                           const int* lengths, Fn_glShaderSource forward, bool& forwarded) {
+  ensure_program_context();
   const std::string fullSource = gather_full_source(count, strings, lengths);
   const auto name = game::extract_shader_name(fullSource, "");
 
@@ -357,6 +381,7 @@ void maybe_dump_engine_shader(const game::gl::OpenGLFunctions& gl, unsigned shad
 
 // Introspect a program without holding g_probeMutex across OpenGL calls.
 void link_program_introspect(unsigned program, bool isArb, bool logDetails = true) {
+  ensure_program_context();
   const auto& gl = game::gl::get_gl_functions();
   if (!gl.glGetProgramiv || !gl.glGetAttachedShaders || !gl.glGetShaderiv) return;
 
@@ -414,13 +439,39 @@ void link_program_introspect(unsigned program, bool isArb, bool logDetails = tru
   }
 
   const auto inferredSlot = infer_program_slot(vertexShaderName, fragmentShaderName);
+  bool logWaterOverrideActive = false;
+  bool logWaterOverrideMissing = false;
   {
     std::lock_guard lock(g_probeMutex);
+    g_programRecords[program].introspected = true;
     if (anyOverride) {
       g_overriddenPrograms.try_emplace(program, uniforms::Locations{});
     } else {
       g_overriddenPrograms.erase(program);
     }
+
+    // Validate what the engine actually linked. This covers its source
+    // preamble, override discovery, driver compiler, and link path.
+    if (fragmentShaderName == "fpSEAM" && g_cfg.enableWaterEffect) {
+      if (anyOverride && !g_waterOverrideActiveLogged) {
+        g_waterOverrideActiveLogged = true;
+        logWaterOverrideActive = true;
+      } else if (!anyOverride && !g_waterOverrideMissingLogged) {
+        g_waterOverrideMissingLogged = true;
+        logWaterOverrideMissing = true;
+      }
+    }
+  }
+
+  if (logWaterOverrideActive) {
+    LOG_INFO("Water shader override is active in engine program {}", program);
+  }
+  if (logWaterOverrideMissing) {
+    LOG_ERROR(
+        "Engine fpSEAM program {} has no Infinity Engine Enhancer uniforms; the water "
+        "override was not loaded or linked. Water animation is unavailable, but tile upscaling "
+        "remains active. Check override/fpSEAM.glsl and the earlier shader compile/link logs.",
+        program);
   }
 
   if (!logDetails) return;
@@ -437,6 +488,7 @@ void link_program_introspect(unsigned program, bool isArb, bool logDetails = tru
 }
 void link_program(unsigned program, Fn_glLinkProgram link, bool isArb) {
   link(program);
+  ensure_program_context();
 
   const auto& gl = game::gl::get_gl_functions();
   int linkStatus = 1;
@@ -450,6 +502,7 @@ void link_program(unsigned program, Fn_glLinkProgram link, bool isArb) {
     auto& record = g_programRecords[program];
     shouldLog = !record.linkLogged;
     record.linkLogged = true;
+    record.introspected = false;
     g_overriddenPrograms.erase(program);
   }
 
@@ -510,25 +563,31 @@ void feed_uniforms_to_program(unsigned program) {
 }
 
 void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
+  if (program == 0) return;
+  ensure_program_context();
+
   bool shouldInspect = false;
+  bool shouldLogCaller = false;
   {
     std::lock_guard lock(g_probeMutex);
     auto& record = g_programRecords[program];
-    shouldInspect = record.callerLogged.insert(caller).second;
-  }
-
-  if (shouldInspect) {
-    LOG_DEBUG("GL program bind{}: program={} {}", isArb ? " (ARB)" : "", program,
-              diagnostics::caller_summary(caller));
-    if (program != 0) {
-      // This also discovers programs linked before probe installation.
-      link_program_introspect(program, isArb);
+    shouldInspect = !record.introspected;
+    if (g_cfg.enableVerboseLogging) {
+      shouldLogCaller = record.callerLogged.insert(caller).second;
     }
   }
 
-  if (program != 0) {
-    feed_uniforms_to_program(program);
+  if (shouldLogCaller) {
+    LOG_DEBUG("GL program bind{}: program={} {}", isArb ? " (ARB)" : "", program,
+              diagnostics::caller_summary(caller));
   }
+  if (shouldInspect) {
+    // This also discovers programs linked before probe installation. Detailed
+    // caller/symbol work remains strictly opt-in through verbose logging.
+    link_program_introspect(program, isArb, g_cfg.enableVerboseLogging);
+  }
+
+  feed_uniforms_to_program(program);
 }
 
 static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
@@ -691,8 +750,12 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
 
       g_dumpDir = dllDir / "iee-shader-dumps";
 
-      // Water textures (render thread, context current here).
-      (void)water::load_water_textures(dllDir / "iee-textures");
+      // Water textures (render thread, context current here). Keep them
+      // available for the optional F10 debug cycle even when the effect starts
+      // disabled, but skip all asset/GL work when neither path can use them.
+      if (cfg.enableWaterEffect || cfg.enableDebugHotkeys) {
+        (void)water::load_water_textures(dllDir / "iee-textures");
+      }
     }
 #else
     {
@@ -814,6 +877,9 @@ void uninstall_shader_probes() noexcept {
     g_overriddenPrograms.clear();
     g_dumpedShaders.clear();
     g_fboBindsLogged.clear();
+    g_waterOverrideActiveLogged = false;
+    g_waterOverrideMissingLogged = false;
+    g_programContext.store(nullptr, std::memory_order_release);
     g_shaderProbesInstalled = false;
     g_sweepPending.store(false, std::memory_order_relaxed);
   } catch (...) {
@@ -824,6 +890,14 @@ void uninstall_shader_probes() noexcept {
 void on_frame_tick(float secondsSinceStart) noexcept {
   try {
     uniforms::set_time(secondsSinceStart);
+    {
+      std::lock_guard lock(g_probeMutex);
+      if (!g_shaderProbesInstalled) return;
+    }
+
+    if (ensure_program_context()) {
+      g_sweepPending.store(true, std::memory_order_relaxed);
+    }
 
     // Deferred program sweep: runs at the frame boundary (SDL swap detour)
     // instead of mid-draw inside RenderTexture — no open engine batch, clean
