@@ -10,7 +10,7 @@ Each manifest carries:
 
 - Build identifier
 - Executable file version
-- Supported game labels
+- Supported executable product names
 - Pattern strings for `LoadArea` and `RenderTexture`
 - Reference RVAs for validation and diagnostics
 - Runtime offsets
@@ -34,9 +34,10 @@ That format is what allows `renderer.cpp` to resolve both `CALL rel32` and `JMP 
 
 Build id: `BGEE 2.6.6.x`
 
-Supported games:
+Supported executable product names (normalized for punctuation/case):
 
-- `BGEE`
+- `Baldur's Gate Enhanced Edition`
+- `Baldur's Gate`
 
 Reference RVAs (not runtime fallbacks):
 
@@ -71,11 +72,13 @@ If a new build cannot satisfy those checks, do not guess. Leave it unsupported a
 
 ## Version Gating And Self-Scanning
 
-The runtime identifies the executable by its fixed file version and refuses to
-install hooks unless that version has a known manifest and both hook signatures
-are unique within the executable's code sections. This is the intended default
-for unknown builds (e.g. BGEE 2.7): detect, report as unsupported, and leave
-the game untouched.
+The runtime identifies the executable by its fixed four-component file version
+and version-resource product name, then refuses to install hooks unless that
+identity has a known manifest and both hook signatures are unique within the
+executable's code sections. The current `2.6.6.x` manifest uses an explicit
+revision wildcard; future manifests can pin the fourth component. This is the
+intended default for unknown builds (e.g. BGEE 2.7): detect, report as
+unsupported, and leave the game untouched.
 
 The runtime cannot safely infer structure offsets and render callsites from an
 arbitrary future executable — a byte pattern can be present but semantically

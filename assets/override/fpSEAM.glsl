@@ -183,9 +183,38 @@ float ieeCoverageWithCenter(vec2 worldPos, float centerLiquid)
 	return cover / 5.0;
 }
 
+// A liquid cell surrounded by liquid cells cannot reach land through any of
+// the shore kernel's +/-52px taps. Prove that case from the eight neighboring
+// 64px WED cells and skip the more expensive 20-tap shoreline filter. The
+// result is identical for confirmed interior water; edge cells retain the
+// validated shoreline path below.
+bool ieeIsInteriorWater(vec2 worldPos, float centerCoverage)
+{
+	if (centerCoverage < 0.999)
+	{
+		return false;
+	}
+
+	const float cell = 64.0;
+	if (ieeLiquidAt(worldPos + vec2( cell, 0.0)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2(-cell, 0.0)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2(0.0,  cell)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2(0.0, -cell)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2( cell,  cell)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2(-cell,  cell)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2( cell, -cell)) < 0.5) { return false; }
+	if (ieeLiquidAt(worldPos + vec2(-cell, -cell)) < 0.5) { return false; }
+	return true;
+}
+
 // Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
 float ieeShoreFactor(vec2 worldPos, float centerCoverage)
 {
+	if (ieeIsInteriorWater(worldPos, centerCoverage))
+	{
+		return 0.0;
+	}
+
 	// centerCoverage was already computed for the contour gate. Reusing it
 	// removes another five mask fetches without changing the result.
 	float cover = centerCoverage * 2.0;

@@ -3,6 +3,9 @@
 #ifdef _WIN64
 #include <windows.h>
 
+#include <array>
+#include <cwchar>
+#include <limits>
 #include <vector>
 #endif
 
@@ -51,11 +54,92 @@ constexpr bool validate_pattern_format(std::string_view pattern) noexcept {
 
   return sawToken;
 }
+
+std::string normalize_product_name(std::string_view productName) {
+  std::string normalized;
+  normalized.reserve(productName.size());
+  for (const unsigned char ch : productName) {
+    if (ch >= 'A' && ch <= 'Z') {
+      normalized.push_back(static_cast<char>(ch - 'A' + 'a'));
+    } else if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+      normalized.push_back(static_cast<char>(ch));
+    }
+  }
+  return normalized;
+}
+
+#ifdef _WIN64
+std::string wide_to_utf8(std::wstring_view value) {
+  if (value.empty() || value.size() > static_cast<std::size_t>((std::numeric_limits<int>::max)())) {
+    return {};
+  }
+  const auto inputLength = static_cast<int>(value.size());
+  const int outputLength =
+      WideCharToMultiByte(CP_UTF8, 0, value.data(), inputLength, nullptr, 0, nullptr, nullptr);
+  if (outputLength <= 0) return {};
+  std::string output(static_cast<std::size_t>(outputLength), '\0');
+  if (WideCharToMultiByte(CP_UTF8, 0, value.data(), inputLength, output.data(), outputLength,
+                          nullptr, nullptr) != outputLength) {
+    return {};
+  }
+  return output;
+}
+
+std::string read_product_name(const std::vector<std::byte>& versionData) {
+  struct LanguageAndCodePage {
+    WORD language;
+    WORD codePage;
+  };
+
+  LanguageAndCodePage* translations = nullptr;
+  UINT translationBytes = 0;
+  std::array<LanguageAndCodePage, 3> fallbacks{{
+      {0x0409, 0x04B0},
+      {0x0409, 0x04E4},
+      {0x0000, 0x04B0},
+  }};
+  const LanguageAndCodePage* candidates = fallbacks.data();
+  std::size_t candidateCount = fallbacks.size();
+  if (VerQueryValueW(versionData.data(), L"\\VarFileInfo\\Translation",
+                     reinterpret_cast<void**>(&translations), &translationBytes) &&
+      translations && translationBytes >= sizeof(LanguageAndCodePage)) {
+    candidates = translations;
+    candidateCount = translationBytes / sizeof(LanguageAndCodePage);
+  }
+
+  const auto readField = [&](const wchar_t* fieldName) -> std::string {
+    for (std::size_t index = 0; index < candidateCount; ++index) {
+      wchar_t query[96]{};
+      if (swprintf_s(query, sizeof(query) / sizeof(query[0]),
+                     L"\\StringFileInfo\\%04x%04x\\%ls",
+                     static_cast<unsigned>(candidates[index].language),
+                     static_cast<unsigned>(candidates[index].codePage), fieldName) <= 0) {
+        continue;
+      }
+      wchar_t* value = nullptr;
+      UINT valueChars = 0;
+      if (!VerQueryValueW(versionData.data(), query, reinterpret_cast<void**>(&value),
+                          &valueChars) ||
+          !value || valueChars <= 1) {
+        continue;
+      }
+      std::size_t length = valueChars;
+      if (value[length - 1] == L'\0') --length;
+      if (auto utf8 = wide_to_utf8(std::wstring_view(value, length)); !utf8.empty()) return utf8;
+    }
+    return {};
+  };
+
+  if (auto productName = readField(L"ProductName"); !productName.empty()) return productName;
+  return readField(L"FileDescription");
+}
+#endif
+
 constexpr BuildManifest kKnownBuilds[] = {
     {
         "BGEE 2.6.6.x",
-        {"BGEE", ""},
-        {2, 6, 6},
+        {"Baldur's Gate Enhanced Edition", "Baldur's Gate"},
+        {2, 6, 6, ExecutableVersion::kAnyRevision},
         {
             "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 48 FD FF FF",
             "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
@@ -98,17 +182,29 @@ std::optional<std::reference_wrapper<const BuildManifest>> find_manifest(
 }
 
 std::optional<std::reference_wrapper<const BuildManifest>> find_manifest_for_version(
-    std::uint16_t major, std::uint16_t minor, std::uint16_t patch) noexcept {
+    std::uint16_t major, std::uint16_t minor, std::uint16_t patch,
+    std::uint16_t revision) noexcept {
   for (const auto& manifest : kKnownBuilds) {
-    if (manifest.executableVersion.matches(major, minor, patch)) {
+    if (manifest.executableVersion.matches(major, minor, patch, revision)) {
       return manifest;
     }
   }
   return std::nullopt;
 }
 
-const BuildManifest* detect_manifest(ExecutableVersion* detectedVersion) noexcept {
+bool supports_product_name(const BuildManifest& manifest, std::string_view productName) {
+  const auto normalizedCandidate = normalize_product_name(productName);
+  if (normalizedCandidate.empty()) return false;
+  for (const auto expected : manifest.supportedProductNames) {
+    if (!expected.empty() && normalize_product_name(expected) == normalizedCandidate) return true;
+  }
+  return false;
+}
+
+const BuildManifest* detect_manifest(ExecutableVersion* detectedVersion,
+                                     std::string* detectedProductName) noexcept {
   if (detectedVersion) *detectedVersion = {};
+  if (detectedProductName) detectedProductName->clear();
 #ifdef _WIN64
   try {
     wchar_t executablePath[MAX_PATH]{};
@@ -140,8 +236,12 @@ const BuildManifest* detect_manifest(ExecutableVersion* detectedVersion) noexcep
     const auto major = static_cast<std::uint16_t>(HIWORD(fixedInfo->dwFileVersionMS));
     const auto minor = static_cast<std::uint16_t>(LOWORD(fixedInfo->dwFileVersionMS));
     const auto patch = static_cast<std::uint16_t>(HIWORD(fixedInfo->dwFileVersionLS));
-    if (detectedVersion) *detectedVersion = {major, minor, patch};
-    if (const auto manifest = find_manifest_for_version(major, minor, patch)) {
+    const auto revision = static_cast<std::uint16_t>(LOWORD(fixedInfo->dwFileVersionLS));
+    if (detectedVersion) *detectedVersion = {major, minor, patch, revision};
+    const auto productName = read_product_name(versionData);
+    if (detectedProductName) *detectedProductName = productName;
+    if (const auto manifest = find_manifest_for_version(major, minor, patch, revision);
+        manifest && supports_product_name(manifest->get(), productName)) {
       return &manifest->get();
     }
     return nullptr;

@@ -174,12 +174,28 @@ if(IEE_BUILD_WINDOWS_DLL)
 
     set_target_properties(InfinityEngine-Enhancer PROPERTIES OUTPUT_NAME "InfinityEngine-Enhancer")
     iee_configure_target(InfinityEngine-Enhancer)
+    if(MSVC)
+        # Keep optimized release binaries while emitting a separate linker PDB
+        # for crash diagnosis. /DEBUG changes linker optimization defaults, so
+        # preserve dead-code/data folding explicitly.
+        target_compile_options(iee_common PRIVATE "$<$<CONFIG:Release>:/Zi>")
+        target_compile_options(InfinityEngine-Enhancer PRIVATE "$<$<CONFIG:Release>:/Zi>")
+        target_link_options(InfinityEngine-Enhancer PRIVATE
+            "$<$<CONFIG:Release>:/DEBUG:FULL>"
+            "$<$<CONFIG:Release>:/OPT:REF>"
+            "$<$<CONFIG:Release>:/OPT:ICF>"
+        )
+    endif()
 
     set(IEE_RELEASE_BUNDLE_DIR "${CMAKE_BINARY_DIR}/release-bundle")
+    set(IEE_SYMBOLS_DIR "${CMAKE_BINARY_DIR}/symbols")
     add_custom_target(release_bundle
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_RELEASE_BUNDLE_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_RELEASE_BUNDLE_DIR}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:InfinityEngine-Enhancer>" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.dll"
+        COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_PDB_FILE:InfinityEngine-Enhancer>" "${IEE_SYMBOLS_DIR}/InfinityEngine-Enhancer.pdb"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/override" "${IEE_RELEASE_BUNDLE_DIR}/override"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/override/M_IEEE.lua"

@@ -29,6 +29,14 @@ const char* error_string(unsigned error_code) noexcept {
   }
 }
 
+void discard_errors(unsigned maximumErrors) noexcept {
+  const auto& gl = get_gl_functions();
+  if (!gl.glGetError) return;
+  for (unsigned errorCount = 0; errorCount < maximumErrors; ++errorCount) {
+    if (gl.glGetError() == GL_NO_ERROR) return;
+  }
+}
+
 bool check_error(const char* operation) noexcept {
   const auto& gl = get_gl_functions();
   if (!gl.glGetError) return false;

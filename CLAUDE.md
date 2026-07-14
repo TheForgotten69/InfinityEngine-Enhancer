@@ -70,4 +70,6 @@ Operational instructions for AI coding agents working in this repository.
 - Host-side tests pass.
 - Windows-only build changes are guarded so WSL does not wander into MinHook or `windows.h` failures.
 - Trade-offs and remaining Windows-only validation gaps are called out explicitly.
-- Do not claim generalized build detection yet. The manifest layer is data-driven, but manifest selection is still effectively pinned to the currently validated BGEE build until explicit version/build probing is added.
+- Do not claim generalized build support. Selection checks the four-component
+  file version and product identity, but the only validated manifest remains
+  BGEE `2.6.6.x` until additional builds complete the documented validation.

@@ -26,8 +26,6 @@ struct AppContext {
   std::atomic<std::shared_ptr<const game::WedAreaInfo>> wed{};
   game::ResrefBuffer lastLoggedWedArea{};
 
-  std::atomic<bool> isRenderHookActive{false};
-
   void reset_area_state() {
     activeArea.store(nullptr);
     wed.store(std::shared_ptr<const game::WedAreaInfo>{});
@@ -36,7 +34,6 @@ struct AppContext {
 
   void reset_all_state() {
     reset_area_state();
-    isRenderHookActive.store(false, std::memory_order_relaxed);
   }
 };
 }  // namespace iee

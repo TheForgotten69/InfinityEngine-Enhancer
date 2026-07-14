@@ -158,13 +158,6 @@ int full_mip_count(std::uint32_t width, std::uint32_t height) noexcept {
   return count;
 }
 
-void discard_stale_gl_errors(const game::gl::OpenGLFunctions& gl) noexcept {
-  if (!gl.glGetError) return;
-  for (int errorCount = 0; errorCount < 16; ++errorCount) {
-    if (gl.glGetError() == game::gl::GL_NO_ERROR) return;
-  }
-}
-
 bool upload_to_unit(const TextureAsset& asset, unsigned unit, unsigned& texture) {
   auto& gl = game::gl::get_gl_functions();
   if (!gl.textureUploadAvailable) {
@@ -252,7 +245,7 @@ bool upload_all_to_current_context() {
                             game::texture_units::WaterFoam});
   // Do not attribute an error left by preceding engine work to the first DDS
   // upload and then suppress retries for the lifetime of this GL context.
-  discard_stale_gl_errors(gl);
+  game::gl::discard_errors();
   for (std::size_t index = 0; index < kEntries.size(); ++index) {
     if (!upload_to_unit(g_assets[index], kEntries[index].unit, g_textures[index])) {
       g_uploaded = false;
@@ -269,12 +262,10 @@ bool upload_all_to_current_context() {
 }
 }  // namespace
 
-bool load_water_textures(const std::filesystem::path& dir) {
+bool prepare_water_textures(const std::filesystem::path& dir) {
   try {
     std::lock_guard lock(g_textureMutex);
-    if (g_assetsLoaded) {
-      return upload_all_to_current_context();
-    }
+    if (g_assetsLoaded) return true;
     std::array<TextureAsset, kEntries.size()> decoded;
     for (std::size_t index = 0; index < kEntries.size(); ++index) {
       if (!read_texture_asset(dir, kEntries[index], decoded[index])) {
@@ -288,12 +279,25 @@ bool load_water_textures(const std::filesystem::path& dir) {
     }
     g_assets = std::move(decoded);
     g_assetsLoaded = true;
-    return upload_all_to_current_context();
+    return true;
   } catch (const std::exception& e) {
-    LOG_ERROR("Water texture initialization failed: {}", e.what());
+    LOG_ERROR("Water texture preparation failed: {}", e.what());
     return false;
   } catch (...) {
-    LOG_ERROR("Water texture initialization failed with an unknown exception");
+    LOG_ERROR("Water texture preparation failed with an unknown exception");
+    return false;
+  }
+}
+
+bool upload_water_textures() {
+  try {
+    std::lock_guard lock(g_textureMutex);
+    return upload_all_to_current_context();
+  } catch (const std::exception& e) {
+    LOG_ERROR("Water texture upload failed: {}", e.what());
+    return false;
+  } catch (...) {
+    LOG_ERROR("Water texture upload failed with an unknown exception");
     return false;
   }
 }

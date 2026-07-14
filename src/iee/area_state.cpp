@@ -37,6 +37,8 @@ struct AreaGpuSnapshot {
 std::mutex g_areaGpuMutex;
 std::shared_ptr<const AreaGpuSnapshot> g_latestAreaGpu;
 std::atomic<std::uint64_t> g_nextAreaGpuGeneration{1};
+std::mutex g_areaRefreshCommitMutex;
+std::atomic<std::uint64_t> g_areaRefreshGeneration{0};
 
 // Render-thread-owned GL state.
 unsigned g_areaTexture{};
@@ -55,6 +57,11 @@ void queue_area_gpu_snapshot(game::AreaCellTexture texture, std::array<float, 3>
   std::lock_guard lock(g_areaGpuMutex);
   snapshot->generation = g_nextAreaGpuGeneration.fetch_add(1, std::memory_order_relaxed);
   g_latestAreaGpu = std::move(snapshot);
+}
+
+void queue_no_liquid_snapshot() {
+  game::AreaCellTexture noLiquid{.width = 1, .height = 1, .texels = {0}};
+  queue_area_gpu_snapshot(std::move(noLiquid), {0.5f, 0.5f, 0.5f});
 }
 
 const game::CGameArea* read_loaded_area_candidate(const game::CGameArea* candidate) {
@@ -161,9 +168,28 @@ bool read_view_transform(const game::CGameArea* area, ViewTransform& out) {
 }
 
 void refresh_wed_cache(AppContext& ctx, void* infGame) {
-  reset_gpu_area_state();
-  ctx.activeArea.store(nullptr);
-  ctx.wed.store(std::shared_ptr<const game::WedAreaInfo>{});
+  std::uint64_t refreshGeneration = 0;
+  {
+    // Start and commit use the same short critical section. If load/render
+    // callbacks overlap, an older parse can never publish after a newer one.
+    std::lock_guard commitLock(g_areaRefreshCommitMutex);
+    refreshGeneration = g_areaRefreshGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
+    queue_no_liquid_snapshot();
+    ctx.activeArea.store(nullptr);
+    ctx.wed.store(std::shared_ptr<const game::WedAreaInfo>{});
+  }
+
+  const auto resetIfCurrent = [&]() noexcept {
+    try {
+      std::lock_guard commitLock(g_areaRefreshCommitMutex);
+      if (g_areaRefreshGeneration.load(std::memory_order_acquire) != refreshGeneration) return;
+      queue_no_liquid_snapshot();
+      ctx.activeArea.store(nullptr);
+      ctx.wed.store(std::shared_ptr<const game::WedAreaInfo>{});
+    } catch (...) {
+      // Preserve the previous immutable snapshot on allocation failure.
+    }
+  };
 
   try {
     const auto* area = resolve_active_area(infGame, *ctx.manifest);
@@ -206,29 +232,7 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
     }
 
     const auto liquidMask = game::liquid_overlay_mask(wed);
-    auto wedSnapshot = std::make_shared<const game::WedAreaInfo>(std::move(wed));
-    ctx.activeArea.store(area);
-    ctx.wed.store(std::move(wedSnapshot));
-    const auto cachedWed = ctx.wed.load();
-
-    if (!same_resref(cachedWed->areaResrefView(), ctx.lastLoggedWedArea)) {
-      LOG_INFO("Loaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
-               cachedWed->areaResrefView(), cachedWed->overlayCount, cachedWed->baseWidth,
-               cachedWed->baseHeight, liquidMask);
-      for (std::size_t i = 1; i < cachedWed->overlays.size() && i <= 7; ++i) {
-        const auto& overlay = cachedWed->overlays[i];
-        if (overlay.tilesetResrefView().empty()) {
-          continue;
-        }
-        LOG_DEBUG("WED overlay {}: tileset={}, mode={}, cells={}", i, overlay.tilesetResrefView(),
-                  game::tile_liquid_mode_name(overlay.liquidMode), overlay.coverageCells);
-      }
-      ctx.lastLoggedWedArea = cachedWed->areaResref;
-    } else {
-      LOG_DEBUG("Reloaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
-                cachedWed->areaResrefView(), cachedWed->overlayCount, cachedWed->baseWidth,
-                cachedWed->baseHeight, liquidMask);
-    }
+    auto cachedWed = std::make_shared<const game::WedAreaInfo>(std::move(wed));
 
     auto packed = game::pack_area_liquid_texture(*cachedWed);
     if (!packed) {
@@ -242,6 +246,7 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
     // LoadArea prepares CPU data only; the render thread owns every GL upload.
     double tintSum[3] = {0.0, 0.0, 0.0};
     std::size_t tintTiles = 0;
+    std::size_t tintOpaquePixels = 0;
     std::array<game::CInfTileSet*, 5> tileSets{};
     const auto* tileSetsAddress =
         areaBytes + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, pTileSets);
@@ -268,16 +273,22 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
 
       game::CRes tileRes{};
       if (!core::safe_read(tileResPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
-          tileRes.nSize < game::kPaletteTileBytes ||
-          !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
+          tileRes.nSize < game::kPaletteTileBytes) {
         return false;
       }
 
-      if (const auto average = game::palette_tile_average_color(
-              static_cast<const std::uint8_t*>(tileRes.pData), tileRes.nSize)) {
-        tintSum[0] += (*average)[0];
-        tintSum[1] += (*average)[1];
-        tintSum[2] += (*average)[2];
+      // Work from one stable local snapshot. is_readable() proves page access,
+      // not object lifetime, and repeatedly traversing mutable engine memory
+      // while calculating a palette average would widen that race window.
+      std::array<std::uint8_t, game::kPaletteTileBytes> tileBytes{};
+      if (!core::safe_read(tileRes.pData, tileBytes)) return false;
+      if (const auto average =
+              game::palette_tile_average_color(tileBytes.data(), tileBytes.size())) {
+        const auto weight = static_cast<double>(average->opaquePixelCount);
+        tintSum[0] += average->linearRgb[0] * weight;
+        tintSum[1] += average->linearRgb[1] * weight;
+        tintSum[2] += average->linearRgb[2] * weight;
+        tintOpaquePixels += average->opaquePixelCount;
         ++tintTiles;
         return true;
       }
@@ -301,34 +312,73 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
     }
 
     std::array<float, 3> waterTint{0.5f, 0.5f, 0.5f};
-    if (tintTiles > 0) {
-      const auto inverse = 1.0 / static_cast<double>(tintTiles);
+    if (tintOpaquePixels > 0) {
+      const auto inverse = 1.0 / static_cast<double>(tintOpaquePixels);
       waterTint = {static_cast<float>(tintSum[0] * inverse),
                    static_cast<float>(tintSum[1] * inverse),
                    static_cast<float>(tintSum[2] * inverse)};
-      LOG_INFO("Area liquid tint: ({:.3f}, {:.3f}, {:.3f}) from {} authored tiles", waterTint[0],
-               waterTint[1], waterTint[2], tintTiles);
     }
 
-    LOG_INFO("Area liquid mask prepared: {}x{} cells, {} tint candidates tried", packed->width,
-             packed->height, tintAttempts);
+    game::CResWED* currentWedPointer = nullptr;
+    if (resolve_active_area(infGame, *ctx.manifest) != area || !read_loaded_area_candidate(area) ||
+        !core::safe_read(areaBytes + offsetof(game::CGameArea, m_pResWED), currentWedPointer) ||
+        currentWedPointer != wedPointer) {
+      LOG_DEBUG("Discarding WED refresh because the active area resource changed during parsing");
+      return;
+    }
+
+    std::lock_guard commitLock(g_areaRefreshCommitMutex);
+    if (g_areaRefreshGeneration.load(std::memory_order_acquire) != refreshGeneration) {
+      LOG_DEBUG("Discarding stale WED refresh generation {}", refreshGeneration);
+      return;
+    }
+
+    const int packedWidth = packed->width;
+    const int packedHeight = packed->height;
     queue_area_gpu_snapshot(std::move(*packed), waterTint);
+    ctx.activeArea.store(area);
+    ctx.wed.store(cachedWed);
+    if (!same_resref(cachedWed->areaResrefView(), ctx.lastLoggedWedArea)) {
+      LOG_INFO("Loaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
+               cachedWed->areaResrefView(), cachedWed->overlayCount, cachedWed->baseWidth,
+               cachedWed->baseHeight, liquidMask);
+      for (std::size_t i = 1; i < cachedWed->overlays.size() && i <= 7; ++i) {
+        const auto& overlay = cachedWed->overlays[i];
+        if (overlay.tilesetResrefView().empty()) continue;
+        LOG_DEBUG("WED overlay {}: tileset={}, mode={}, cells={}", i, overlay.tilesetResrefView(),
+                  game::tile_liquid_mode_name(overlay.liquidMode), overlay.coverageCells);
+      }
+      ctx.lastLoggedWedArea = cachedWed->areaResref;
+    } else {
+      LOG_DEBUG("Reloaded WED {}: overlays={}, base={}x{}, liquidOverlayMask=0x{:02X}",
+                cachedWed->areaResrefView(), cachedWed->overlayCount, cachedWed->baseWidth,
+                cachedWed->baseHeight, liquidMask);
+    }
+    if (tintOpaquePixels > 0) {
+      LOG_INFO(
+          "Area liquid tint: ({:.3f}, {:.3f}, {:.3f}) from {} opaque pixels across {} authored "
+          "tiles",
+          waterTint[0], waterTint[1], waterTint[2], tintOpaquePixels, tintTiles);
+    }
+    LOG_INFO("Area liquid mask prepared: {}x{} cells, {} tint candidates tried", packedWidth,
+             packedHeight, tintAttempts);
   } catch (const std::exception& e) {
     LOG_ERROR("Area WED refresh failed: {}", e.what());
-    reset_gpu_area_state();
+    resetIfCurrent();
   } catch (...) {
     LOG_ERROR("Area WED refresh failed with an unknown exception");
-    reset_gpu_area_state();
+    resetIfCurrent();
   }
 }
 
 void reset_gpu_area_state() noexcept {
   try {
-    game::AreaCellTexture noLiquid{.width = 1, .height = 1, .texels = {0}};
-    queue_area_gpu_snapshot(std::move(noLiquid), {0.5f, 0.5f, 0.5f});
+    std::lock_guard commitLock(g_areaRefreshCommitMutex);
+    g_areaRefreshGeneration.fetch_add(1, std::memory_order_acq_rel);
+    queue_no_liquid_snapshot();
   } catch (...) {
-    // The previous generation remains valid; the draw gate stays off
-    // until another refresh can publish a complete generation.
+    // The previous immutable GPU snapshot remains valid until another
+    // transition or refresh can publish a complete generation.
   }
 }
 
@@ -366,6 +416,9 @@ bool flush_pending_gpu_upload() noexcept {
     };
 
     core::GlStateGuard guard({game::texture_units::AreaMask});
+    // The engine may leave an unrelated error pending. Do not attribute it to
+    // this upload and latch the area generation as failed for the context.
+    game::gl::discard_errors();
     if (g_areaTexture == 0) gl.glGenTextures(1, &g_areaTexture);
     gl.glActiveTexture(game::gl::TEXTURE0 + game::texture_units::AreaMask);
     gl.glBindTexture(game::gl::TEXTURE_2D, g_areaTexture);

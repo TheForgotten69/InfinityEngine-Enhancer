@@ -62,7 +62,9 @@ namespace iee::core {
                                std::size_t disp_offset,
                                std::size_t size);
 
-    // Best-effort readable check (Windows). Returns false if unreadable.
+    // Best-effort readable-page check (Windows). This does not prove that an
+    // engine object is still alive or unchanged; callers must validate object
+    // identity, bounds, and generation where those facts matter.
     bool is_readable(const void *p, std::size_t len);
 
     // Readability results are cached only within an engine frame/area epoch.

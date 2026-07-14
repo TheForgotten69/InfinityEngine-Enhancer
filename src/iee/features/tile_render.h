@@ -62,11 +62,9 @@ void request_tile_render_state_reset() noexcept;
 
 // Tile upscale render path. Returns true if it fully handled the draw;
 // false means the caller must invoke the original RenderTexture.
-// Never calls the original itself; hook enable/disable stays with the dispatcher,
-// which must check should_disable_render_hook() after each call.
+// Never calls the original itself; the dispatcher remains installed for the
+// area so modded overlays encountered after a standard base can still be
+// classified independently.
 bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x, int y,
                  unsigned long flags);
-
-bool should_disable_render_hook() noexcept;
-void clear_disable_request() noexcept;
 }  // namespace iee::features

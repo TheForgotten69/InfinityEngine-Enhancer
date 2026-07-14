@@ -43,6 +43,23 @@ namespace iee::core {
             enabled_ = true;
         }
 
+        // Queue several hooks and apply them with one MinHook thread-freeze
+        // cycle. finish_queued_enable() must be called after MH_ApplyQueued,
+        // including on a failed apply so teardown conservatively disables any
+        // hook MinHook may have applied before reporting the failure.
+        void queue_enable() {
+            if (!created_ || enabled_ || enableQueued_) return;
+            const auto st = MH_QueueEnableHook(target_);
+            if (st != MH_OK) throw std::runtime_error("MH_QueueEnableHook failed");
+            enableQueued_ = true;
+        }
+
+        void finish_queued_enable() noexcept {
+            if (!enableQueued_) return;
+            enabled_ = true;
+            enableQueued_ = false;
+        }
+
         bool disable() noexcept {
             if (!created_ || !enabled_) return true;
             const auto status = MH_DisableHook(target_);
@@ -59,6 +76,8 @@ namespace iee::core {
             target_ = nullptr;
             original_ = nullptr;
             created_ = false;
+            enabled_ = false;
+            enableQueued_ = false;
             return true;
         }
 
@@ -85,6 +104,8 @@ namespace iee::core {
             o.created_ = false;
             enabled_ = o.enabled_;
             o.enabled_ = false;
+            enableQueued_ = o.enableQueued_;
+            o.enableQueued_ = false;
             return *this;
         }
 
@@ -93,5 +114,6 @@ namespace iee::core {
         T original_ = nullptr;
         bool created_ = false;
         bool enabled_ = false;
+        bool enableQueued_ = false;
     };
 } // namespace iee::core

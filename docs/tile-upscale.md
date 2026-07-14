@@ -48,12 +48,10 @@ The cache accepts 16 tilesets per area (the WED format exposes at most eight
 layers). Additional resources fail closed to the engine renderer instead of
 growing memory without a bound.
 
-The fast-disable optimization still assumes the engine's observed ordering:
-the base tileset is seen before overlays. A confirmed standard base disables
-the render hook for that area. Supporting arbitrary mod content that presents a
-standard tileset first and a 4x tileset later would require keeping the
-dispatcher installed; that broader case is not implemented because it is not a
-known engine path.
+The dispatcher remains installed for the area after a standard tileset is
+confirmed. This costs the thin decode/delegate path on standard areas, but it
+allows arbitrary mod content to present a standard base first and an upscaled
+overlay later without making the overlay undiscoverable.
 
 ## Area Scope
 
@@ -61,7 +59,8 @@ Cache lifetime is area-scoped; scale decisions are tileset-scoped.
 
 - `LoadArea` resets the cached decision.
 - The first `RenderTexture` calls for each observed tileset classify that tileset.
-- Once a standard area is confirmed, the render hook disables itself for that area to avoid unnecessary overhead.
+- Standard tilesets delegate immediately after classification while the hook
+  continues observing distinct later tilesets.
 
 ## Render Path
 

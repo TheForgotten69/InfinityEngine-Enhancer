@@ -230,18 +230,11 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
     core::advance_readability_cache_epoch();
     LOG_DEBUG("LoadArea called - resetting scale detection for new area");
     ctx.infGame.store(thisPtr, std::memory_order_relaxed);
-    ctx.reset_area_state();
+    // Invalidate any older refresh before clearing its published CPU state.
     area::reset_gpu_area_state();
+    ctx.reset_area_state();
     features::request_tile_render_state_reset();
     game::request_texture_configuration_cache_reset();
-    features::clear_disable_request();
-
-    // Re-enable RenderTexture hook for new area detection.
-    if (!ctx.isRenderHookActive.load(std::memory_order_relaxed)) {
-      g_renderTextureHook.enable();
-      ctx.isRenderHookActive.store(true, std::memory_order_relaxed);
-      LOG_DEBUG("Re-enabled RenderTexture hook for new area detection");
-    }
   } catch (const std::exception& e) {
     LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path: {}", e.what());
   } catch (...) {
@@ -313,18 +306,6 @@ static void detour_render_texture(void* thisPtr, int texId, void* unused, int x,
   if (!handled) {
     original(thisPtr, texId, unused, x, y, flags);
   }
-
-  // The dispatcher owns hook lifetime. Disable only after the current draw
-  // has completed through either the enhanced path or the trampoline.
-  if (features::should_disable_render_hook()) {
-    features::clear_disable_request();
-    if (g_renderTextureHook.disable()) {
-      ctx.isRenderHookActive.store(false, std::memory_order_relaxed);
-      LOG_DEBUG("RenderTexture hook disabled on feature request");
-    } else {
-      LOG_WARN("Failed to disable RenderTexture hook");
-    }
-  }
 }
 
 bool install_all(AppContext& ctx) {
@@ -375,8 +356,6 @@ bool install_all(AppContext& ctx) {
     g_renderTextureHook.enable();
     LOG_INFO("RenderTexture hook enabled");
 
-    ctx.isRenderHookActive.store(true, std::memory_order_relaxed);
-
     LOG_INFO("All hooks installed successfully");
     LOG_INFO("LoadArea: 0x{:X}", ctx.addrs.LoadArea);
     LOG_INFO("RenderTexture: 0x{:X}", ctx.addrs.RenderTexture);
@@ -425,9 +404,6 @@ void uninstall_all() noexcept {
 }
 
 void prepare_for_shutdown() noexcept {
-  if (g_ctx) {
-    g_ctx->isRenderHookActive.store(false, std::memory_order_relaxed);
-  }
   // Quiesce engine entry points before dependent frame/GL hooks and shared
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
@@ -442,5 +418,13 @@ bool is_active() {
   // The RenderTexture hook is intentionally disabled on standard-resolution
   // areas while the DLL, area hooks, and shader features remain active.
   return g_ctx != nullptr;
+}
+
+void retry_shader_probe_install() noexcept {
+  try {
+    if (g_ctx) install_shader_probes_once();
+  } catch (...) {
+    // A frame boundary must never depend on optional shader-probe setup.
+  }
 }
 }  // namespace iee::hooks
