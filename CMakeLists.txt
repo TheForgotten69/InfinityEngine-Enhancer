@@ -184,10 +184,12 @@ if(IEE_BUILD_WINDOWS_DLL)
     install(TARGETS InfinityEngine-Enhancer RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(
         FILES
-            "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua"
             "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini"
         DESTINATION .
     )
+    install(FILES "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" DESTINATION override)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/override/" DESTINATION override)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/game-textures/" DESTINATION iee-textures)
 else()
     message(STATUS "Windows DLL target disabled on this host; building iee_common and tests only.")
 endif()

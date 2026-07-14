@@ -46,12 +46,24 @@ static DWORD WINAPI InitThread(LPVOID) {
 
   try {
     const auto cfgPath = core::ConfigManager::config_path();
-    core::EngineConfig cfg = core::ConfigManager::load_or_default();
+    core::ConfigLoadDiagnostics configDiagnostics{};
+    core::EngineConfig cfg = core::ConfigManager::load_or_default(&configDiagnostics);
+    core::set_readability_stats_enabled(cfg.enablePerformanceLogging);
 
     auto logPath = cfgPath.parent_path() / LOG_FILE;
     core::init_logger(logPath.string(), cfg.enableVerboseLogging);
 
     LOG_INFO("Infinity Engine Enhancer initializing...");
+    if (configDiagnostics.fileExisted && !configDiagnostics.loadSucceeded) {
+      LOG_WARN("Could not read {}; built-in defaults are active", cfgPath.filename().string());
+    } else if (!configDiagnostics.fileExisted && !configDiagnostics.defaultFileWritten) {
+      LOG_WARN("Could not create {}; built-in defaults are active", cfgPath.filename().string());
+    }
+    if (configDiagnostics.invalidValues != 0 || configDiagnostics.malformedLines != 0) {
+      LOG_WARN("Configuration retained defaults for {} invalid values and ignored {} malformed "
+               "lines",
+               configDiagnostics.invalidValues, configDiagnostics.malformedLines);
+    }
 
     g_appContext = std::make_unique<AppContext>();
     auto& ctx = *g_appContext;
@@ -102,7 +114,7 @@ static DWORD WINAPI InitThread(LPVOID) {
 
     // Frame boundary: SDL2 export, available without a GL context.
     // Failure is non-fatal (time-driven shader effects stay at t=0).
-    (void)frame::install();
+    (void)frame::install(ctx.cfg.enablePerformanceLogging);
 
     LOG_DEBUG("Installation complete");
 

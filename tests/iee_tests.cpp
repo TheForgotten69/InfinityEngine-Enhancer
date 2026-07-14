@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -11,10 +12,12 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
 #include "iee/game/area_texture.h"
 #include "iee/game/build_manifest.h"
@@ -353,13 +356,41 @@ void test_config_numeric_bounds() {
     out << "[Rendering]\n";
     out << "MaxAnisotropy = 1000\n";
     out << "LODBias = nan\n";
+    out << "LODBias = 0.5junk\n";
   }
 
   iee::core::EngineConfig cfg{};
-  expect_true(iee::core::ConfigManager::load(tempPath, cfg),
+  iee::core::ConfigLoadDiagnostics diagnostics{};
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg, &diagnostics),
               "ConfigManager::load should accept and normalize numeric input");
   expect_eq(cfg.maxAnisotropy, 64.0f, "Anisotropy should be clamped to a safe bound");
   expect_eq(cfg.lodBias, -0.25f, "Non-finite LOD bias should use the default");
+  expect_eq(diagnostics.invalidValues, std::size_t{2},
+            "Invalid numeric values should be reported to the bootstrap logger");
+
+  std::error_code error;
+  std::filesystem::remove(tempPath, error);
+}
+
+void test_config_reports_malformed_values() {
+  const auto tempPath =
+      std::filesystem::current_path() / "InfinityEngine-Enhancer-invalid-test.ini";
+  {
+    std::ofstream out(tempPath, std::ios::trunc);
+    out << "[Core]\n";
+    out << "VerboseLogs = perhaps\n";
+    out << "this line has no equals sign\n";
+  }
+
+  iee::core::EngineConfig cfg{};
+  iee::core::ConfigLoadDiagnostics diagnostics{};
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg, &diagnostics),
+              "Readable config files should keep valid/default values");
+  expect_true(!cfg.enableVerboseLogging, "Invalid bool should retain its safe default");
+  expect_eq(diagnostics.invalidValues, std::size_t{1},
+            "Invalid bool should be counted for post-init diagnostics");
+  expect_eq(diagnostics.malformedLines, std::size_t{1},
+            "Malformed lines should be counted for post-init diagnostics");
 
   std::error_code error;
   std::filesystem::remove(tempPath, error);
@@ -371,6 +402,25 @@ void test_config_shader_override_defaults() {
   expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
   expect_true(cfg.enableWaterEffect, "water effect defaults ON");
   expect_true(!cfg.enablePerformanceLogging, "performance logs default off");
+}
+
+void test_performance_sample_summary() {
+  iee::core::PerformanceSamples<4> samples;
+  samples.add(4.0);
+  samples.add(1.0);
+  samples.add(3.0);
+  samples.add(2.0);
+  samples.add(99.0);
+
+  const auto summary = samples.summarize();
+  expect_eq(summary.count, std::size_t{4}, "Performance samples should stay bounded");
+  expect_eq(summary.dropped, std::size_t{1}, "Overflow samples should be reported");
+  expect_eq(summary.average, 2.5, "Performance sample average should be exact");
+  expect_eq(summary.percentile95, 4.0, "Nearest-rank index should report the bounded p95");
+  expect_eq(summary.maximum, 4.0, "Performance sample maximum should be retained");
+
+  samples.reset();
+  expect_eq(samples.summarize().count, std::size_t{0}, "Reset should clear the sample window");
 }
 
 void test_config_shader_override_roundtrip() {
@@ -668,18 +718,16 @@ void test_parse_loaded_wed() {
   expect_eq(liquid_overlay_mask(wed), std::uint8_t{0x02},
             "Liquid overlay mask should expose overlay bit");
 
-  expect_true(wed.overlays[0].cellTileIndex.empty(),
-              "Base overlay should not carry per-cell tile indices");
-  expect_eq(wed.overlays[1].cellTileIndex.size(), std::size_t{4},
-            "Liquid overlay should carry one tile index per overlay cell");
-  expect_eq(wed.overlays[1].cellTileIndex[0], std::uint16_t{24},
+  expect_true(wed.overlays[0].tintTileCandidates.empty(),
+              "Base overlay should not carry tint tile candidates");
+  expect_eq(wed.overlays[1].tintTileCandidates.size(), std::size_t{3},
+            "Liquid overlay should carry bounded unique tint candidates");
+  expect_eq(wed.overlays[1].tintTileCandidates[0], std::uint16_t{24},
             "Cell 0 tile index should resolve through the tile-index lookup");
-  expect_eq(wed.overlays[1].cellTileIndex[1], std::uint16_t{21},
+  expect_eq(wed.overlays[1].tintTileCandidates[1], std::uint16_t{21},
             "Cell 1 tile index should resolve through the tile-index lookup");
-  expect_eq(wed.overlays[1].cellTileIndex[2], std::uint16_t{23},
+  expect_eq(wed.overlays[1].tintTileCandidates[2], std::uint16_t{23},
             "Cell 2 tile index should resolve through the tile-index lookup");
-  expect_eq(wed.overlays[1].cellTileIndex[3], std::uint16_t{0xFFFF},
-            "Out-of-bounds lookup entries should stay 0xFFFF");
 
   auto tooManyLayers = bytes;
   auto invalidHeader = header;
@@ -705,6 +753,65 @@ void test_parse_loaded_wed() {
   resource.nSize = static_cast<std::uint32_t>(tilemapOffset + 3 * sizeof(WED_TileData_st));
   expect_true(!parse_loaded_wed(resource, wed),
               "A truncated base tilemap should fail instead of returning partial data");
+}
+
+void test_wed_tint_candidates_are_bounded() {
+  using namespace iee::game;
+
+  constexpr std::size_t cellCount = kMaxTintTileCandidatesPerOverlay + 1;
+  constexpr std::size_t layerOffset = sizeof(WED_WedHeader_st);
+  constexpr std::size_t baseTilemapOffset = layerOffset + 2 * sizeof(WED_LayerHeader_st);
+  constexpr std::size_t overlayTilemapOffset =
+      baseTilemapOffset + cellCount * sizeof(WED_TileData_st);
+  constexpr std::size_t lookupOffset =
+      overlayTilemapOffset + cellCount * sizeof(WED_TileData_st);
+  std::vector<std::byte> bytes(lookupOffset + cellCount * sizeof(std::uint16_t));
+
+  WED_WedHeader_st header{};
+  header.nFileType = 0x20444557;
+  header.nFileVersion = 0x332E3156;
+  header.nLayers = 2;
+  header.nOffsetToLayerHeaders = static_cast<std::uint32_t>(layerOffset);
+  write_bytes(bytes, 0, &header, sizeof(header));
+
+  WED_LayerHeader_st baseLayer{};
+  baseLayer.nTilesAcross = static_cast<std::uint16_t>(cellCount);
+  baseLayer.nTilesDown = 1;
+  baseLayer.nOffsetToTileData = static_cast<std::uint32_t>(baseTilemapOffset);
+  write_bytes(bytes, layerOffset, &baseLayer, sizeof(baseLayer));
+
+  WED_LayerHeader_st overlayLayer{};
+  overlayLayer.nTilesAcross = static_cast<std::uint16_t>(cellCount);
+  overlayLayer.nTilesDown = 1;
+  overlayLayer.rrTileSet = {'W', 'T', 'W', 'A', 'V', 'E', '0', '1'};
+  overlayLayer.nOffsetToTileData = static_cast<std::uint32_t>(overlayTilemapOffset);
+  overlayLayer.nOffsetToTileList = static_cast<std::uint32_t>(lookupOffset);
+  write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &overlayLayer,
+              sizeof(overlayLayer));
+
+  std::vector<WED_TileData_st> baseTiles(cellCount);
+  std::vector<WED_TileData_st> overlayTiles(cellCount);
+  std::vector<std::uint16_t> lookup(cellCount);
+  for (std::size_t index = 0; index < cellCount; ++index) {
+    baseTiles[index].bFlags = 0x02;
+    overlayTiles[index].nStartingTile = static_cast<std::uint16_t>(index);
+    lookup[index] = static_cast<std::uint16_t>(index);
+  }
+  write_bytes(bytes, baseTilemapOffset, baseTiles.data(), baseTiles.size() * sizeof(baseTiles[0]));
+  write_bytes(bytes, overlayTilemapOffset, overlayTiles.data(),
+              overlayTiles.size() * sizeof(overlayTiles[0]));
+  write_bytes(bytes, lookupOffset, lookup.data(), lookup.size() * sizeof(lookup[0]));
+
+  CRes resource{};
+  resource.pData = bytes.data();
+  resource.nSize = static_cast<std::uint32_t>(bytes.size());
+  resource.bLoaded = true;
+  WedAreaInfo wed{};
+  expect_true(parse_loaded_wed(resource, wed), "Bounded-candidate WED fixture should parse");
+  if (wed.overlays.size() > 1) {
+    expect_eq(wed.overlays[1].tintTileCandidates.size(), kMaxTintTileCandidatesPerOverlay,
+              "Liquid tint candidates must stop at the fixed memory bound");
+  }
 }
 
 void test_decode_palette_tile_alpha() {
@@ -746,7 +853,8 @@ void test_decode_palette_tile_alpha() {
   expect_true(!decode_palette_tile_alpha(nullptr, kPaletteTileBytes).has_value(),
               "Null buffers should not decode");
 
-  // Average opaque color: half pure red, half pure blue -> (0.5, 0, 0.5).
+  // Average opaque color in linear light: half pure red, half pure blue ->
+  // (0.5, 0, 0.5).
   std::vector<std::uint8_t> colorTile(kPaletteTileBytes, 0);
   colorTile[2 * 4 + 2] = 255;  // entry 2: red (BGRA)
   colorTile[3 * 4 + 0] = 255;  // entry 3: blue
@@ -759,6 +867,21 @@ void test_decode_palette_tile_alpha() {
   if (avg) {
     expect_true((*avg)[0] == 0.5f && (*avg)[1] == 0.0f && (*avg)[2] == 0.5f,
                 "Average color should be the exact opaque-pixel mean");
+  }
+  // Mid-grey is encoded sRGB. A linear-light average must decode it before
+  // feeding shader math rather than returning 128/255 (~0.502).
+  std::vector<std::uint8_t> greyTile(kPaletteTileBytes, 0);
+  greyTile[4] = 128;
+  greyTile[5] = 128;
+  greyTile[6] = 128;
+  std::fill(greyTile.begin() + 1024, greyTile.end(), std::uint8_t{1});
+  const auto grey = palette_tile_average_color(greyTile.data(), greyTile.size());
+  expect_true(grey.has_value(), "Opaque grey tile should yield an average color");
+  if (grey) {
+    expect_true(std::abs((*grey)[0] - 0.215861f) < 0.00001f &&
+                    std::abs((*grey)[1] - 0.215861f) < 0.00001f &&
+                    std::abs((*grey)[2] - 0.215861f) < 0.00001f,
+                "Palette averages should be decoded into linear light");
   }
 
   // Fully transparent tile (all indices 0) -> no average color.
@@ -892,6 +1015,48 @@ void test_tis_header_dimension_decoding() {
     expect_true(detection->source == iee::game::ScaleDetectionSource::TisHeader,
                 "Header-based detection should report the correct source");
   }
+}
+
+void test_supported_tile_dimensions_are_inferred_dynamically() {
+  using namespace iee::game;
+
+  for (const auto [dimension, expectedScale] :
+       std::array<std::pair<std::uint32_t, int>, 4>{{
+           {TisTileDimensions::Standard, 1},
+           {TisTileDimensions::Upscaled2x, 2},
+           {TisTileDimensions::Upscaled4x, 4},
+           {TisTileDimensions::Upscaled8x, 8},
+       }}) {
+    const auto scale = scale_factor_from_tile_dimension(dimension);
+    expect_true(scale.has_value(), "supported power-of-two tile dimension should resolve");
+    if (scale) expect_eq(*scale, expectedScale, "tile dimension should map to its scale factor");
+
+    auto headerInfo = make_tile_info(dimension, 100, static_cast<int>(dimension), 0);
+    const auto headerDetection = detect_scale_from_tis_header(headerInfo, current_manifest());
+    expect_true(headerDetection.has_value(), "every supported header dimension should resolve");
+    if (headerDetection) {
+      expect_eq(headerDetection->scaleFactor, expectedScale,
+                "header dimension should drive the same dynamic scale mapping");
+    }
+  }
+
+  for (const auto dimension : {std::uint32_t{0}, std::uint32_t{96}, std::uint32_t{192},
+                               std::uint32_t{1024}}) {
+    expect_true(!scale_factor_from_tile_dimension(dimension).has_value(),
+                "unsupported tile dimensions must fail closed");
+  }
+
+  TileInfo tableInfo{};
+  std::array<PVRZTileEntry, 3> table{{
+      {2, 64, 64},
+      {2, 576, 64},
+      {2, 64, 576},
+  }};
+  tableInfo.table = table.data();
+  tableInfo.tileCount = static_cast<std::uint32_t>(table.size());
+  const auto tableDetection = infer_scale_from_tile_table(tableInfo);
+  expect_true(tableDetection.has_value(), "512px table grid should resolve dynamically");
+  if (tableDetection) expect_eq(tableDetection->scaleFactor, 8, "512px grid should map to 8x");
 }
 
 void test_tis_table_entry_bounds() {
@@ -1109,6 +1274,11 @@ void test_fpseam_override_asset_contract() {
       source.find("ieeCoverageWithCenter") != std::string::npos &&
           source.find("ieeShoreFactor(vec2 worldPos, float centerCoverage)") != std::string::npos,
       "water shader should reuse center coverage instead of resampling it");
+  expect_true(source.find("ieeSrgbToLinear") != std::string::npos &&
+                  source.find("ieeLinearToSrgb") != std::string::npos,
+              "water grading should explicitly cross the encoded/linear color boundary");
+  expect_true(source.find("min(edgeDistance.x, edgeDistance.y) > 8.0") != std::string::npos,
+              "interior land fragments should skip provably redundant coverage fetches");
 }
 
 int main() {
@@ -1121,15 +1291,19 @@ int main() {
   test_eeex_doc_layout_maps();
   test_config_parsing();
   test_config_numeric_bounds();
+  test_config_reports_malformed_values();
   test_config_shader_override_defaults();
   test_config_shader_override_roundtrip();
+  test_performance_sample_summary();
   test_parse_dds_legacy_formats_and_mips();
   test_parse_dds_dx10_formats();
   test_parse_dds_rejects_unsupported_or_malformed_input();
   test_load_dds_texture_file_wrapper();
   test_parse_loaded_wed();
+  test_wed_tint_candidates_are_bounded();
   test_decode_palette_tile_alpha();
   test_tis_header_dimension_decoding();
+  test_supported_tile_dimensions_are_inferred_dynamically();
   test_tis_table_entry_bounds();
   test_tileset_runtime_cache_is_bounded_and_resettable();
   test_scale_selection_precedence();

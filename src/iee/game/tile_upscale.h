@@ -14,7 +14,9 @@ constexpr int DETECTION_SAMPLE_COUNT = 10;
 
 namespace TisTileDimensions {
 constexpr std::uint32_t Standard = 0x40;
+constexpr std::uint32_t Upscaled2x = 0x80;
 constexpr std::uint32_t Upscaled4x = 0x100;
+constexpr std::uint32_t Upscaled8x = 0x200;
 }  // namespace TisTileDimensions
 
 enum class ScaleDetectionSource : std::uint8_t {
@@ -28,6 +30,12 @@ struct ScaleDetectionResult {
   ScaleDetectionSource source{ScaleDetectionSource::TisHeader};
   std::uint32_t detectedTileDimension{};
 };
+
+// Supported authored dimensions are power-of-two multiples of the engine's
+// fixed 64px screen tile. Keeping an explicit upper bound prevents malformed
+// headers from producing unbounded UV spans.
+[[nodiscard]] std::optional<int> scale_factor_from_tile_dimension(
+    std::uint32_t tileDimension) noexcept;
 
 [[nodiscard]] std::optional<ScaleDetectionResult> detect_scale_from_tis_header(
     const TileInfo& tileInfo, const BuildManifest& manifest);

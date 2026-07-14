@@ -2,15 +2,18 @@
 
 ## Goal
 
-Render authored 4x tile assets while keeping the engine's 64x64 screen-space quad and leaving ARE/WED coordinates untouched.
+Render explicitly supported higher-resolution tile assets while keeping the
+engine's 64x64 screen-space quad and leaving ARE/WED coordinates untouched.
 
 ## Detection Order
 
 1. Resolve the current `CVidTile` resource and demanded TIS object.
 2. Read the authored TIS header tile dimension from `header + 0x14`.
-3. Map:
-   - `0x40 -> scale 1`
-   - `0x100 -> scale 4`
+3. Accept only the explicit power-of-two dimensions and map:
+   - `64 -> scale 1`
+   - `128 -> scale 2`
+   - `256 -> scale 4`
+   - `512 -> scale 8`
 4. If the header is missing, inspect up to 32 entries from the 12-byte PVR table.
    Validate page/coordinate bounds, then take the GCD of non-zero `u`/`v`
    deltas between entries on the same atlas page.
@@ -22,28 +25,24 @@ dimensions; only their translation-invariant grid deltas are considered. Heurist
 safety net.
 
 The value at `+0x14` is TIS metadata. The PVRZ header describes the atlas page
-and does not replace this logical tile-size field. The current implementation
-supports 64- and 256-pixel authored tiles.
+and does not replace this logical tile-size field. Header and table inference
+use the same explicit set; arbitrary multiples of 64 are rejected.
 
-## Future: Generic Authored Tile Sizes (64/128/256/512)
+## Generic Authored Tile Sizes
 
-The classifier should be generalized to accept the explicit power-of-two set
-`{64, 128, 256, 512}`, compute `scale = tileDimension / 64`, and use the same
-accepted values for the PVR entry-table fallback. Do not accept arbitrary
-dimensions merely because they are divisible by 64.
-
-Acceptance checks for this feature:
+The classifier accepts `{64, 128, 256, 512}` and computes
+`scale = tileDimension / 64`. Its acceptance checks are:
 
 - Header metadata wins when present.
 - Table inference must be unambiguous across sampled entries.
-- `u + tileDimension` and `v + tileDimension` must remain within the actual
-  PVRZ atlas dimensions.
+- Sampled coordinates must stay within the runtime's conservative atlas
+  coordinate ceiling; this path does not inspect PVRZ image headers.
 - The screen quad and all WED/ARE coordinates remain 64x64.
-- Tests cover every size, atlas edges, malformed counts, and mixed metadata.
+- Tests cover every supported size, malformed values, and header precedence.
 - Runtime scale and linear-mode decisions are per observed tileset, held in a
   fixed-capacity cache that is cleared on every area load. Standard tilesets in
-  an already-confirmed 4x area delegate to the engine renderer rather than
-  inheriting the base tileset's scale.
+  an already-confirmed upscaled area delegate to the engine renderer rather
+  than inheriting the base tileset's scale.
 
 The cache accepts 16 tilesets per area (the WED format exposes at most eight
 layers). Additional resources fail closed to the engine renderer instead of

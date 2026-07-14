@@ -72,6 +72,9 @@ jobs:
       - name: Build release bundle
         run: cmake --build build --config Release --target release_bundle
 
+      - name: Install release layout
+        run: cmake --install build --config Release --prefix build/install-tree
+
       - name: Run native tests
         run: ctest --test-dir build -C Release --output-on-failure
 
@@ -109,6 +112,15 @@ jobs:
             if ((Get-Item (Join-Path $root $path)).Length -eq 0) {
               throw "Release bundle contains an empty file: $path"
             }
+          }
+          $installRoot = (Resolve-Path "build/install-tree").Path
+          $installed = Get-ChildItem $installRoot -File -Recurse | ForEach-Object {
+            [IO.Path]::GetRelativePath($installRoot, $_.FullName).Replace('\', '/')
+          } | Sort-Object
+          $installDifference = Compare-Object $actual $installed
+          if ($installDifference) {
+            $installDifference | Format-Table | Out-String | Write-Error
+            throw "CMake install layout differs from the release bundle"
           }
 
       - name: Archive release bundle

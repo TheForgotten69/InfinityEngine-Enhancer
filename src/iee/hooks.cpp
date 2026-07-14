@@ -11,6 +11,8 @@
 #include "area_state.h"
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
+#include "iee/core/pattern_scanner.h"
+#include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
@@ -49,6 +51,25 @@ void record_render_performance(bool enabled, bool handled, long long elapsedTick
       long long maximumTicks{};
       unsigned long long calls{};
       unsigned long long handledCalls{};
+      unsigned long long activeFrame{};
+      long long activeFrameTicks{};
+      core::PerformanceSamples<2048> frameCpuMs;
+
+      void finish_frame(double ticksToMilliseconds) noexcept {
+        if (activeFrame != 0) {
+          frameCpuMs.add(static_cast<double>(activeFrameTicks) * ticksToMilliseconds);
+        }
+        activeFrameTicks = 0;
+      }
+
+      void reset(long long nextStart) noexcept {
+        startedAt = nextStart;
+        totalTicks = 0;
+        maximumTicks = 0;
+        calls = 0;
+        handledCalls = 0;
+        frameCpuMs.reset();
+      }
     };
     static Window window;
 
@@ -60,6 +81,14 @@ void record_render_performance(bool enabled, bool handled, long long elapsedTick
     ++window.calls;
     if (handled) ++window.handledCalls;
 
+    const auto frameNumber = frame::frame_count();
+    const double ticksToMilliseconds = 1000.0 / static_cast<double>(frequency);
+    if (frameNumber != 0 && frameNumber != window.activeFrame) {
+      window.finish_frame(ticksToMilliseconds);
+      window.activeFrame = frameNumber;
+    }
+    if (frameNumber != 0) window.activeFrameTicks += elapsedTicks;
+
     constexpr long long kReportSeconds = 5;
     if (now.QuadPart - window.startedAt < frequency * kReportSeconds) return;
 
@@ -68,12 +97,20 @@ void record_render_performance(bool enabled, bool handled, long long elapsedTick
                                        ticksToMicroseconds / static_cast<double>(window.calls);
     const double maximumMicroseconds =
         static_cast<double>(window.maximumTicks) * ticksToMicroseconds;
+    const auto frameSummary = window.frameCpuMs.summarize();
+    const auto readability = core::take_readability_stats();
+    const auto textureStats = game::take_texture_configuration_stats();
     LOG_INFO(
         "RenderTexture enhancement perf: calls={}, handled={}, delegated={}, avg={:.2f}us, "
-        "max={:.2f}us over {}s",
+        "max={:.2f}us; per-frame CPU samples={}, avg={:.2f}ms, p95={:.2f}ms, max={:.2f}ms "
+        "over {}s; safe-read cache hits={}, VirtualQuery calls={}; texture config calls={}, "
+        "cacheHits={}, configured={}, latchedFailures={}, evictions={}",
         window.calls, window.handledCalls, window.calls - window.handledCalls, averageMicroseconds,
-        maximumMicroseconds, kReportSeconds);
-    window = {.startedAt = now.QuadPart};
+        maximumMicroseconds, frameSummary.count, frameSummary.average, frameSummary.percentile95,
+        frameSummary.maximum, kReportSeconds, readability.cacheHits, readability.virtualQueries,
+        textureStats.calls, textureStats.cacheHits, textureStats.configured,
+        textureStats.latchedFailures, textureStats.evictions);
+    window.reset(now.QuadPart);
   } catch (...) {
     // Performance diagnostics must not affect rendering.
   }
@@ -119,9 +156,26 @@ void publish_view_state(bool force = false, bool flushGpuUpload = true) {
     return;
   }
   static unsigned long long lastPublishedFrame = 0;
+  static bool publishedAtFrameZero = false;
+  static std::uint32_t lastFallbackPublishTick = 0;
   const auto frameNumber = frame::frame_count();
   if (!force && frameNumber != 0 && frameNumber == lastPublishedFrame) {
     return;
+  }
+  if (!force && flushGpuUpload && frameNumber == 0) {
+    if (frame::boundary_available()) {
+      if (publishedAtFrameZero) return;
+      publishedAtFrameZero = true;
+    } else {
+      // Unsupported fallback: coalesce a burst of per-tile Seam calls while
+      // still allowing camera state to advance when no swap hook exists.
+      const auto now = GetTickCount();
+      if (lastFallbackPublishTick != 0 && now - lastFallbackPublishTick < 8) return;
+      lastFallbackPublishTick = now;
+      // Without a swap hook nothing else advances the safe-read epoch, and a
+      // stale readability cache must never outlive engine resource churn.
+      core::advance_readability_cache_epoch();
+    }
   }
   // A LoadArea CPU-only publication must not consume the render callback's
   // once-per-frame slot; the next Seam callback still owns the queued upload.
@@ -173,6 +227,7 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
 
   auto& ctx = *g_ctx;
   try {
+    core::advance_readability_cache_epoch();
     LOG_DEBUG("LoadArea called - resetting scale detection for new area");
     ctx.infGame.store(thisPtr, std::memory_order_relaxed);
     ctx.reset_area_state();

@@ -21,12 +21,20 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 - Resolves draw API entry points from `CVidTile::RenderTexture`.
 - Handles opcode-aware rel32 decoding, including the `DrawPopState` tail jump.
-- Applies GL texture parameter upgrades.
+- Applies GL texture parameter upgrades and keeps a bounded, deletion-aware
+  configuration cache. Failed configurations are latched only until an area,
+  deletion, or context reset.
 
 `src/iee/game/tis_runtime.*`
 
 - Provides explicit runtime views for `CRes`, `CResTile`, `CResTileSet`, `CResPVR`, and the authored TIS header.
 - Reads build-specific offsets from the manifest instead of hardcoding them throughout hooks.
+
+`src/iee/game/tis_palette.*`
+
+- Decodes classic palette-tile transparency and derives authored liquid tint.
+- Converts encoded palette RGB to linear light before averaging; the water
+  shader grades in the same space and re-encodes the affected result.
 
 `src/iee/game/runtime_types_x64.h`
 
@@ -85,10 +93,14 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - Compile/link failures are logged, but the production path does not resubmit a
   fallback shader source. The engine-owned override loading path remains the
   source of the compiled shader.
+- Probe entry points and program classifications are discarded and reinstalled
+  when the current WGL context changes.
 
 `src/iee/shader_uniform_bridge.*`
 
-- Owns atomic uniform inputs, location resolution, and render-thread uniform/texture binding.
+- Owns atomic uniform inputs, location resolution, and render-thread
+  uniform/texture binding. A state revision avoids repeating unchanged GL
+  queries, sampler writes, and enhancer texture binds.
 
 `src/iee/shader_diagnostics.*`
 
@@ -127,6 +139,7 @@ The CMake graph is split on purpose:
 - `InfinityEngine-Enhancer` is Windows-only and links MinHook, `psapi`, and `opengl32`.
 - `release_bundle` packages the DLL, EEex loader script, sample INI, shader
   assets, game override, and water textures into one directory.
+- `cmake --install` mirrors the same game-root directory layout.
 - `renovate.json` teaches Renovate's regex manager to update the human-readable
   spdlog/MinHook tags and their immutable `FetchContent` commit pins together.
 

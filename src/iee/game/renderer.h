@@ -6,6 +6,14 @@
 namespace iee::game {
 struct BuildManifest;
 
+struct TextureConfigurationStats {
+  std::uint64_t calls{};
+  std::uint64_t cacheHits{};
+  std::uint64_t configured{};
+  std::uint64_t latchedFailures{};
+  std::uint64_t evictions{};
+};
+
 struct DrawApi {
   using DrawBegin_t = void (*)(int);
   using DrawEnd_t = void (*)();
@@ -42,6 +50,11 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
 // configure_bound_texture(). The render thread consumes the request; context
 // recreation also invalidates the cache automatically.
 void request_texture_configuration_cache_reset() noexcept;
+
+// Monotonic invalidation epoch consumed by the tile renderer before applying
+// its consecutive-texture fast path.
+[[nodiscard]] std::uint64_t texture_configuration_epoch() noexcept;
+[[nodiscard]] TextureConfigurationStats take_texture_configuration_stats() noexcept;
 
 constexpr unsigned long BLACK_COLOR = 0xFF000000;
 }  // namespace iee::game

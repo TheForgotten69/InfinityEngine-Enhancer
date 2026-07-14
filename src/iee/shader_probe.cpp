@@ -9,6 +9,7 @@
 #include <cctype>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -20,6 +21,7 @@
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
 #include "iee/game/opengl_types.h"
+#include "iee/game/renderer.h"
 #include "iee/game/shader_override.h"
 #include "iee/water_textures.h"
 #include "shader_diagnostics.h"
@@ -62,6 +64,7 @@ using Fn_glLinkProgramARB = game::gl::PFN_glLinkProgramARB;
 using Fn_glUseProgramObjectARB = game::gl::PFN_glUseProgramObjectARB;
 using Fn_glDeleteObjectARB = game::gl::PFN_glDeleteObjectARB;
 using Fn_glBindFramebuffer = game::gl::PFN_glBindFramebuffer;
+using Fn_glDeleteTextures = game::gl::PFN_glDeleteTextures;
 
 core::Hook<Fn_glShaderSource> g_glShaderSourceHook;
 core::Hook<Fn_glCompileShader> g_glCompileShaderHook;
@@ -75,31 +78,38 @@ core::Hook<Fn_glLinkProgramARB> g_glLinkProgramARBHook;
 core::Hook<Fn_glUseProgramObjectARB> g_glUseProgramObjectARBHook;
 core::Hook<Fn_glDeleteObjectARB> g_glDeleteObjectARBHook;
 core::Hook<Fn_glBindFramebuffer> g_glBindFramebufferHook;
+core::Hook<Fn_glDeleteTextures> g_glDeleteTexturesHook;
 
-void remove_probe_hooks() noexcept {
-  (void)g_glBindFramebufferHook.remove();
-  (void)g_glDeleteObjectARBHook.remove();
-  (void)g_glUseProgramObjectARBHook.remove();
-  (void)g_glLinkProgramARBHook.remove();
-  (void)g_glCompileShaderARBHook.remove();
-  (void)g_glShaderSourceARBHook.remove();
-  (void)g_glUseProgramHook.remove();
-  (void)g_glDeleteProgramHook.remove();
-  (void)g_glLinkProgramHook.remove();
-  (void)g_glDeleteShaderHook.remove();
-  (void)g_glCompileShaderHook.remove();
-  (void)g_glShaderSourceHook.remove();
+bool remove_probe_hooks() noexcept {
+  bool removed = true;
+  removed = g_glDeleteTexturesHook.remove() && removed;
+  removed = g_glBindFramebufferHook.remove() && removed;
+  removed = g_glDeleteObjectARBHook.remove() && removed;
+  removed = g_glUseProgramObjectARBHook.remove() && removed;
+  removed = g_glLinkProgramARBHook.remove() && removed;
+  removed = g_glCompileShaderARBHook.remove() && removed;
+  removed = g_glShaderSourceARBHook.remove() && removed;
+  removed = g_glUseProgramHook.remove() && removed;
+  removed = g_glDeleteProgramHook.remove() && removed;
+  removed = g_glLinkProgramHook.remove() && removed;
+  removed = g_glDeleteShaderHook.remove() && removed;
+  removed = g_glCompileShaderHook.remove() && removed;
+  removed = g_glShaderSourceHook.remove() && removed;
+  return removed;
 }
 
 std::mutex g_probeMutex;
 std::unordered_map<unsigned, ShaderRecord> g_shaderRecords;
 std::unordered_map<unsigned, ProgramRecord> g_programRecords;
-std::unordered_map<unsigned, uniforms::Locations> g_overriddenPrograms;
+std::unordered_map<unsigned, std::shared_ptr<uniforms::Locations>> g_overriddenPrograms;
 std::set<std::string> g_dumpedShaders;  // names already written to disk
 bool g_shaderProbesInstalled = false;
 bool g_waterOverrideActiveLogged = false;
 bool g_waterOverrideMissingLogged = false;
+bool g_uniformsInitialized = false;
 std::atomic<HGLRC> g_programContext{nullptr};
+std::atomic<HGLRC> g_hookContext{nullptr};
+std::atomic<bool> g_contextRefreshPending{false};
 core::EngineConfig g_cfg;
 std::filesystem::path g_dumpDir;
 
@@ -445,7 +455,7 @@ void link_program_introspect(unsigned program, bool isArb, bool logDetails = tru
     std::lock_guard lock(g_probeMutex);
     g_programRecords[program].introspected = true;
     if (anyOverride) {
-      g_overriddenPrograms.try_emplace(program, uniforms::Locations{});
+      g_overriddenPrograms.try_emplace(program, std::make_shared<uniforms::Locations>());
     } else {
       g_overriddenPrograms.erase(program);
     }
@@ -546,20 +556,14 @@ static void APIENTRY detour_glLinkProgramARB(unsigned program) noexcept {
 // Uniform state and GL feeding live in shader_uniform_bridge.cpp. The
 // probe owns only program classification and location-cache lifetime.
 void feed_uniforms_to_program(unsigned program) {
-  uniforms::Locations locations{};
+  std::shared_ptr<uniforms::Locations> locations;
   {
     std::lock_guard lock(g_probeMutex);
     auto it = g_overriddenPrograms.find(program);
     if (it == g_overriddenPrograms.end()) return;
     locations = it->second;
   }
-
-  uniforms::feed(program, locations);
-
-  std::lock_guard lock(g_probeMutex);
-  if (auto it = g_overriddenPrograms.find(program); it != g_overriddenPrograms.end()) {
-    it->second = locations;
-  }
+  uniforms::feed(program, *locations);
 }
 
 void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
@@ -568,10 +572,16 @@ void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
 
   bool shouldInspect = false;
   bool shouldLogCaller = false;
+  std::shared_ptr<uniforms::Locations> locations;
   {
     std::lock_guard lock(g_probeMutex);
     auto& record = g_programRecords[program];
     shouldInspect = !record.introspected;
+    if (!shouldInspect) {
+      if (const auto it = g_overriddenPrograms.find(program); it != g_overriddenPrograms.end()) {
+        locations = it->second;
+      }
+    }
     if (g_cfg.enableVerboseLogging) {
       shouldLogCaller = record.callerLogged.insert(caller).second;
     }
@@ -585,9 +595,10 @@ void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
     // This also discovers programs linked before probe installation. Detailed
     // caller/symbol work remains strictly opt-in through verbose logging.
     link_program_introspect(program, isArb, g_cfg.enableVerboseLogging);
+    feed_uniforms_to_program(program);
+  } else if (locations) {
+    uniforms::feed(program, *locations);
   }
-
-  feed_uniforms_to_program(program);
 }
 
 static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
@@ -644,6 +655,17 @@ static void APIENTRY detour_glDeleteProgram(unsigned program) noexcept {
     forget_program(program);
   } catch (...) {
     if (!forwarded) g_glDeleteProgramHook.original()(program);
+  }
+}
+
+static void APIENTRY detour_glDeleteTextures(int count, const unsigned* textures) noexcept {
+  bool forwarded = false;
+  try {
+    forwarded = true;
+    g_glDeleteTexturesHook.original()(count, textures);
+    game::request_texture_configuration_cache_reset();
+  } catch (...) {
+    if (!forwarded) g_glDeleteTexturesHook.original()(count, textures);
   }
 }
 
@@ -734,7 +756,10 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
 
     // The water effect ships ON by default; the ini can disable it and
     // the F10 debug cycle (when enabled) still overrides at runtime.
-    uniforms::initialize(cfg.enableWaterEffect);
+    if (!g_uniformsInitialized) {
+      uniforms::initialize(cfg.enableWaterEffect, cfg.enablePerformanceLogging);
+      g_uniformsInitialized = true;
+    }
 
     // Derive the DLL directory for the dump dir and shipped water textures
 #ifdef _WIN64
@@ -801,6 +826,11 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
                                      reinterpret_cast<void*>(&detour_glDeleteProgram));
         g_glDeleteProgramHook.enable();
       }
+      if (gl.glDeleteTextures) {
+        g_glDeleteTexturesHook.create(reinterpret_cast<void*>(gl.glDeleteTextures),
+                                      reinterpret_cast<void*>(&detour_glDeleteTextures));
+        g_glDeleteTexturesHook.enable();
+      }
       // Some ICDs return the same dispatch address for promoted ARB/core
       // pairs; a second MH_CreateHook on the same target would throw and
       // roll back everything. Hook ARB entry points only when distinct.
@@ -853,6 +883,9 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
     }
 
     g_shaderProbesInstalled = true;
+    const auto context = game::gl::current_context();
+    g_hookContext.store(context, std::memory_order_release);
+    g_programContext.store(context, std::memory_order_release);
     g_sweepPending.store(true, std::memory_order_relaxed);
     LOG_INFO("Installed GL shader probes");
     return true;
@@ -880,7 +913,10 @@ void uninstall_shader_probes() noexcept {
     g_waterOverrideActiveLogged = false;
     g_waterOverrideMissingLogged = false;
     g_programContext.store(nullptr, std::memory_order_release);
+    g_hookContext.store(nullptr, std::memory_order_release);
+    g_contextRefreshPending.store(false, std::memory_order_relaxed);
     g_shaderProbesInstalled = false;
+    g_uniformsInitialized = false;
     g_sweepPending.store(false, std::memory_order_relaxed);
   } catch (...) {
     // Hooks are already gone; shutdown must not escape into the loader.
@@ -890,12 +926,36 @@ void uninstall_shader_probes() noexcept {
 void on_frame_tick(float secondsSinceStart) noexcept {
   try {
     uniforms::set_time(secondsSinceStart);
+
+    if (g_contextRefreshPending.load(std::memory_order_acquire)) {
+      if (!remove_probe_hooks()) return;
+      if (!install_shader_probes(g_cfg)) return;
+      g_contextRefreshPending.store(false, std::memory_order_release);
+      LOG_INFO("Reinstalled GL shader probes for replacement context");
+    }
     {
       std::lock_guard lock(g_probeMutex);
       if (!g_shaderProbesInstalled) return;
     }
 
-    if (ensure_program_context()) {
+    const bool hookContextChanged =
+        game::gl::current_context() != g_hookContext.load(std::memory_order_acquire);
+    const bool programContextChanged = ensure_program_context();
+    if (hookContextChanged || programContextChanged) {
+      {
+        std::lock_guard lock(g_probeMutex);
+        g_shaderProbesInstalled = false;
+      }
+      g_hookContext.store(nullptr, std::memory_order_release);
+      g_contextRefreshPending.store(true, std::memory_order_release);
+      game::request_texture_configuration_cache_reset();
+      if (!remove_probe_hooks()) {
+        LOG_WARN("Could not fully remove stale GL probes; retrying at the next frame boundary");
+        return;
+      }
+      if (!install_shader_probes(g_cfg)) return;
+      g_contextRefreshPending.store(false, std::memory_order_release);
+      LOG_INFO("Reinstalled GL shader probes after WGL context replacement");
       g_sweepPending.store(true, std::memory_order_relaxed);
     }
 
@@ -932,6 +992,31 @@ void on_frame_tick(float secondsSinceStart) noexcept {
         if (isOverridden) {
           feed_uniforms_to_program(static_cast<unsigned>(currentProgram));
         }
+      }
+    }
+
+    if (g_cfg.enablePerformanceLogging) {
+      static std::uint32_t lastPerformanceLogTick = 0;
+      const auto now = GetTickCount();
+      if (lastPerformanceLogTick == 0) lastPerformanceLogTick = now;
+      if (now - lastPerformanceLogTick >= 5000) {
+        lastPerformanceLogTick = now;
+        const auto stats = uniforms::take_performance_stats();
+        static const long long frequency = [] {
+          LARGE_INTEGER value{};
+          return QueryPerformanceFrequency(&value) ? value.QuadPart : 0LL;
+        }();
+        const double ticksToMicroseconds =
+            frequency > 0 ? 1'000'000.0 / static_cast<double>(frequency) : 0.0;
+        const double averageMicroseconds =
+            stats.calls > 0 ? static_cast<double>(stats.totalTicks) * ticksToMicroseconds /
+                                  static_cast<double>(stats.calls)
+                            : 0.0;
+        LOG_INFO(
+            "Shader uniform feed perf: calls={}, unchangedSkipped={}, textureBindPasses={}, "
+            "avg={:.2f}us, max={:.2f}us over 5s",
+            stats.calls, stats.skippedUnchanged, stats.textureBindPasses, averageMicroseconds,
+            static_cast<double>(stats.maximumTicks) * ticksToMicroseconds);
       }
     }
 

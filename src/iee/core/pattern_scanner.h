@@ -65,6 +65,18 @@ namespace iee::core {
     // Best-effort readable check (Windows). Returns false if unreadable.
     bool is_readable(const void *p, std::size_t len);
 
+    // Readability results are cached only within an engine frame/area epoch.
+    // Advance at boundaries where resource mappings may change.
+    void advance_readability_cache_epoch() noexcept;
+
+    struct ReadabilityStats {
+        std::uint64_t cacheHits{};
+        std::uint64_t virtualQueries{};
+    };
+
+    void set_readability_stats_enabled(bool enabled) noexcept;
+    [[nodiscard]] ReadabilityStats take_readability_stats() noexcept;
+
     template<class T>
     bool safe_read(const void *p, T &out) {
         static_assert(std::is_trivially_copyable_v<T>, "safe_read requires a trivially-copyable type");

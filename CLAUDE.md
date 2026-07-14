@@ -29,7 +29,8 @@ Operational instructions for AI coding agents working in this repository.
 ## Runtime Facts — Tiles / TIS
 
 - TIS header `+0x14` is the authoritative tile-dimension field.
-- `0x40` means standard tiles; `0x100` means authored 4x tiles.
+- Explicit `64`, `128`, `256`, and `512` dimensions map to `1x`, `2x`, `4x`,
+  and `8x`. Other values fail closed to the existing fallback path.
 - `CResTileSet::h` is optional. Standard tilesets can have `header == null` while still exposing a valid 12-byte PVR entry table through `pData`. A null header does not imply missing deterministic metadata.
 - Deterministic detection order for this build is:
   `TIS header -> PVR entry table coordinate-grid GCD -> legacy heuristic fallback`

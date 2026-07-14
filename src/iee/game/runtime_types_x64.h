@@ -309,8 +309,9 @@ namespace iee::game {
         std::int32_t nTilesY{};
         std::int32_t nNewX{};
         std::int32_t nNewY{};
-        // Screen rects of the world view (decompile-verified 2026-06-12):
-        // rViewPortNotZoomed = physical window rect; rViewPort = zoomed rect.
+        // World-view rects (decompile + live-log verified 2026-06-12):
+        // rViewPortNotZoomed uses UI-scaled logical pixels; rViewPort is the
+        // corresponding visible world rect after zoom.
         // ScreenToWorld: world = nNew + rViewPort.size/rViewPortNotZoomed.size
         //                        * (screen - rViewPortNotZoomed.origin)
         CRect rViewPortNotZoomed{};
