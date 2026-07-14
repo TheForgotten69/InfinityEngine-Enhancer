@@ -17,6 +17,7 @@
 #include "iee/game/area_texture.h"
 #include "iee/game/opengl_types.h"
 #include "iee/game/resref_runtime.h"
+#include "iee/game/texture_units.h"
 #include "iee/game/tile_liquid.h"
 #include "iee/game/tis_palette.h"
 #include "iee/game/wed_runtime.h"
@@ -346,9 +347,9 @@ bool flush_pending_gpu_upload() noexcept {
     }
     if (g_areaTexture != 0 && g_uploadedAreaGeneration == snapshot->generation) return true;
 
-    core::GlStateGuard guard({2});
+    core::GlStateGuard guard({game::texture_units::AreaMask});
     if (g_areaTexture == 0) gl.glGenTextures(1, &g_areaTexture);
-    gl.glActiveTexture(game::gl::TEXTURE0 + 2);
+    gl.glActiveTexture(game::gl::TEXTURE0 + game::texture_units::AreaMask);
     gl.glBindTexture(game::gl::TEXTURE_2D, g_areaTexture);
     gl.glPixelStorei(game::gl::UNPACK_ALIGNMENT, 1);
     gl.glTexImage2D(game::gl::TEXTURE_2D, 0, game::gl::R8, snapshot->texture.width,
@@ -365,9 +366,9 @@ bool flush_pending_gpu_upload() noexcept {
                                snapshot->waterTint[2]);
     probe::set_area_world_size(static_cast<float>(snapshot->texture.width) * kBaseCellWorldPixels,
                                static_cast<float>(snapshot->texture.height) * kBaseCellWorldPixels);
-    LOG_INFO("Area liquid mask uploaded: {}x{} cells (unit 2, texture {}, generation {})",
-             snapshot->texture.width, snapshot->texture.height, g_areaTexture,
-             snapshot->generation);
+    LOG_INFO("Area liquid mask uploaded: {}x{} cells (unit {}, texture {}, generation {})",
+             snapshot->texture.width, snapshot->texture.height, game::texture_units::AreaMask,
+             g_areaTexture, snapshot->generation);
     return true;
   } catch (...) {
     return false;
@@ -380,7 +381,7 @@ bool bind_area_texture() noexcept {
   if (!gl.glActiveTexture || !gl.glBindTexture) return false;
   int previousActiveTexture = -1;
   if (gl.glGetIntegerv) gl.glGetIntegerv(0x84E0 /*ACTIVE_TEXTURE*/, &previousActiveTexture);
-  gl.glActiveTexture(game::gl::TEXTURE0 + 2);
+  gl.glActiveTexture(game::gl::TEXTURE0 + game::texture_units::AreaMask);
   gl.glBindTexture(game::gl::TEXTURE_2D, g_areaTexture);
   if (previousActiveTexture >= 0) gl.glActiveTexture(static_cast<unsigned>(previousActiveTexture));
   return true;

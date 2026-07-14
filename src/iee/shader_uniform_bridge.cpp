@@ -5,6 +5,7 @@
 
 #include "area_state.h"
 #include "iee/game/opengl_types.h"
+#include "iee/game/texture_units.h"
 #include "iee/water_textures.h"
 
 namespace iee::probe::uniforms {
@@ -103,7 +104,8 @@ Snapshot snapshot() noexcept {
 
 void feed(unsigned program, Locations& locations) {
   const auto& gl = game::gl::get_gl_functions();
-  if (!gl.glGetUniformLocation || !gl.glUniform1f) {
+  if (!gl.glGetUniformLocation || !gl.glUniform1f || !gl.glUniform1i || !gl.glUniform2f ||
+      !gl.glUniform3f) {
     return;
   }
 
@@ -122,12 +124,14 @@ void feed(unsigned program, Locations& locations) {
 
   g_feedCount.fetch_add(1, std::memory_order_relaxed);
   float effectValue = g_effectValue.load(std::memory_order_relaxed);
-  if (locations.areaMask >= 0 && !area::bind_area_texture()) {
-    effectValue = 0.0f;
-  }
-  if ((locations.normalMap >= 0 || locations.dudvMap >= 0 || locations.foamMap >= 0) &&
-      !water::ensure_water_textures_bound()) {
-    effectValue = 0.0f;
+  if (effectValue >= 0.5f) {
+    if (locations.areaMask >= 0 && !area::bind_area_texture()) {
+      effectValue = 0.0f;
+    }
+    if ((locations.normalMap >= 0 || locations.dudvMap >= 0 || locations.foamMap >= 0) &&
+        !water::ensure_water_textures_bound()) {
+      effectValue = 0.0f;
+    }
   }
 
   if (locations.time >= 0) {
@@ -136,48 +140,74 @@ void feed(unsigned program, Locations& locations) {
   if (locations.enabled >= 0) {
     gl.glUniform1f(locations.enabled, effectValue);
   }
-  if (locations.scroll >= 0 && gl.glUniform2f) {
-    gl.glUniform2f(locations.scroll, g_scrollX.load(std::memory_order_relaxed),
-                   g_scrollY.load(std::memory_order_relaxed));
-  }
 
   int viewport[4] = {0, 0, 0, 0};
   if (gl.glGetIntegerv) {
     gl.glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, viewport);
   }
+  const float scrollX = g_scrollX.load(std::memory_order_relaxed);
+  const float scrollY = g_scrollY.load(std::memory_order_relaxed);
   const float viewWidth = g_viewWorldWidth.load(std::memory_order_relaxed);
   const float viewHeight = g_viewWorldHeight.load(std::memory_order_relaxed);
-  if (locations.zoom >= 0 && gl.glUniform2f && viewWidth > 0.0f && viewHeight > 0.0f &&
-      viewport[2] > 0 && viewport[3] > 0) {
-    gl.glUniform2f(locations.zoom, static_cast<float>(viewport[2]) / viewWidth,
-                   static_cast<float>(viewport[3]) / viewHeight);
-  }
-  if (locations.viewport >= 0 && gl.glUniform2f) {
-    gl.glUniform2f(locations.viewport, static_cast<float>(viewport[2]),
-                   static_cast<float>(viewport[3]));
+  const bool viewChanged =
+      !locations.viewInitialized || locations.lastScrollX != scrollX ||
+      locations.lastScrollY != scrollY || locations.lastViewWorldWidth != viewWidth ||
+      locations.lastViewWorldHeight != viewHeight || locations.lastViewportWidth != viewport[2] ||
+      locations.lastViewportHeight != viewport[3];
+  if (viewChanged) {
+    if (locations.scroll >= 0 && gl.glUniform2f) {
+      gl.glUniform2f(locations.scroll, scrollX, scrollY);
+    }
+    if (locations.zoom >= 0 && gl.glUniform2f && viewWidth > 0.0f && viewHeight > 0.0f &&
+        viewport[2] > 0 && viewport[3] > 0) {
+      gl.glUniform2f(locations.zoom, static_cast<float>(viewport[2]) / viewWidth,
+                     static_cast<float>(viewport[3]) / viewHeight);
+    }
+    if (locations.viewport >= 0 && gl.glUniform2f) {
+      gl.glUniform2f(locations.viewport, static_cast<float>(viewport[2]),
+                     static_cast<float>(viewport[3]));
+    }
+    locations.viewInitialized = true;
+    locations.lastScrollX = scrollX;
+    locations.lastScrollY = scrollY;
+    locations.lastViewWorldWidth = viewWidth;
+    locations.lastViewWorldHeight = viewHeight;
+    locations.lastViewportWidth = viewport[2];
+    locations.lastViewportHeight = viewport[3];
   }
 
   const float worldWidth = g_worldWidth.load(std::memory_order_relaxed);
   const float worldHeight = g_worldHeight.load(std::memory_order_relaxed);
-  if (locations.worldSizeInv >= 0 && gl.glUniform2f && worldWidth > 0.0f && worldHeight > 0.0f) {
+  if ((!locations.worldSizeInitialized || locations.lastWorldWidth != worldWidth ||
+       locations.lastWorldHeight != worldHeight) &&
+      locations.worldSizeInv >= 0 && gl.glUniform2f && worldWidth > 0.0f && worldHeight > 0.0f) {
     gl.glUniform2f(locations.worldSizeInv, 1.0f / worldWidth, 1.0f / worldHeight);
+    locations.worldSizeInitialized = true;
+    locations.lastWorldWidth = worldWidth;
+    locations.lastWorldHeight = worldHeight;
   }
-  if (locations.waterTint >= 0 && gl.glUniform3f) {
-    gl.glUniform3f(locations.waterTint, g_waterTintR.load(std::memory_order_relaxed),
-                   g_waterTintG.load(std::memory_order_relaxed),
-                   g_waterTintB.load(std::memory_order_relaxed));
+  const float waterTintR = g_waterTintR.load(std::memory_order_relaxed);
+  const float waterTintG = g_waterTintG.load(std::memory_order_relaxed);
+  const float waterTintB = g_waterTintB.load(std::memory_order_relaxed);
+  if ((!locations.waterTintInitialized || locations.lastWaterTintR != waterTintR ||
+       locations.lastWaterTintG != waterTintG || locations.lastWaterTintB != waterTintB) &&
+      locations.waterTint >= 0 && gl.glUniform3f) {
+    gl.glUniform3f(locations.waterTint, waterTintR, waterTintG, waterTintB);
+    locations.waterTintInitialized = true;
+    locations.lastWaterTintR = waterTintR;
+    locations.lastWaterTintG = waterTintG;
+    locations.lastWaterTintB = waterTintB;
   }
-  if (locations.areaMask >= 0 && gl.glUniform1i) {
-    gl.glUniform1i(locations.areaMask, 2);
-  }
-  if (locations.normalMap >= 0 && gl.glUniform1i) {
-    gl.glUniform1i(locations.normalMap, 3);
-  }
-  if (locations.dudvMap >= 0 && gl.glUniform1i) {
-    gl.glUniform1i(locations.dudvMap, 4);
-  }
-  if (locations.foamMap >= 0 && gl.glUniform1i) {
-    gl.glUniform1i(locations.foamMap, 5);
+  if (!locations.samplersInitialized && gl.glUniform1i) {
+    if (locations.areaMask >= 0)
+      gl.glUniform1i(locations.areaMask, static_cast<int>(game::texture_units::AreaMask));
+    if (locations.normalMap >= 0)
+      gl.glUniform1i(locations.normalMap, static_cast<int>(game::texture_units::WaterNormal));
+    if (locations.dudvMap >= 0)
+      gl.glUniform1i(locations.dudvMap, static_cast<int>(game::texture_units::WaterDudv));
+    if (locations.foamMap >= 0)
+      gl.glUniform1i(locations.foamMap, static_cast<int>(game::texture_units::WaterFoam));
+    locations.samplersInitialized = true;
   }
 }
 

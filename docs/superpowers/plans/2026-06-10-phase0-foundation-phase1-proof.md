@@ -1,5 +1,12 @@
 # Phase 0 (Foundation) + Phase 1 (Proof of Pipeline) Implementation Plan
 
+> **Status: Historical implementation plan. Do not execute as a current
+> runbook.** It records the intended Phase 0/1 sequence, including experiments
+> and branch commands that were later superseded. The production module model
+> is documented in [`docs/architecture.md`](../../architecture.md); live gate
+> outcomes are in
+> [`docs/validation/phase0-gates.md`](../../validation/phase0-gates.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the shader-override and GL infrastructure layer (Phase 0) and prove it end-to-end by replacing the engine's `fpSELECT` shader, plus run validation gates V1/V2/V3/V5 (Phase 1).

@@ -6,6 +6,8 @@
 #include <cstring>
 #include <utility>
 
+#include "iee/core/pattern_scanner.h"
+
 namespace iee::game {
 namespace {
 constexpr std::uint32_t kWedFileType = 0x20444557;     // "WED "
@@ -50,6 +52,9 @@ bool parse_loaded_wed(const CRes& resource, WedAreaInfo& out) noexcept {
 
   const auto* base = static_cast<const std::byte*>(resource.pData);
   const auto size = static_cast<std::size_t>(resource.nSize);
+  if (!core::is_readable(base, size)) {
+    return false;
+  }
 
   WED_WedHeader_st header{};
   if (!read_struct(base, size, 0, header)) {

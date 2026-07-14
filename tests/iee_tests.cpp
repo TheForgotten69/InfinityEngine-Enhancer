@@ -6,15 +6,19 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "iee/core/config.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/features/tile_render.h"
 #include "iee/game/area_texture.h"
 #include "iee/game/build_manifest.h"
+#include "iee/game/dds_texture.h"
 #include "iee/game/eeex_doc_layouts_x64.h"
 #include "iee/game/file_formats.h"
 #include "iee/game/runtime_types_x64.h"
@@ -366,6 +370,7 @@ void test_config_shader_override_defaults() {
   expect_true(!cfg.dumpEngineShaders, "shader dump defaults off");
   expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
   expect_true(cfg.enableWaterEffect, "water effect defaults ON");
+  expect_true(!cfg.enablePerformanceLogging, "performance logs default off");
 }
 
 void test_config_shader_override_roundtrip() {
@@ -375,6 +380,7 @@ void test_config_shader_override_roundtrip() {
     orig.dumpEngineShaders = false;
     orig.enableDebugHotkeys = true;
     orig.enableWaterEffect = false;
+    orig.enablePerformanceLogging = true;
 
     expect_true(iee::core::ConfigManager::save(tempPath, orig),
                 "ConfigManager::save should succeed");
@@ -386,6 +392,8 @@ void test_config_shader_override_roundtrip() {
   expect_true(!loaded.dumpEngineShaders, "dumpEngineShaders should round-trip as false");
   expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
   expect_true(!loaded.enableWaterEffect, "enableWaterEffect should round-trip as false");
+  expect_true(loaded.enablePerformanceLogging,
+              "enablePerformanceLogging should round-trip as true");
 
   std::error_code ec;
   std::filesystem::remove(tempPath, ec);
@@ -397,6 +405,196 @@ void write_bytes(std::vector<std::byte>& buffer, std::size_t offset, const void*
     buffer.resize(offset + size);
   }
   std::memcpy(buffer.data() + offset, data, size);
+}
+
+constexpr std::uint32_t dds_four_cc(char a, char b, char c, char d) noexcept {
+  return static_cast<std::uint32_t>(static_cast<unsigned char>(a)) |
+         (static_cast<std::uint32_t>(static_cast<unsigned char>(b)) << 8) |
+         (static_cast<std::uint32_t>(static_cast<unsigned char>(c)) << 16) |
+         (static_cast<std::uint32_t>(static_cast<unsigned char>(d)) << 24);
+}
+
+void write_u32(std::vector<std::byte>& buffer, std::size_t offset, std::uint32_t value) {
+  if (offset + sizeof(value) > buffer.size()) buffer.resize(offset + sizeof(value));
+  for (std::size_t index = 0; index < sizeof(value); ++index) {
+    buffer[offset + index] = static_cast<std::byte>((value >> (index * 8)) & 0xFF);
+  }
+}
+
+std::vector<std::byte> make_legacy_dds(std::uint32_t formatCode, std::uint32_t width,
+                                       std::uint32_t height, std::uint32_t mipCount,
+                                       std::size_t payloadBytes,
+                                       std::uint32_t additionalPixelFormatFlags = 0) {
+  constexpr std::size_t headerBytes = 128;
+  std::vector<std::byte> bytes(headerBytes + payloadBytes);
+  constexpr char magic[] = "DDS ";
+  write_bytes(bytes, 0, magic, 4);
+  write_u32(bytes, 4, 124);  // DDS_HEADER::dwSize
+  write_u32(bytes, 12, height);
+  write_u32(bytes, 16, width);
+  write_u32(bytes, 28, mipCount);
+  write_u32(bytes, 76, 32);                                // DDS_PIXELFORMAT::dwSize
+  write_u32(bytes, 80, 0x4 | additionalPixelFormatFlags);  // DDPF_FOURCC
+  write_u32(bytes, 84, formatCode);
+  for (std::size_t index = 0; index < payloadBytes; ++index) {
+    bytes[headerBytes + index] = static_cast<std::byte>(index & 0xFF);
+  }
+  return bytes;
+}
+
+std::vector<std::byte> make_dx10_dds(std::uint32_t dxgiFormat, std::uint32_t width,
+                                     std::uint32_t height, std::uint32_t mipCount,
+                                     std::size_t payloadBytes) {
+  constexpr std::size_t headerBytes = 148;
+  auto bytes =
+      make_legacy_dds(dds_four_cc('D', 'X', '1', '0'), width, height, mipCount, payloadBytes + 20);
+  bytes.resize(headerBytes + payloadBytes);
+  write_u32(bytes, 128, dxgiFormat);
+  write_u32(bytes, 132, 3);  // D3D10_RESOURCE_DIMENSION_TEXTURE2D
+  write_u32(bytes, 136, 0);  // miscFlag
+  write_u32(bytes, 140, 1);  // arraySize
+  write_u32(bytes, 144, 0);  // miscFlags2
+  for (std::size_t index = 0; index < payloadBytes; ++index) {
+    bytes[headerBytes + index] = static_cast<std::byte>((index + 17) & 0xFF);
+  }
+  return bytes;
+}
+
+void test_parse_dds_legacy_formats_and_mips() {
+  using namespace iee::game;
+
+  auto bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '1'), 8, 8, 4, 56);
+  DdsTexture texture;
+  std::string error;
+  expect_true(parse_dds_texture(bytes, texture, error),
+              "Legacy BC1 DDS with a full mip chain should parse");
+  if (texture.empty()) return;
+
+  expect_true(error.empty(), "Successful DDS parsing should clear the error string");
+  expect_true(texture.format == DdsBlockFormat::Bc1RgbUnorm,
+              "Legacy DXT1 without alpha pixels should map to BC1 RGB");
+  expect_eq(texture.width, std::uint32_t{8}, "DDS width should be preserved");
+  expect_eq(texture.height, std::uint32_t{8}, "DDS height should be preserved");
+  expect_eq(texture.mipLevels.size(), std::size_t{4}, "All declared DDS mips should be exposed");
+  expect_eq(texture.payload.size(), std::size_t{56}, "Only the required mip payload should remain");
+  const std::array<std::uint32_t, 4> dimensions{8, 4, 2, 1};
+  const std::array<std::size_t, 4> offsets{0, 32, 40, 48};
+  for (std::size_t index = 0; index < texture.mipLevels.size(); ++index) {
+    expect_eq(texture.mipLevels[index].width, dimensions[index],
+              "DDS mip width should halve to one");
+    expect_eq(texture.mipLevels[index].height, dimensions[index],
+              "DDS mip height should halve to one");
+    expect_eq(texture.mipLevels[index].dataOffset, offsets[index],
+              "DDS mip offsets should follow block-compressed sizes");
+    expect_eq(texture.mipLevels[index].dataSize, index == 0 ? std::size_t{32} : std::size_t{8},
+              "BC1 mip sizes should use 8-byte 4x4 blocks");
+  }
+
+  bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '1'), 4, 4, 1, 8, 0x1);
+  expect_true(parse_dds_texture(bytes, texture, error), "Legacy BC1 alpha DDS should parse");
+  expect_true(texture.format == DdsBlockFormat::Bc1RgbaUnorm,
+              "Legacy DXT1 with alpha pixels should map to BC1 RGBA");
+
+  bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '5'), 4, 4, 1, 16);
+  expect_true(parse_dds_texture(bytes, texture, error), "Legacy BC3 DDS should parse");
+  expect_true(texture.format == DdsBlockFormat::Bc3RgbaUnorm, "Legacy DXT5 should map to BC3 RGBA");
+
+  bytes = make_legacy_dds(dds_four_cc('A', 'T', 'I', '2'), 4, 4, 1, 16);
+  expect_true(parse_dds_texture(bytes, texture, error), "Legacy BC5 DDS should parse");
+  expect_true(texture.format == DdsBlockFormat::Bc5RgUnorm, "Legacy ATI2 should map to BC5 RG");
+
+  bytes = make_legacy_dds(dds_four_cc('B', 'C', '5', 'U'), 4, 4, 1, 16);
+  expect_true(parse_dds_texture(bytes, texture, error), "Legacy BC5U DDS should parse");
+  expect_true(texture.format == DdsBlockFormat::Bc5RgUnorm, "Legacy BC5U should map to BC5 RG");
+}
+
+void test_parse_dds_dx10_formats() {
+  using namespace iee::game;
+
+  struct FormatCase {
+    std::uint32_t dxgiFormat;
+    DdsBlockFormat expected;
+    std::size_t blockBytes;
+  };
+  constexpr std::array<FormatCase, 7> cases{{
+      {71, DdsBlockFormat::Bc1RgbaUnorm, 8},
+      {72, DdsBlockFormat::Bc1RgbaSrgb, 8},
+      {77, DdsBlockFormat::Bc3RgbaUnorm, 16},
+      {78, DdsBlockFormat::Bc3RgbaSrgb, 16},
+      {83, DdsBlockFormat::Bc5RgUnorm, 16},
+      {98, DdsBlockFormat::Bc7RgbaUnorm, 16},
+      {99, DdsBlockFormat::Bc7RgbaSrgb, 16},
+  }};
+
+  for (const auto& formatCase : cases) {
+    auto bytes = make_dx10_dds(formatCase.dxgiFormat, 4, 4, 1, formatCase.blockBytes);
+    DdsTexture texture;
+    std::string error;
+    expect_true(parse_dds_texture(bytes, texture, error),
+                "Supported DX10 block-compressed DDS should parse");
+    expect_true(texture.format == formatCase.expected,
+                "DXGI compression format should map to the expected runtime format");
+    expect_eq(texture.payload.size(), formatCase.blockBytes,
+              "DX10 DDS should expose exactly one compressed block");
+  }
+}
+
+void test_parse_dds_rejects_unsupported_or_malformed_input() {
+  using namespace iee::game;
+
+  DdsTexture texture;
+  std::string error;
+  auto bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '1'), 8, 8, 1, 31);
+  expect_true(!parse_dds_texture(bytes, texture, error),
+              "Truncated BC1 payload should fail closed");
+  expect_true(texture.empty() && !error.empty(),
+              "Rejected DDS input should clear output and explain the failure");
+
+  bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '3'), 4, 4, 1, 16);
+  expect_true(!parse_dds_texture(bytes, texture, error), "Unsupported BC2/DXT3 should be rejected");
+
+  bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '1'), 4, 4, 1, 8);
+  write_u32(bytes, 112, 0x200);  // DDSCAPS2_CUBEMAP
+  expect_true(!parse_dds_texture(bytes, texture, error), "Legacy cubemap DDS should be rejected");
+
+  bytes = make_dx10_dds(98, 4, 4, 1, 16);
+  write_u32(bytes, 140, 2);
+  expect_true(!parse_dds_texture(bytes, texture, error), "DX10 texture arrays should be rejected");
+
+  bytes = make_legacy_dds(dds_four_cc('D', 'X', 'T', '1'), 4, 4, 4, 32);
+  expect_true(!parse_dds_texture(bytes, texture, error),
+              "A DDS with more mips than its dimensions allow should be rejected");
+
+  bytes = make_dx10_dds(95, 4, 4, 1, 16);  // BC6H_UF16
+  expect_true(!parse_dds_texture(bytes, texture, error),
+              "Unsupported DXGI compression formats should be rejected");
+}
+
+void test_load_dds_texture_file_wrapper() {
+  const auto tempPath = std::filesystem::current_path() / "InfinityEngine-Enhancer-dds-test.dds";
+  const auto bytes = make_dx10_dds(98, 4, 4, 1, 16);
+  {
+    std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+    expect_true(static_cast<bool>(file), "Synthetic DDS fixture should be written completely");
+  }
+
+  iee::game::DdsTexture texture;
+  std::string error;
+  expect_true(iee::game::load_dds_texture(tempPath, texture, error),
+              "DDS file wrapper should load a valid bounded file");
+  expect_true(texture.format == iee::game::DdsBlockFormat::Bc7RgbaUnorm,
+              "DDS file wrapper should preserve the parsed format");
+
+  std::error_code removeError;
+  std::filesystem::remove(tempPath, removeError);
+  expect_true(!removeError, "Synthetic DDS fixture should be removed after the test");
+
+  expect_true(!iee::game::load_dds_texture(tempPath, texture, error),
+              "DDS file wrapper should reject a missing file");
+  expect_true(texture.empty() && !error.empty(),
+              "Missing DDS files should clear output and report an error");
 }
 
 void test_parse_loaded_wed() {
@@ -696,6 +894,61 @@ void test_tis_header_dimension_decoding() {
   }
 }
 
+void test_tis_table_entry_bounds() {
+  using namespace iee::game;
+
+  std::array<PVRZTileEntry, 1> table{{{3, 64, 128}}};
+  TileInfo info{};
+  info.table = table.data();
+  info.tileCount = static_cast<std::uint32_t>(table.size());
+
+  PVRZTileEntry entry{};
+  expect_true(read_tis_tile_entry(info, 0, entry), "In-range TIS entries should be readable");
+  expect_eq(entry.page, 3, "The requested TIS entry should be returned");
+  expect_true(!read_tis_tile_entry(info, 1, entry),
+              "TIS entry reads must reject indices at the count boundary");
+
+  info.table = reinterpret_cast<const PVRZTileEntry*>((std::numeric_limits<std::uintptr_t>::max)() -
+                                                      sizeof(PVRZTileEntry) + 1);
+  info.tileCount = 2;
+  expect_true(!read_tis_tile_entry(info, 1, entry),
+              "TIS entry address arithmetic must reject integer overflow");
+
+  auto overflowManifest = current_manifest();
+  constexpr auto nearAddress = (std::numeric_limits<std::uintptr_t>::max)() - 3;
+  overflowManifest.offsets.vidTileResource = 8;
+  expect_true(!get_tile_info(reinterpret_cast<void*>(nearAddress), overflowManifest, info, nullptr),
+              "CVidTile field address arithmetic must reject integer overflow");
+
+  info.header = reinterpret_cast<const TisFileHeader*>(nearAddress);
+  overflowManifest.offsets.tisHeaderTileDimension = 8;
+  expect_true(!get_tis_header_tile_dimension(info, overflowManifest).has_value(),
+              "TIS header field address arithmetic must reject integer overflow");
+
+  overflowManifest.offsets.tisLinearTilesFlag = 8;
+  expect_true(!get_tis_linear_tiles_flag(reinterpret_cast<const CResTileSet*>(nearAddress),
+                                         overflowManifest),
+              "TIS linear-flag address arithmetic must reject integer overflow");
+}
+
+void test_tileset_runtime_cache_is_bounded_and_resettable() {
+  iee::features::TileRenderState state{};
+  for (std::size_t i = 0; i < iee::features::TileRenderState::kMaxTilesetsPerArea; ++i) {
+    const auto* tileset = reinterpret_cast<const iee::game::CResTileSet*>(i + 1);
+    expect_true(state.find_or_add(tileset) != nullptr,
+                "The bounded cache should accept its documented tileset capacity");
+  }
+  const auto* overflow = reinterpret_cast<const iee::game::CResTileSet*>(
+      iee::features::TileRenderState::kMaxTilesetsPerArea + 1);
+  expect_true(state.find_or_add(overflow) == nullptr,
+              "The tileset cache must fail closed instead of growing without a bound");
+
+  state.reset();
+  expect_eq(state.tilesetCount, std::size_t{0}, "Area reset should release all cached tilesets");
+  expect_true(state.find_or_add(overflow) != nullptr,
+              "A reset cache should accept tilesets from the next area");
+}
+
 void test_scale_selection_precedence() {
   const auto& manifest = iee::game::current_manifest();
 
@@ -852,6 +1105,10 @@ void test_fpseam_override_asset_contract() {
   }
   expect_true(source.find("#version") == std::string::npos,
               "no #version line (engine sources are ARB-era GLSL)");
+  expect_true(
+      source.find("ieeCoverageWithCenter") != std::string::npos &&
+          source.find("ieeShoreFactor(vec2 worldPos, float centerCoverage)") != std::string::npos,
+      "water shader should reuse center coverage instead of resampling it");
 }
 
 int main() {
@@ -866,9 +1123,15 @@ int main() {
   test_config_numeric_bounds();
   test_config_shader_override_defaults();
   test_config_shader_override_roundtrip();
+  test_parse_dds_legacy_formats_and_mips();
+  test_parse_dds_dx10_formats();
+  test_parse_dds_rejects_unsupported_or_malformed_input();
+  test_load_dds_texture_file_wrapper();
   test_parse_loaded_wed();
   test_decode_palette_tile_alpha();
   test_tis_header_dimension_decoding();
+  test_tis_table_entry_bounds();
+  test_tileset_runtime_cache_is_bounded_and_resettable();
   test_scale_selection_precedence();
   test_tile_table_detection_ignores_garbage_steps();
   test_tile_table_detection_uses_coordinate_deltas();

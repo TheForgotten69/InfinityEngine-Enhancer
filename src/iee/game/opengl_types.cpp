@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <mutex>
 
 #include "iee/core/logger.h"
@@ -143,6 +144,10 @@ bool OpenGLFunctions::initialize() noexcept {
   glUniform3f = reinterpret_cast<PFN_glUniform3f>(get_ext_proc_address(opengl32, "glUniform3f"));
   glActiveTexture =
       reinterpret_cast<PFN_glActiveTexture>(get_ext_proc_address(opengl32, "glActiveTexture"));
+  glCompressedTexImage2D = reinterpret_cast<PFN_glCompressedTexImage2D>(
+      get_ext_proc_address(opengl32, "glCompressedTexImage2D"));
+  glGenerateMipmap =
+      reinterpret_cast<PFN_glGenerateMipmap>(get_ext_proc_address(opengl32, "glGenerateMipmap"));
   glBindFramebuffer =
       reinterpret_cast<PFN_glBindFramebuffer>(get_ext_proc_address(opengl32, "glBindFramebuffer"));
   glIsProgram = reinterpret_cast<PFN_glIsProgram>(get_ext_proc_address(opengl32, "glIsProgram"));
@@ -170,8 +175,8 @@ bool OpenGLFunctions::initialize() noexcept {
                                  glGetProgramiv != nullptr && glGetProgramInfoLog != nullptr &&
                                  glGetAttachedShaders != nullptr && glGetShaderSource != nullptr;
 
-  uniformApiAvailable =
-      glGetUniformLocation != nullptr && glUniform1f != nullptr && glUniform1i != nullptr;
+  uniformApiAvailable = glGetUniformLocation != nullptr && glUniform1f != nullptr &&
+                        glUniform1i != nullptr && glUniform2f != nullptr && glUniform3f != nullptr;
 
   readyForSourcePatching =
       shaderObjectsAvailable && shaderIntrospectionAvailable && uniformApiAvailable;
@@ -179,23 +184,29 @@ bool OpenGLFunctions::initialize() noexcept {
   arbShaderObjectsAvailable = glShaderSourceARB != nullptr && glCompileShaderARB != nullptr &&
                               glLinkProgramARB != nullptr && glUseProgramObjectARB != nullptr;
 
-  textureUploadAvailable = glGenTextures != nullptr && glBindTexture != nullptr &&
+  textureUploadAvailable = valid && glGenTextures != nullptr && glBindTexture != nullptr &&
                            glTexImage2D != nullptr && glDeleteTextures != nullptr &&
                            glPixelStorei != nullptr && glActiveTexture != nullptr;
+  compressedTextureUploadAvailable = textureUploadAvailable && glCompressedTexImage2D != nullptr;
 
   if (valid) {
-    LOG_INFO("OpenGL initialized (source patching={}, ARB shaders={}, texture upload={})",
-             readyForSourcePatching ? "ready" : "partial",
-             arbShaderObjectsAvailable ? "ready" : "partial",
-             textureUploadAvailable ? "ready" : "partial");
+    LOG_INFO(
+        "OpenGL initialized (source patching={}, ARB shaders={}, texture upload={}, compressed "
+        "texture upload={})",
+        readyForSourcePatching ? "ready" : "partial",
+        arbShaderObjectsAvailable ? "ready" : "partial",
+        textureUploadAvailable ? "ready" : "partial",
+        compressedTextureUploadAvailable ? "ready" : "partial");
     LOG_DEBUG(
         "OpenGL entry points: glGetString={}, glTexParameteri={}, glTexParameterf={}, "
         "glGetIntegerv={}, glGetTexParameteriv={}, glGetError={}, glGenTextures={}, "
-        "glBindTexture={}, glTexImage2D={}, glDeleteTextures={}, glPixelStorei={}",
+        "glBindTexture={}, glTexImage2D={}, glDeleteTextures={}, glPixelStorei={}, "
+        "glCompressedTexImage2D={}, glGenerateMipmap={}",
         glGetString != nullptr, glTexParameteri != nullptr, glTexParameterf != nullptr,
         glGetIntegerv != nullptr, glGetTexParameteriv != nullptr, glGetError != nullptr,
         glGenTextures != nullptr, glBindTexture != nullptr, glTexImage2D != nullptr,
-        glDeleteTextures != nullptr, glPixelStorei != nullptr);
+        glDeleteTextures != nullptr, glPixelStorei != nullptr, glCompressedTexImage2D != nullptr,
+        glGenerateMipmap != nullptr);
   } else {
     LOG_ERROR("Failed to initialize some OpenGL functions");
   }
@@ -206,15 +217,23 @@ bool OpenGLFunctions::initialize() noexcept {
 OpenGLFunctions& get_gl_functions() noexcept {
   static OpenGLFunctions instance;
   static std::mutex mutex;
-  static HGLRC lastContext = nullptr;
+  static std::atomic<HGLRC> lastContext{nullptr};
+  static std::atomic<bool> ready{false};
 
-  // Context read happens before the lock: a context switch in that window only
-  // costs one spurious re-init on the next call (single render thread in practice).
   const auto context = current_context();
+  if (ready.load(std::memory_order_acquire) &&
+      context == lastContext.load(std::memory_order_relaxed)) {
+    return instance;
+  }
+
+  // Context initialization/replacement is the slow path. The steady-state
+  // render thread avoids taking this mutex on every uniform or texture feed.
   std::lock_guard lock(mutex);
-  if (!instance.valid || context != lastContext) {
+  if (!ready.load(std::memory_order_relaxed) ||
+      context != lastContext.load(std::memory_order_relaxed)) {
     instance.initialize();
-    lastContext = context;
+    lastContext.store(context, std::memory_order_relaxed);
+    ready.store(instance.valid, std::memory_order_release);
   }
 
   return instance;

@@ -11,6 +11,11 @@ The first supported feature is 4x TIS/PVRZ tile upscaling, with an optional WED-
 
 Some standard tilesets legitimately have no live header pointer. In those cases the runtime classifies scale from the PVR entry table before considering the old UV / texture-id heuristic fallback.
 
+Runtime tileset decisions and configured GL textures are cached only for the
+current area, with fixed capacities, so visiting more maps does not accumulate
+cache state. Set `PerformanceLogs = true` in the `[Core]` section to emit an
+aggregate five-second timing window for the `RenderTexture` enhancement path.
+
 ## Requirements
 
 - Windows game runtime
@@ -27,6 +32,9 @@ Some standard tilesets legitimately have no live header pointer. In those cases 
 5. Optionally copy [InfinityEngine-Enhancer.sample.ini](tools/InfinityEngine-Enhancer.sample.ini) to the game root as `InfinityEngine-Enhancer.ini` and customize it.
 
 The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.log` next to the game executable.
+Optional BC1, BC3, BC5, or BC7 DDS water-texture overrides can be placed in
+`iee-textures/`; supported layouts and format guidance are documented in
+[`assets/game-textures/README.md`](assets/game-textures/README.md).
 
 ## Development
 
@@ -41,6 +49,11 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
   `cmake --build build --config Release --target release_bundle`
 
 C++ changes follow the repository's Google-derived [`.clang-format`](.clang-format).
+
+GitHub Dependabot maintains workflow actions. Commit-pinned CMake
+`FetchContent` dependencies are described by [`renovate.json`](renovate.json);
+install the Renovate GitHub App for the repository to enable those update PRs
+while keeping builds reproducibly pinned to full commit SHAs.
 
 ## Docs
 

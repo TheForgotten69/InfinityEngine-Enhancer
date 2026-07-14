@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <exception>
@@ -13,6 +14,7 @@
 #include "iee/features/tile_render.h"
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
+#include "iee/game/renderer.h"
 #include "iee/shader_probe.h"
 
 namespace iee::hooks {
@@ -31,6 +33,52 @@ static core::Hook<DrawColorToneFn> g_drawColorToneHook;
 static AppContext* g_ctx = nullptr;
 
 namespace {
+void record_render_performance(bool enabled, bool handled, long long elapsedTicks) noexcept {
+  if (!enabled || elapsedTicks < 0) return;
+
+  try {
+    static const long long frequency = [] {
+      LARGE_INTEGER value{};
+      return QueryPerformanceFrequency(&value) ? value.QuadPart : 0LL;
+    }();
+    if (frequency <= 0) return;
+
+    struct Window {
+      long long startedAt{};
+      long long totalTicks{};
+      long long maximumTicks{};
+      unsigned long long calls{};
+      unsigned long long handledCalls{};
+    };
+    static Window window;
+
+    LARGE_INTEGER now{};
+    if (!QueryPerformanceCounter(&now)) return;
+    if (window.startedAt == 0) window.startedAt = now.QuadPart;
+    window.totalTicks += elapsedTicks;
+    window.maximumTicks = (std::max)(window.maximumTicks, elapsedTicks);
+    ++window.calls;
+    if (handled) ++window.handledCalls;
+
+    constexpr long long kReportSeconds = 5;
+    if (now.QuadPart - window.startedAt < frequency * kReportSeconds) return;
+
+    const double ticksToMicroseconds = 1'000'000.0 / static_cast<double>(frequency);
+    const double averageMicroseconds = static_cast<double>(window.totalTicks) *
+                                       ticksToMicroseconds / static_cast<double>(window.calls);
+    const double maximumMicroseconds =
+        static_cast<double>(window.maximumTicks) * ticksToMicroseconds;
+    LOG_INFO(
+        "RenderTexture enhancement perf: calls={}, handled={}, delegated={}, avg={:.2f}us, "
+        "max={:.2f}us over {}s",
+        window.calls, window.handledCalls, window.calls - window.handledCalls, averageMicroseconds,
+        maximumMicroseconds, kReportSeconds);
+    window = {.startedAt = now.QuadPart};
+  } catch (...) {
+    // Performance diagnostics must not affect rendering.
+  }
+}
+
 void install_shader_probes_once() {
   // Latch only on success: a transient first-frame failure (partial GL
   // table) must not permanently suppress the probes. Runs on the render
@@ -66,7 +114,7 @@ void install_shader_probes_once() {
 // re-cache the WED from here — the render thread, where the GL upload
 // belongs anyway. Throttled so a transiently unreadable WED retries
 // once a second instead of every draw.
-void publish_view_state(bool force = false) {
+void publish_view_state(bool force = false, bool flushGpuUpload = true) {
   if (!g_ctx) {
     return;
   }
@@ -75,13 +123,17 @@ void publish_view_state(bool force = false) {
   if (!force && frameNumber != 0 && frameNumber == lastPublishedFrame) {
     return;
   }
-  if (frameNumber != 0) {
+  // A LoadArea CPU-only publication must not consume the render callback's
+  // once-per-frame slot; the next Seam callback still owns the queued upload.
+  if (flushGpuUpload && frameNumber != 0) {
     lastPublishedFrame = frameNumber;
   }
-  // This hook runs inside the world render pass with a current GL
-  // context. Flush even when active-area resolution is temporarily
-  // unavailable so a queued no-liquid transition clears stale data.
-  (void)area::flush_pending_gpu_upload();
+  if (flushGpuUpload) {
+    // DrawColorTone runs inside the world render pass with a current GL
+    // context. Flush even when active-area resolution is temporarily
+    // unavailable so a queued no-liquid transition clears stale data.
+    (void)area::flush_pending_gpu_upload();
+  }
   auto* infGame = g_ctx->infGame.load(std::memory_order_relaxed);
   if (!infGame) {
     return;
@@ -125,7 +177,8 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
     ctx.infGame.store(thisPtr, std::memory_order_relaxed);
     ctx.reset_area_state();
     area::reset_gpu_area_state();
-    features::tile_render_state().reset();
+    features::request_tile_render_state_reset();
+    game::request_texture_configuration_cache_reset();
     features::clear_disable_request();
 
     // Re-enable RenderTexture hook for new area detection.
@@ -144,7 +197,7 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
   try {
     area::refresh_wed_cache(ctx, thisPtr);
     // Seed CPU transform state; the next Seam pass owns the GL upload.
-    publish_view_state(true);
+    publish_view_state(true, false);
   } catch (const std::exception& e) {
     LOG_ERROR("LoadArea post-dispatch failed; the feature remains disabled for this area: {}",
               e.what());
@@ -185,6 +238,9 @@ static void detour_render_texture(void* thisPtr, int texId, void* unused, int x,
 
   auto& ctx = *g_ctx;
   bool handled = false;
+  LARGE_INTEGER performanceStart{};
+  const bool measurePerformance =
+      ctx.cfg.enablePerformanceLogging && QueryPerformanceCounter(&performanceStart);
   try {
     install_shader_probes_once();
     handled = features::render_tile(ctx, thisPtr, texId, unused, x, y, flags);
@@ -192,6 +248,12 @@ static void detour_render_texture(void* thisPtr, int texId, void* unused, int x,
     LOG_ERROR("RenderTexture enhancement failed; using the engine renderer: {}", e.what());
   } catch (...) {
     LOG_ERROR("RenderTexture enhancement failed; using the engine renderer");
+  }
+  if (measurePerformance) {
+    LARGE_INTEGER performanceEnd{};
+    if (QueryPerformanceCounter(&performanceEnd)) {
+      record_render_performance(true, handled, performanceEnd.QuadPart - performanceStart.QuadPart);
+    }
   }
   if (!handled) {
     original(thisPtr, texId, unused, x, y, flags);
@@ -230,8 +292,26 @@ bool install_all(AppContext& ctx) {
         g_drawColorToneHook.enable();
         LOG_INFO("DrawColorTone hook installed");
       } catch (const std::exception& e) {
-        LOG_WARN("Failed to create DrawColorTone hook: {} - continuing without it", e.what());
+        ctx.cfg.enableWaterEffect = false;
+        ctx.cfg.enableDebugHotkeys = false;
+        LOG_ERROR(
+            "Water effect disabled: DrawColorTone hook installation failed ({}); a coherent "
+            "world-view transform cannot be published safely. Tile upscaling remains enabled.",
+            e.what());
+      } catch (...) {
+        ctx.cfg.enableWaterEffect = false;
+        ctx.cfg.enableDebugHotkeys = false;
+        LOG_ERROR(
+            "Water effect disabled: DrawColorTone hook installation failed with an unknown "
+            "error; a coherent world-view transform cannot be published safely. Tile "
+            "upscaling remains enabled.");
       }
+    } else {
+      ctx.cfg.enableWaterEffect = false;
+      ctx.cfg.enableDebugHotkeys = false;
+      LOG_ERROR(
+          "Water effect disabled: DrawColorTone was not resolved; a coherent world-view "
+          "transform cannot be published safely. Tile upscaling remains enabled.");
     }
 
     g_loadAreaHook.enable();
@@ -293,11 +373,19 @@ void prepare_for_shutdown() noexcept {
   if (g_ctx) {
     g_ctx->isRenderHookActive.store(false, std::memory_order_relaxed);
   }
-
-  uninstall_all();
+  // Quiesce engine entry points before dependent frame/GL hooks and shared
+  // state are torn down. MinHook itself stays initialized until
+  // uninstall_all(), after every MinHook-backed subsystem has removed its
+  // hooks.
+  (void)g_drawColorToneHook.disable();
+  (void)g_renderTextureHook.disable();
+  (void)g_loadAreaHook.disable();
+  g_ctx = nullptr;
 }
 
 bool is_active() {
-  return g_ctx != nullptr && g_ctx->isRenderHookActive.load(std::memory_order_relaxed);
+  // The RenderTexture hook is intentionally disabled on standard-resolution
+  // areas while the DLL, area hooks, and shader features remain active.
+  return g_ctx != nullptr;
 }
 }  // namespace iee::hooks

@@ -63,7 +63,9 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/features/tile_render.*`
 
-- The tile upscale render path and its per-area state, moved out of hooks/AppContext.
+- The tile upscale render path and its per-area, fixed-capacity tileset cache,
+  moved out of hooks/AppContext. Scale and linear-mode decisions are kept per
+  observed tileset; the whole cache is discarded on area change.
 
 `src/iee/diagnostics.*`
 
@@ -71,13 +73,18 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/game/shader_override.*`
 
-- Host-safe shader replacement logic: name extraction, override registry,
-  magenta debug variants, interface-contract checks. Unit-tested in WSL/macOS.
+- Host-safe shader name extraction and interface-contract checks for the
+  delivered `fpSEAM.glsl` game override. Unit-tested in WSL/macOS.
+- Shader source delivery is performed by the game's `override` directory; this
+  module does not maintain a runtime replacement registry.
 
 `src/iee/shader_probe.*`
 
-- Thin Windows GL detours (source/compile/link/use/delete + ARB), program classification,
-  compile-failure fallback, and hook lifecycle.
+- Thin Windows GL detours (source/compile/link/use/delete + ARB), diagnostics,
+  program classification, uniform-feed dispatch, and hook lifecycle.
+- Compile/link failures are logged, but the production path does not resubmit a
+  fallback shader source. The engine-owned override loading path remains the
+  source of the compiled shader.
 
 `src/iee/shader_uniform_bridge.*`
 
@@ -97,6 +104,21 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - Host-safe packing of WED per-cell liquid modes into the R8 unit-2 mask texture.
 - The compact cell mask is an outer bound; base-tile alpha supplies the authored contour.
 
+`src/iee/game/dds_texture.*`
+
+- Host-safe, bounded parsing for single 2D BC1/BC3/BC5/BC7 DDS assets.
+- Separates format validation and mip layout from the Windows/OpenGL upload path,
+  so malformed-input behavior is testable without a game or GL context.
+
+`src/iee/water_textures.*`
+
+- Selects optional DDS assets ahead of the bundled IRGB fallback and owns their
+  current-context GL objects.
+- Uploads authored compressed mip chains directly and reports driver/format
+  failures once per context instead of retrying on every draw.
+- Discards stale GL errors immediately before its own upload sequence so an
+  unrelated engine error cannot permanently block water textures for a context.
+
 ## Build Layout
 
 The CMake graph is split on purpose:
@@ -105,6 +127,8 @@ The CMake graph is split on purpose:
 - `InfinityEngine-Enhancer` is Windows-only and links MinHook, `psapi`, and `opengl32`.
 - `release_bundle` packages the DLL, EEex loader script, sample INI, shader
   assets, game override, and water textures into one directory.
+- `renovate.json` teaches Renovate's regex manager to update the human-readable
+  spdlog/MinHook tags and their immutable `FetchContent` commit pins together.
 
 This keeps reverse-engineering and parsing code testable without requiring a Windows toolchain for every edit.
 

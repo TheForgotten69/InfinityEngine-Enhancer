@@ -39,7 +39,7 @@ void reset_gpu_area_state() noexcept;
 // a recreated context.
 bool flush_pending_gpu_upload() noexcept;
 
-// Ensures the latest generation is uploaded and binds it to reserved unit 2.
+// Ensures the latest generation is uploaded and binds it to the reserved area-mask unit.
 bool bind_area_texture() noexcept;
 
 // Best-effort explicit shutdown; never call from DllMain.

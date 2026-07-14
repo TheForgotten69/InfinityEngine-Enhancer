@@ -1,5 +1,13 @@
 # Phase 2 — Water (Tile Shader, WED-Masked) Implementation Plan
 
+> **Status: Historical implementation plan. Do not execute as a current
+> runbook.** Phase 2 shipped and then changed through the Phase 2.6 validation
+> cycle. The current production behavior is the v20 baseline summarized in
+> [`docs/validation/phase0-gates.md`](../../validation/phase0-gates.md); current
+> runtime ownership is documented in
+> [`docs/architecture.md`](../../architecture.md). Branch and push commands
+> below are preserved only as historical evidence.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Animated water on exactly the WED-flagged liquid cells (not the whole screen), via a replacement `fpSEAM` override file driven by the proven uniform bridge and the unit-2 area mask texture.

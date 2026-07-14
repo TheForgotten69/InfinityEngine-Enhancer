@@ -38,5 +38,10 @@ bool resolve_draw_api(DrawApi& out, std::uintptr_t renderTextureVA, const BuildM
 // when no texture is bound or any requested parameter fails.
 bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId);
 
+// Requests a drop of the bounded per-area cache used by
+// configure_bound_texture(). The render thread consumes the request; context
+// recreation also invalidates the cache automatically.
+void request_texture_configuration_cache_reset() noexcept;
+
 constexpr unsigned long BLACK_COLOR = 0xFF000000;
 }  // namespace iee::game

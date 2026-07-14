@@ -12,6 +12,7 @@ struct EngineConfig {
   bool enableWaterEffect = true;
 
   bool enableVerboseLogging = false;
+  bool enablePerformanceLogging = false;
 };
 
 class ConfigManager {

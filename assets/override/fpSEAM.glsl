@@ -143,10 +143,24 @@ float ieeCoverage(vec2 worldPos)
 	return cover / 5.0;
 }
 
-// Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
-float ieeShoreFactor(vec2 worldPos)
+// The caller already sampled the current cell to obtain its liquid mode.
+// Reuse that result instead of fetching the same mask texel again.
+float ieeCoverageWithCenter(vec2 worldPos, float centerLiquid)
 {
-	float cover = ieeCoverage(worldPos) * 2.0;
+	float cover = centerLiquid;
+	cover += ieeLiquidAt(worldPos + vec2( 8.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(-8.0, 0.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0,  8.0));
+	cover += ieeLiquidAt(worldPos + vec2(0.0, -8.0));
+	return cover / 5.0;
+}
+
+// Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
+float ieeShoreFactor(vec2 worldPos, float centerCoverage)
+{
+	// centerCoverage was already computed for the contour gate. Reusing it
+	// removes another five mask fetches without changing the result.
+	float cover = centerCoverage * 2.0;
 	cover += ieeCoverage(worldPos + vec2( 44.0, 0.0));
 	cover += ieeCoverage(worldPos + vec2(-44.0, 0.0));
 	cover += ieeCoverage(worldPos + vec2(0.0,  44.0));
@@ -206,13 +220,15 @@ void main()
 	// opaque base pass: the WATER_ALPHA secondary pass and fades carry
 	// vColor.a < 1 and must stay vanilla.
 	float waterMask = 0.0;
+	float waterCoverage = 0.0;
 	if (uIeeEnabled > 0.5 && vColor.a > 0.9)
 	{
 		// Wide cell gate: hole pixels up to one mask texel OUTSIDE a flagged
 		// cell still count (coverage 0.2 from one neighbor tap) — authored
 		// water spills slightly past its cell, and unstyled spill showed the
 		// engine's raw overlay tile at water-body edges.
-		float cellSoft = smoothstep(0.01, 0.08, ieeCoverage(worldPos));
+		waterCoverage = ieeCoverageWithCenter(worldPos, cellMode > 0.5 ? 1.0 : 0.0);
+		float cellSoft = smoothstep(0.01, 0.08, waterCoverage);
 		waterMask = (1.0 - texColor.a) * cellSoft;
 	}
 
@@ -256,7 +272,7 @@ void main()
 		}
 
 		// Shore proximity: brightens shallows and drives the foam band.
-		float shore = ieeShoreFactor(worldPos);
+		float shore = ieeShoreFactor(worldPos, waterCoverage);
 
 		// Water body: deep->shallow by wave height and shore, lit by the normal.
 		float depthMix = clamp(waveH * 0.65 + shore * 0.55, 0.0, 1.0);

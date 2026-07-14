@@ -18,6 +18,22 @@ struct Locations {
   int normalMap{kUnresolved};
   int dudvMap{kUnresolved};
   int foamMap{kUnresolved};
+
+  bool samplersInitialized{};
+  bool viewInitialized{};
+  bool worldSizeInitialized{};
+  bool waterTintInitialized{};
+  float lastScrollX{};
+  float lastScrollY{};
+  float lastViewWorldWidth{};
+  float lastViewWorldHeight{};
+  float lastWorldWidth{};
+  float lastWorldHeight{};
+  float lastWaterTintR{};
+  float lastWaterTintG{};
+  float lastWaterTintB{};
+  int lastViewportWidth{};
+  int lastViewportHeight{};
 };
 
 struct Snapshot {

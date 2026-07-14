@@ -59,6 +59,7 @@ set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     spdlog
     GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    # renovate: datasource=github-tags depName=gabime/spdlog versioning=semver
     GIT_TAG 6fa36017cfd5731d617e1a934f0e5ea9c4445b13 # v1.15.3
 )
 FetchContent_MakeAvailable(spdlog)
@@ -93,6 +94,7 @@ add_library(iee_common STATIC
     src/iee/core/pattern_scanner.cpp
     src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp
+    src/iee/game/dds_texture.cpp
     src/iee/game/game_addrs.cpp
     src/iee/game/resref_runtime.cpp
     src/iee/game/shader_override.cpp
@@ -125,6 +127,7 @@ if(IEE_BUILD_WINDOWS_DLL)
     FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
+        # renovate: datasource=github-tags depName=TsudaKageyu/minhook versioning=semver
         GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
     )
     FetchContent_MakeAvailable(minhook)

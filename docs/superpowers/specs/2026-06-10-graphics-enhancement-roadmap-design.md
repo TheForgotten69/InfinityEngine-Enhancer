@@ -1,8 +1,16 @@
 # Graphics Enhancement Roadmap — Design
 
 Date: 2026-06-10
-Status: Draft for review
+Status: Historical design record — not the current implementation contract
 Target: BGEE 2.6.6.x (x64, Windows, OpenGL compatibility profile), EEex-loaded DLL
+
+> This document preserves the design assumptions and option analysis that
+> started the graphics work. Some gates later rejected those assumptions and
+> the production architecture changed accordingly. Use
+> [`docs/architecture.md`](../../architecture.md) for the current module model
+> and [`docs/validation/phase0-gates.md`](../../validation/phase0-gates.md) for
+> the evidence trail and current v20 water baseline. Do not implement directly
+> from this roadmap without revalidating the relevant section.
 
 ## 1. Context
 

@@ -1,26 +1,62 @@
 #pragma once
+#include <array>
 #include <atomic>
+#include <cstddef>
 
 namespace iee {
 struct AppContext;
 }
 
+namespace iee::game {
+struct CResTileSet;
+}
+
 namespace iee::features {
+struct TilesetRenderState {
+  const game::CResTileSet* tileset{};
+  int scaleFactor{1};
+  int detectionCount{};
+  bool scaleDetected{};
+  bool linearTiles{};
+  bool linearFlagDetected{};
+};
+
 // Per-area tile upscale state, owned by this feature (moved out of AppContext).
 struct TileRenderState {
+  static constexpr std::size_t kMaxTilesetsPerArea = 16;
+
   std::atomic<int> lastTexId{-1};
-  std::atomic<int> areaScale{1};
-  std::atomic<bool> scaleDetected{false};
-  std::atomic<int> detectionCount{0};
+  std::array<TilesetRenderState, kMaxTilesetsPerArea> tilesets{};
+  std::size_t tilesetCount{};
+  int consecutiveDecodeFailures{};
+  bool sawUpscaledTileset{};
+  bool capacityWarningLogged{};
+
+  TilesetRenderState* find_or_add(const game::CResTileSet* tileset) noexcept {
+    for (std::size_t i = 0; i < tilesetCount; ++i) {
+      if (tilesets[i].tileset == tileset) return &tilesets[i];
+    }
+    if (!tileset || tilesetCount >= tilesets.size()) return nullptr;
+    auto& added = tilesets[tilesetCount++];
+    added = {.tileset = tileset};
+    return &added;
+  }
+
   void reset() noexcept {
     lastTexId.store(-1, std::memory_order_relaxed);
-    areaScale.store(1, std::memory_order_relaxed);
-    detectionCount.store(0, std::memory_order_relaxed);
-    scaleDetected.store(false, std::memory_order_release);
+    tilesets = {};
+    tilesetCount = 0;
+    consecutiveDecodeFailures = 0;
+    sawUpscaledTileset = false;
+    capacityWarningLogged = false;
   }
 };
 
 TileRenderState& tile_render_state() noexcept;
+
+// LoadArea may run at a different engine boundary from rendering. Request a
+// reset here; the render thread consumes it before touching non-atomic state.
+void request_tile_render_state_reset() noexcept;
 
 // Tile upscale render path. Returns true if it fully handled the draw;
 // false means the caller must invoke the original RenderTexture.

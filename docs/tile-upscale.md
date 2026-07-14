@@ -40,19 +40,28 @@ Acceptance checks for this feature:
   PVRZ atlas dimensions.
 - The screen quad and all WED/ARE coordinates remain 64x64.
 - Tests cover every size, atlas edges, malformed counts, and mixed metadata.
-- Runtime state is per tileset, not just per area, so a mod with mixed TIS
-  resources cannot inherit the first tileset's scale.
+- Runtime scale and linear-mode decisions are per observed tileset, held in a
+  fixed-capacity cache that is cleared on every area load. Standard tilesets in
+  an already-confirmed 4x area delegate to the engine renderer rather than
+  inheriting the base tileset's scale.
 
-The last point is the main architectural follow-up: the existing area-wide
-scale cache is sufficient for ordinary maps but too coarse for fully general
-mod content.
+The cache accepts 16 tilesets per area (the WED format exposes at most eight
+layers). Additional resources fail closed to the engine renderer instead of
+growing memory without a bound.
+
+The fast-disable optimization still assumes the engine's observed ordering:
+the base tileset is seen before overlays. A confirmed standard base disables
+the render hook for that area. Supporting arbitrary mod content that presents a
+standard tileset first and a 4x tileset later would require keeping the
+dispatcher installed; that broader case is not implemented because it is not a
+known engine path.
 
 ## Area Scope
 
-Scale detection is area-scoped.
+Cache lifetime is area-scoped; scale decisions are tileset-scoped.
 
 - `LoadArea` resets the cached decision.
-- The first `RenderTexture` calls in the new area classify the tileset.
+- The first `RenderTexture` calls for each observed tileset classify that tileset.
 - Once a standard area is confirmed, the render hook disables itself for that area to avoid unnecessary overhead.
 
 ## Render Path

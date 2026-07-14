@@ -9,7 +9,6 @@ namespace iee::game {
 namespace UpscaleThresholds {
 constexpr int UV_THRESHOLD = 1024;
 constexpr int TEXTURE_ID_THRESHOLD = 10000;
-constexpr int UI_TEXTURE_THRESHOLD = 100;
 constexpr int DETECTION_SAMPLE_COUNT = 10;
 }  // namespace UpscaleThresholds
 
