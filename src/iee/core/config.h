@@ -1,7 +1,5 @@
 #pragma once
-#include <cstdint>
 #include <filesystem>
-#include <string>
 
 namespace iee::core {
 struct EngineConfig {
@@ -9,10 +7,7 @@ struct EngineConfig {
   float maxAnisotropy = 8.0f;
   float lodBias = -0.25f;
 
-  bool enableShaderOverrides = false;
   bool dumpEngineShaders = false;
-  std::string shaderOverrideDir = "iee-shaders";  // relative to DLL dir
-  std::string debugMagentaShaders;
   bool enableDebugHotkeys = false;
   bool enableWaterEffect = true;
 

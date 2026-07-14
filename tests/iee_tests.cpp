@@ -363,10 +363,7 @@ void test_config_numeric_bounds() {
 
 void test_config_shader_override_defaults() {
   iee::core::EngineConfig cfg{};
-  expect_true(!cfg.enableShaderOverrides, "shader overrides default off");
   expect_true(!cfg.dumpEngineShaders, "shader dump defaults off");
-  expect_eq(cfg.shaderOverrideDir, std::string("iee-shaders"), "override dir default");
-  expect_true(cfg.debugMagentaShaders.empty(), "magenta list default empty");
   expect_true(!cfg.enableDebugHotkeys, "hotkeys default off");
   expect_true(cfg.enableWaterEffect, "water effect defaults ON");
 }
@@ -375,10 +372,7 @@ void test_config_shader_override_roundtrip() {
   const auto tempPath = std::filesystem::current_path() / "InfinityEngine-Enhancer-shader-test.ini";
   {
     iee::core::EngineConfig orig{};
-    orig.enableShaderOverrides = true;
     orig.dumpEngineShaders = false;
-    orig.shaderOverrideDir = "custom-shaders";
-    orig.debugMagentaShaders = "spell1.glsl,spell2.glsl";
     orig.enableDebugHotkeys = true;
     orig.enableWaterEffect = false;
 
@@ -389,12 +383,7 @@ void test_config_shader_override_roundtrip() {
   iee::core::EngineConfig loaded{};
   expect_true(iee::core::ConfigManager::load(tempPath, loaded),
               "ConfigManager::load should parse shader config");
-  expect_true(loaded.enableShaderOverrides, "enableShaderOverrides should round-trip as true");
   expect_true(!loaded.dumpEngineShaders, "dumpEngineShaders should round-trip as false");
-  expect_eq(loaded.shaderOverrideDir, std::string("custom-shaders"),
-            "shaderOverrideDir should round-trip");
-  expect_eq(loaded.debugMagentaShaders, std::string("spell1.glsl,spell2.glsl"),
-            "debugMagentaShaders should round-trip");
   expect_true(loaded.enableDebugHotkeys, "enableDebugHotkeys should round-trip as true");
   expect_true(!loaded.enableWaterEffect, "enableWaterEffect should round-trip as false");
 
@@ -762,25 +751,6 @@ void test_shader_name_extraction() {
   expect_true(extract_shader_name("no comment here", "fp").empty(), "no name -> empty");
 }
 
-void test_find_main_body_open() {
-  using iee::game::find_main_body_open;
-  const std::string_view src = "uniform float x;\nvoid main() {\n  gl_FragColor = vec4(x);\n}";
-  const auto pos = find_main_body_open(src);
-  expect_true(pos != std::string_view::npos, "finds main body");
-  expect_eq(src[pos], '{', "offset points at brace");
-  expect_true(find_main_body_open("float f(){}") == std::string_view::npos, "no main -> npos");
-}
-
-void test_magenta_variant() {
-  const std::string_view src = "// fpSELECT.glsl\nvoid main() {\n  gl_FragColor = vec4(1.0);\n}";
-  const auto patched = iee::game::make_magenta_variant(src);
-  expect_true(!patched.empty(), "patchable source produces variant");
-  expect_true(patched.find("vec4(1.0, 0.0, 1.0, 1.0)") != std::string::npos,
-              "magenta color present");
-  expect_true(patched.find("IEE_DEBUG_MAGENTA") != std::string::npos, "marker present");
-  expect_true(iee::game::make_magenta_variant("no main here").empty(), "unpatchable -> empty");
-}
-
 void test_interface_contract() {
   const std::string_view original =
       "// fpSEAM.glsl\nuniform sampler2D sTex;\nuniform float uTcScale;\nvarying vec2 vTc;\nvoid "
@@ -810,25 +780,6 @@ void test_interface_contract_token_boundary() {
   expect_true(!failed.ok, "sTex1 must not satisfy sTex contract (token-boundary check)");
   expect_eq(failed.missingIdentifiers.size(), std::size_t{1}, "only sTex missing");
   expect_eq(failed.missingIdentifiers[0], std::string("sTex"), "missing identifier is sTex");
-}
-
-void test_override_registry() {
-  namespace fs = std::filesystem;
-  const auto dir = fs::temp_directory_path() / "iee_override_test";
-  fs::create_directories(dir);
-  {
-    std::ofstream f(dir / "fpSELECT.glsl");
-    f << "void main(){}";
-  }
-  iee::game::ShaderOverrideRegistry reg;
-  reg.load_from_directory(dir);
-  expect_eq(reg.size(), std::size_t{1}, "one override loaded");
-  expect_true(reg.find("fpSELECT").has_value(), "finds by name");
-  expect_true(!reg.find("fpSEAM").has_value(), "unknown name -> nullopt");
-  iee::game::ShaderOverrideRegistry empty;
-  empty.load_from_directory(dir / "does-not-exist");
-  expect_eq(empty.size(), std::size_t{0}, "missing dir -> empty registry");
-  fs::remove_all(dir);
 }
 }  // namespace
 
@@ -923,11 +874,8 @@ int main() {
   test_tile_table_detection_uses_coordinate_deltas();
   test_manifest_infgame_offsets();
   test_shader_name_extraction();
-  test_find_main_body_open();
-  test_magenta_variant();
   test_interface_contract();
   test_interface_contract_token_boundary();
-  test_override_registry();
   test_area_liquid_texture_packing();
   test_area_liquid_texture_packing_rejects_mismatch();
   test_fpseam_override_asset_contract();

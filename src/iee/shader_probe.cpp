@@ -41,7 +41,6 @@ struct ShaderRecord {
   std::size_t sourceBytes{};
   bool compileLogged{};
   std::string shaderName;
-  bool overrideApplied{};
 };
 
 struct ProgramRecord {
@@ -95,13 +94,9 @@ std::mutex g_probeMutex;
 std::unordered_map<unsigned, ShaderRecord> g_shaderRecords;
 std::unordered_map<unsigned, ProgramRecord> g_programRecords;
 std::unordered_map<unsigned, uniforms::Locations> g_overriddenPrograms;
-std::unordered_map<unsigned, std::string>
-    g_pendingFallback;                                // shader -> original source (pre-override)
-std::set<std::string, std::less<>> g_magentaShaders;  // upper-cased names
-std::set<std::string> g_dumpedShaders;                // names already written to disk
+std::set<std::string> g_dumpedShaders;  // names already written to disk
 bool g_shaderProbesInstalled = false;
 core::EngineConfig g_cfg;
-game::ShaderOverrideRegistry g_registry;
 std::filesystem::path g_dumpDir;
 
 // Set by install; consumed by the first frame tick (sweep runs at the
@@ -118,33 +113,6 @@ std::string sanitize_preview(std::string text) {
     text += "...";
   }
   return text;
-}
-
-std::string upper_copy(std::string_view value) {
-  std::string out(value);
-  std::transform(out.begin(), out.end(), out.begin(),
-                 [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
-  return out;
-}
-
-void configure_magenta_shaders(std::string_view list) {
-  g_magentaShaders.clear();
-  std::string current;
-  for (const char ch : list) {
-    if (ch == ',') {
-      if (!current.empty()) {
-        g_magentaShaders.insert(upper_copy(current));
-        current.clear();
-      }
-      continue;
-    }
-    if (!std::isspace(static_cast<unsigned char>(ch))) {
-      current.push_back(ch);
-    }
-  }
-  if (!current.empty()) {
-    g_magentaShaders.insert(upper_copy(current));
-  }
 }
 
 // Joins ALL chunks into a single string, honouring lengths[i] >= 0.
@@ -257,62 +225,21 @@ void submit_shader_source(unsigned shader, int count, const char* const* strings
                           bool& forwarded) {
   const std::string fullSource = gather_full_source(count, strings, lengths);
   const auto name = game::extract_shader_name(fullSource, "");
-  std::string substituted;
-
-  if (!name.empty()) {
-    if (g_magentaShaders.contains(upper_copy(name))) {
-      substituted = game::make_magenta_variant(fullSource);
-      if (!substituted.empty()) {
-        LOG_INFO("Applied magenta debug patch to shader {}{}", name, isArb ? " (ARB)" : "");
-      }
-    }
-    if (substituted.empty() && g_cfg.enableShaderOverrides) {
-      if (const auto replacement = g_registry.find(name)) {
-        const auto contract = game::check_interface_contract(fullSource, *replacement);
-        if (contract.ok) {
-          substituted = std::string(*replacement);
-          LOG_INFO("Shader override applied{}: {} ({} bytes)", isArb ? " (ARB)" : "", name,
-                   substituted.size());
-        } else {
-          for (const auto& id : contract.missingIdentifiers) {
-            LOG_WARN(
-                "Override {}{} missing interface identifier '{}' - falling "
-                "back to engine source",
-                name, isArb ? " (ARB)" : "", id);
-          }
-        }
-      }
-    }
-  }
 
   {
     std::lock_guard lock(g_probeMutex);
     auto& record = g_shaderRecords[shader];
-    const std::string& effective = substituted.empty() ? fullSource : substituted;
-    record.sourcePreview = sanitized_preview_of(effective);
-    record.sourceBytes = effective.size();
+    record.sourcePreview = sanitized_preview_of(fullSource);
+    record.sourceBytes = fullSource.size();
     record.compileLogged = false;
     record.shaderName = name;
-    record.overrideApplied = !substituted.empty() && !name.empty();
-    if (record.overrideApplied) {
-      g_pendingFallback[shader] = fullSource;
-    } else {
-      g_pendingFallback.erase(shader);
-    }
   }
 
   forwarded = true;
-  if (!substituted.empty()) {
-    const char* source = substituted.c_str();
-    const int sourceLength = static_cast<int>(substituted.size());
-    forward(shader, 1, &source, &sourceLength);
-  } else {
-    forward(shader, count, strings, lengths);
-  }
+  forward(shader, count, strings, lengths);
 }
 
-void compile_shader(unsigned shader, Fn_glShaderSource source, Fn_glCompileShader compile,
-                    bool isArb) {
+void compile_shader(unsigned shader, Fn_glCompileShader compile, bool isArb) {
   compile(shader);
 
   const auto& gl = game::gl::get_gl_functions();
@@ -321,40 +248,6 @@ void compile_shader(unsigned shader, Fn_glShaderSource source, Fn_glCompileShade
   if (gl.glGetShaderiv) {
     gl.glGetShaderiv(shader, SHADER_TYPE, &shaderType);
     gl.glGetShaderiv(shader, COMPILE_STATUS, &compileStatus);
-  }
-
-  if (compileStatus == 0) {
-    std::string fallbackSource;
-    std::string shaderName;
-    {
-      std::lock_guard lock(g_probeMutex);
-      if (const auto it = g_pendingFallback.find(shader); it != g_pendingFallback.end()) {
-        fallbackSource = it->second;
-        shaderName = g_shaderRecords[shader].shaderName;
-      }
-    }
-    if (!fallbackSource.empty()) {
-      const char* fallback = fallbackSource.c_str();
-      const int fallbackLength = static_cast<int>(fallbackSource.size());
-      source(shader, 1, &fallback, &fallbackLength);
-      compile(shader);
-
-      const auto infoLog = read_shader_log(gl, shader);
-      LOG_ERROR(
-          "Override for shader {}{} failed to compile; reverted to engine source "
-          "(log: {})",
-          shaderName, isArb ? " (ARB)" : "", infoLog);
-
-      std::lock_guard lock(g_probeMutex);
-      g_pendingFallback.erase(shader);
-      auto& record = g_shaderRecords[shader];
-      record.overrideApplied = false;
-      record.compileLogged = true;
-      return;
-    }
-  } else {
-    std::lock_guard lock(g_probeMutex);
-    g_pendingFallback.erase(shader);
   }
 
   std::string preview;
@@ -416,19 +309,17 @@ static void APIENTRY detour_glShaderSourceARB(unsigned shader, int count,
 
 static void APIENTRY detour_glCompileShader(unsigned shader) noexcept {
   try {
-    compile_shader(shader, g_glShaderSourceHook.original(), g_glCompileShaderHook.original(),
-                   false);
+    compile_shader(shader, g_glCompileShaderHook.original(), false);
   } catch (...) {
-    // The engine compile already ran; diagnostics and fallback are optional.
+    // The engine compile already ran; diagnostics are optional.
   }
 }
 
 static void APIENTRY detour_glCompileShaderARB(unsigned shader) noexcept {
   try {
-    compile_shader(shader, g_glShaderSourceARBHook.original(), g_glCompileShaderARBHook.original(),
-                   true);
+    compile_shader(shader, g_glCompileShaderARBHook.original(), true);
   } catch (...) {
-    // The engine compile already ran; diagnostics and fallback are optional.
+    // The engine compile already ran; diagnostics are optional.
   }
 }
 
@@ -439,27 +330,12 @@ void maybe_dump_engine_shader(const game::gl::OpenGLFunctions& gl, unsigned shad
   if (!g_cfg.dumpEngineShaders) return;
   if (name.empty()) return;
 
-  // Check under lock whether already done or override applied
   bool alreadyDumped = false;
-  bool overrideApplied = false;
   {
     std::lock_guard lock(g_probeMutex);
     alreadyDumped = g_dumpedShaders.contains(name);
-    if (!alreadyDumped) {
-      auto it = g_shaderRecords.find(shader);
-      if (it != g_shaderRecords.end()) {
-        overrideApplied = it->second.overrideApplied;
-      }
-    }
   }
   if (alreadyDumped) return;
-
-  if (overrideApplied) {
-    LOG_DEBUG("Shader dump skipped for {} because an override is active", name);
-    std::lock_guard lock(g_probeMutex);
-    g_dumpedShaders.insert(name);
-    return;
-  }
 
   // GL work outside the lock
   if (gl.glGetShaderiv && gl.glGetShaderSource) {
@@ -504,13 +380,11 @@ void link_program_introspect(unsigned program, bool isArb, bool logDetails = tru
 
     // Determine name: prefer cached record, fall back to glGetShaderSource query
     std::string nameForShader;
-    bool overrideAppliedForShader = false;
     {
       std::lock_guard lock(g_probeMutex);
       auto it = g_shaderRecords.find(s);
       if (it != g_shaderRecords.end()) {
         nameForShader = it->second.shaderName;
-        overrideAppliedForShader = it->second.overrideApplied;
       }
     }
 
@@ -530,9 +404,8 @@ void link_program_introspect(unsigned program, bool isArb, bool logDetails = tru
     else if (shaderType == FRAGMENT_SHADER)
       fragmentShaderName = nameForShader;
 
-    if (overrideAppliedForShader) anyOverride = true;
-    // Shaders declaring uIee* uniforms (our overrides, or patched
-    // game-data sources from earlier experiments) get the uniform feed.
+    // Shaders declaring uIee* uniforms (our replacement sources delivered
+    // through the game's override directory) get the uniform feed.
     if (read_shader_source_prefix(gl, s).find("uIee") != std::string::npos) anyOverride = true;
 
     if (logDetails) {
@@ -686,7 +559,6 @@ static void APIENTRY detour_glUseProgramObjectARB(unsigned program) noexcept {
 void forget_shader(unsigned shader) {
   std::lock_guard lock(g_probeMutex);
   g_shaderRecords.erase(shader);
-  g_pendingFallback.erase(shader);
 }
 
 void forget_program(unsigned program) {
@@ -806,17 +678,7 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
     // the F10 debug cycle (when enabled) still overrides at runtime.
     uniforms::initialize(cfg.enableWaterEffect);
 
-    configure_magenta_shaders(cfg.debugMagentaShaders);
-    if (!g_magentaShaders.empty()) {
-      std::string joined;
-      for (const auto& s : g_magentaShaders) {
-        if (!joined.empty()) joined += ',';
-        joined += s;
-      }
-      LOG_INFO("Magenta debug shaders: {}", joined);
-    }
-
-    // Derive DLL directory for override dir and dump dir
+    // Derive the DLL directory for the dump dir and shipped water textures
 #ifdef _WIN64
     {
       wchar_t wpath[MAX_PATH]{};
@@ -828,13 +690,6 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
       const std::filesystem::path dllPath(wpath);
       const auto dllDir = dllPath.parent_path();
 
-      // Override registry
-      const auto overrideDir = dllDir / cfg.shaderOverrideDir;
-      g_registry.load_from_directory(overrideDir);
-      LOG_INFO("Shader override registry: {} shader(s) loaded from {}", g_registry.size(),
-               overrideDir.string());
-
-      // Dump directory
       g_dumpDir = dllDir / "iee-shader-dumps";
 
       // Water textures (render thread, context current here).
@@ -843,10 +698,7 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
 #else
     {
       // macOS/Linux build path (host tests only — GL hooks never run)
-      const std::filesystem::path cwd = std::filesystem::current_path();
-      const auto overrideDir = cwd / cfg.shaderOverrideDir;
-      g_registry.load_from_directory(overrideDir);
-      g_dumpDir = cwd / "iee-shader-dumps";
+      g_dumpDir = std::filesystem::current_path() / "iee-shader-dumps";
     }
 #endif
 
@@ -961,7 +813,6 @@ void uninstall_shader_probes() noexcept {
     g_shaderRecords.clear();
     g_programRecords.clear();
     g_overriddenPrograms.clear();
-    g_pendingFallback.clear();
     g_dumpedShaders.clear();
     g_fboBindsLogged.clear();
     g_shaderProbesInstalled = false;
