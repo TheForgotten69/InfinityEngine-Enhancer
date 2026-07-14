@@ -124,11 +124,18 @@ target_compile_features(iee_common PUBLIC cxx_std_20)
 iee_configure_target(iee_common)
 
 if(IEE_BUILD_WINDOWS_DLL)
+    if(CMAKE_VERSION VERSION_LESS 3.28)
+        # EXCLUDE_FROM_ALL below keeps MinHook's unconditional install() rules
+        # out of `cmake --install` (the CI layout check compares the install
+        # tree against the release bundle).
+        message(FATAL_ERROR "IEE_BUILD_WINDOWS_DLL requires CMake 3.28 or newer")
+    endif()
     FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
         # renovate: datasource=github-tags depName=TsudaKageyu/minhook versioning=semver
         GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
+        EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(minhook)
 
