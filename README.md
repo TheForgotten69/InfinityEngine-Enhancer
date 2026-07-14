@@ -23,7 +23,7 @@ Some standard tilesets legitimately have no live header pointer. In those cases 
 1. Install [EEex](https://github.com/Bubb13/EEex).
 2. Download the release bundle from [Releases](../../releases).
 3. Copy `InfinityEngine-Enhancer.dll` and `iee-textures/` into the game root.
-4. Copy [M_IEEE.lua](tools/M_IEEE.lua) and the contents of `override/` into the game's `override` directory.
+4. Copy the contents of `override/` (the EEex loader script and shader) into the game's `override` directory.
 5. Optionally copy [InfinityEngine-Enhancer.sample.ini](tools/InfinityEngine-Enhancer.sample.ini) to the game root as `InfinityEngine-Enhancer.ini` and customize it.
 
 The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.log` next to the game executable.
