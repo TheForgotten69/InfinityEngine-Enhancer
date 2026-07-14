@@ -11,6 +11,20 @@ constexpr std::uint32_t kMaxTableSamples = 32;
 constexpr std::int32_t kMaxAtlasCoordinate = 16384;
 }  // namespace
 
+std::optional<int> scale_factor_from_tile_dimension(std::uint32_t tileDimension) noexcept {
+  if (tileDimension < TisTileDimensions::Standard ||
+      tileDimension > TisTileDimensions::Upscaled8x ||
+      tileDimension % TisTileDimensions::Standard != 0) {
+    return std::nullopt;
+  }
+
+  const auto scale = tileDimension / TisTileDimensions::Standard;
+  if ((scale & (scale - 1)) != 0) {
+    return std::nullopt;
+  }
+  return static_cast<int>(scale);
+}
+
 std::optional<ScaleDetectionResult> detect_scale_from_tis_header(const TileInfo& tileInfo,
                                                                  const BuildManifest& manifest) {
   const auto headerTileDimension = get_tis_header_tile_dimension(tileInfo, manifest);
@@ -18,12 +32,8 @@ std::optional<ScaleDetectionResult> detect_scale_from_tis_header(const TileInfo&
     return std::nullopt;
   }
 
-  if (*headerTileDimension == TisTileDimensions::Standard) {
-    return ScaleDetectionResult{1, ScaleDetectionSource::TisHeader, *headerTileDimension};
-  }
-
-  if (*headerTileDimension == TisTileDimensions::Upscaled4x) {
-    return ScaleDetectionResult{4, ScaleDetectionSource::TisHeader, *headerTileDimension};
+  if (const auto scale = scale_factor_from_tile_dimension(*headerTileDimension)) {
+    return ScaleDetectionResult{*scale, ScaleDetectionSource::TisHeader, *headerTileDimension};
   }
 
   return std::nullopt;
@@ -64,12 +74,8 @@ std::optional<ScaleDetectionResult> infer_scale_from_tile_table(const TileInfo& 
     }
   }
 
-  if (coordinateStep == TisTileDimensions::Standard) {
-    return ScaleDetectionResult{1, ScaleDetectionSource::TileTable, coordinateStep};
-  }
-
-  if (coordinateStep == TisTileDimensions::Upscaled4x) {
-    return ScaleDetectionResult{4, ScaleDetectionSource::TileTable, coordinateStep};
+  if (const auto scale = scale_factor_from_tile_dimension(coordinateStep)) {
+    return ScaleDetectionResult{*scale, ScaleDetectionSource::TileTable, coordinateStep};
   }
 
   return std::nullopt;

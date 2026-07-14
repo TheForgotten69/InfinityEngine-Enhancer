@@ -7,7 +7,6 @@
 #include <memory>
 #include <mutex>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 
 #include "app_context.h"
@@ -43,15 +42,18 @@ std::atomic<std::uint64_t> g_nextAreaGpuGeneration{1};
 unsigned g_areaTexture{};
 HGLRC g_areaTextureContext{};
 std::uint64_t g_uploadedAreaGeneration{};
+HGLRC g_failedAreaTextureContext{};
+std::uint64_t g_failedAreaGeneration{};
 constexpr float kBaseCellWorldPixels = 64.0f;
 constexpr std::size_t kMaxTintTileSamples = 32;
+constexpr std::size_t kMaxTintTileAttempts = 256;
 
 void queue_area_gpu_snapshot(game::AreaCellTexture texture, std::array<float, 3> waterTint) {
   auto snapshot = std::make_shared<AreaGpuSnapshot>();
   snapshot->texture = std::move(texture);
   snapshot->waterTint = waterTint;
-  snapshot->generation = g_nextAreaGpuGeneration.fetch_add(1, std::memory_order_relaxed);
   std::lock_guard lock(g_areaGpuMutex);
+  snapshot->generation = g_nextAreaGpuGeneration.fetch_add(1, std::memory_order_relaxed);
   g_latestAreaGpu = std::move(snapshot);
 }
 
@@ -234,7 +236,9 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
       return;
     }
 
-    // Sample a bounded set of authored water tiles for area-specific tint.
+    // Sample a bounded set of authored liquid tiles for area-specific tint.
+    // Goo/sewage/swamp need their own authored identity too; lava is excluded
+    // because the shader deliberately gives it a fixed emissive grade.
     // LoadArea prepares CPU data only; the render thread owns every GL upload.
     double tintSum[3] = {0.0, 0.0, 0.0};
     std::size_t tintTiles = 0;
@@ -242,9 +246,9 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
     const auto* tileSetsAddress =
         areaBytes + offsetof(game::CGameArea, m_cInfinity) + offsetof(game::CInfinity, pTileSets);
     (void)core::safe_read(tileSetsAddress, tileSets);
-    std::unordered_set<std::uint32_t> sampledTiles;
+    std::size_t tintAttempts = 0;
     const auto sampleTint = [&](std::size_t overlayIndex, std::uint16_t tileIndex) {
-      if (overlayIndex >= tileSets.size() || !tileSets[overlayIndex]) return;
+      if (overlayIndex >= tileSets.size() || !tileSets[overlayIndex]) return false;
 
       void** tileResources = nullptr;
       std::uint32_t tileCount = 0;
@@ -252,21 +256,21 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
       if (!core::safe_read(tileSetBytes + offsetof(game::CInfTileSet, pResTiles), tileResources) ||
           !core::safe_read(tileSetBytes + offsetof(game::CInfTileSet, nTiles), tileCount) ||
           !tileResources || tileIndex >= tileCount) {
-        return;
+        return false;
       }
 
       void* wrapper = nullptr;
       void* tileResPtr = nullptr;
       if (!core::safe_read(tileResources + tileIndex, wrapper) || !wrapper ||
           !core::safe_read(wrapper, tileResPtr) || !tileResPtr) {
-        return;
+        return false;
       }
 
       game::CRes tileRes{};
       if (!core::safe_read(tileResPtr, tileRes) || !tileRes.bLoaded || !tileRes.pData ||
           tileRes.nSize < game::kPaletteTileBytes ||
           !core::is_readable(tileRes.pData, game::kPaletteTileBytes)) {
-        return;
+        return false;
       }
 
       if (const auto average = game::palette_tile_average_color(
@@ -275,21 +279,24 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
         tintSum[1] += (*average)[1];
         tintSum[2] += (*average)[2];
         ++tintTiles;
+        return true;
       }
+      return false;
     };
 
     for (std::size_t overlayIndex = 1;
          overlayIndex < cachedWed->overlays.size() && overlayIndex <= 7 &&
-         sampledTiles.size() < kMaxTintTileSamples;
+         tintTiles < kMaxTintTileSamples && tintAttempts < kMaxTintTileAttempts;
          ++overlayIndex) {
       const auto& overlay = cachedWed->overlays[overlayIndex];
-      if (overlay.liquidMode != game::TileLiquidMode::Water) continue;
-      for (const auto tileIndex : overlay.cellTileIndex) {
-        if (tileIndex == 0xFFFF) continue;
-        const auto key = static_cast<std::uint32_t>(overlayIndex) << 16 | tileIndex;
-        if (!sampledTiles.insert(key).second) continue;
-        sampleTint(overlayIndex, tileIndex);
-        if (sampledTiles.size() >= kMaxTintTileSamples) break;
+      if (overlay.liquidMode == game::TileLiquidMode::None ||
+          overlay.liquidMode == game::TileLiquidMode::Lava) {
+        continue;
+      }
+      for (const auto tileIndex : overlay.tintTileCandidates) {
+        ++tintAttempts;
+        (void)sampleTint(overlayIndex, tileIndex);
+        if (tintTiles >= kMaxTintTileSamples || tintAttempts >= kMaxTintTileAttempts) break;
       }
     }
 
@@ -299,12 +306,12 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
       waterTint = {static_cast<float>(tintSum[0] * inverse),
                    static_cast<float>(tintSum[1] * inverse),
                    static_cast<float>(tintSum[2] * inverse)};
-      LOG_INFO("Area water tint: ({:.3f}, {:.3f}, {:.3f}) from {} water tiles", waterTint[0],
+      LOG_INFO("Area liquid tint: ({:.3f}, {:.3f}, {:.3f}) from {} authored tiles", waterTint[0],
                waterTint[1], waterTint[2], tintTiles);
     }
 
-    LOG_INFO("Area liquid mask prepared: {}x{} cells, {} tint tiles sampled", packed->width,
-             packed->height, sampledTiles.size());
+    LOG_INFO("Area liquid mask prepared: {}x{} cells, {} tint candidates tried", packed->width,
+             packed->height, tintAttempts);
     queue_area_gpu_snapshot(std::move(*packed), waterTint);
   } catch (const std::exception& e) {
     LOG_ERROR("Area WED refresh failed: {}", e.what());
@@ -344,8 +351,19 @@ bool flush_pending_gpu_upload() noexcept {
       g_areaTextureContext = context;
       g_areaTexture = 0;
       g_uploadedAreaGeneration = 0;
+      g_failedAreaTextureContext = nullptr;
+      g_failedAreaGeneration = 0;
     }
     if (g_areaTexture != 0 && g_uploadedAreaGeneration == snapshot->generation) return true;
+    if (context == g_failedAreaTextureContext && snapshot->generation == g_failedAreaGeneration) {
+      return false;
+    }
+
+    const auto blockFailedGeneration = [&] {
+      g_failedAreaTextureContext = context;
+      g_failedAreaGeneration = snapshot->generation;
+      return false;
+    };
 
     core::GlStateGuard guard({game::texture_units::AreaMask});
     if (g_areaTexture == 0) gl.glGenTextures(1, &g_areaTexture);
@@ -359,9 +377,11 @@ bool flush_pending_gpu_upload() noexcept {
     gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_MAG_FILTER, game::gl::NEAREST);
     gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_S, game::gl::CLAMP_TO_EDGE);
     gl.glTexParameteri(game::gl::TEXTURE_2D, game::gl::TEXTURE_WRAP_T, game::gl::CLAMP_TO_EDGE);
-    if (!game::gl::check_error("area liquid texture upload")) return false;
+    if (!game::gl::check_error("area liquid texture upload")) return blockFailedGeneration();
 
     g_uploadedAreaGeneration = snapshot->generation;
+    g_failedAreaTextureContext = nullptr;
+    g_failedAreaGeneration = 0;
     probe::set_area_water_tint(snapshot->waterTint[0], snapshot->waterTint[1],
                                snapshot->waterTint[2]);
     probe::set_area_world_size(static_cast<float>(snapshot->texture.width) * kBaseCellWorldPixels,
@@ -397,6 +417,8 @@ void release_gpu_area_resources() noexcept {
     g_areaTexture = 0;
     g_areaTextureContext = nullptr;
     g_uploadedAreaGeneration = 0;
+    g_failedAreaTextureContext = nullptr;
+    g_failedAreaGeneration = 0;
     std::lock_guard lock(g_areaGpuMutex);
     g_latestAreaGpu.reset();
   } catch (...) {

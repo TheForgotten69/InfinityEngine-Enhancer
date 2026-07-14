@@ -124,11 +124,18 @@ target_compile_features(iee_common PUBLIC cxx_std_20)
 iee_configure_target(iee_common)
 
 if(IEE_BUILD_WINDOWS_DLL)
+    if(CMAKE_VERSION VERSION_LESS 3.28)
+        # EXCLUDE_FROM_ALL below keeps MinHook's unconditional install() rules
+        # out of `cmake --install` (the CI layout check compares the install
+        # tree against the release bundle).
+        message(FATAL_ERROR "IEE_BUILD_WINDOWS_DLL requires CMake 3.28 or newer")
+    endif()
     FetchContent_Declare(
         minhook
         GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
         # renovate: datasource=github-tags depName=TsudaKageyu/minhook versioning=semver
         GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537 # v1.3.4
+        EXCLUDE_FROM_ALL
     )
     FetchContent_MakeAvailable(minhook)
 
@@ -184,10 +191,12 @@ if(IEE_BUILD_WINDOWS_DLL)
     install(TARGETS InfinityEngine-Enhancer RUNTIME DESTINATION . LIBRARY DESTINATION .)
     install(
         FILES
-            "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua"
             "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini"
         DESTINATION .
     )
+    install(FILES "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" DESTINATION override)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/override/" DESTINATION override)
+    install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets/game-textures/" DESTINATION iee-textures)
 else()
     message(STATUS "Windows DLL target disabled on this host; building iee_common and tests only.")
 endif()

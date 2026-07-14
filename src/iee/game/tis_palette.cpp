@@ -1,6 +1,16 @@
 #include "tis_palette.h"
 
+#include <cmath>
+
 namespace iee::game {
+    namespace {
+        double srgb_to_linear(std::uint8_t encoded) noexcept {
+            const double value = static_cast<double>(encoded) / 255.0;
+            return value <= 0.04045 ? value / 12.92
+                                    : std::pow((value + 0.055) / 1.055, 2.4);
+        }
+    }
+
     std::optional<TileAlpha> decode_palette_tile_alpha(const std::uint8_t *data, std::size_t size) {
         if (!data || size < kPaletteTileBytes) {
             return std::nullopt;
@@ -39,15 +49,15 @@ namespace iee::game {
                 continue;
             }
             const std::size_t entry = indices[i];
-            sumB += data[entry * 4 + 0];
-            sumG += data[entry * 4 + 1];
-            sumR += data[entry * 4 + 2];
+            sumB += srgb_to_linear(data[entry * 4 + 0]);
+            sumG += srgb_to_linear(data[entry * 4 + 1]);
+            sumR += srgb_to_linear(data[entry * 4 + 2]);
             ++opaqueCount;
         }
         if (opaqueCount == 0) {
             return std::nullopt;
         }
-        const auto scale = 1.0 / (255.0 * static_cast<double>(opaqueCount));
+        const auto scale = 1.0 / static_cast<double>(opaqueCount);
         return std::array<float, 3>{static_cast<float>(sumR * scale),
                                     static_cast<float>(sumG * scale),
                                     static_cast<float>(sumB * scale)};

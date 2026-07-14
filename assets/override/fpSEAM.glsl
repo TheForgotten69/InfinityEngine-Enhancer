@@ -109,6 +109,24 @@ float ieeNoise(vec2 p)
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// Palette-derived tint arrives in linear light. Engine tile textures are
+// legacy encoded RGB, so water grading converts explicitly and re-encodes only
+// the affected contour; the vanilla/off path remains byte-for-byte unchanged.
+vec3 ieeSrgbToLinear(vec3 color)
+{
+	vec3 low = color / 12.92;
+	vec3 high = pow((color + vec3(0.055)) / 1.055, vec3(2.4));
+	return mix(low, high, step(vec3(0.04045), color));
+}
+
+vec3 ieeLinearToSrgb(vec3 color)
+{
+	color = max(color, vec3(0.0));
+	vec3 low = color * 12.92;
+	vec3 high = 1.055 * pow(color, vec3(1.0 / 2.4)) - vec3(0.055);
+	return mix(low, high, step(vec3(0.0031308), color));
+}
+
 // Water surface normal from two drifting layers of the tiling normal map.
 // Different scales + opposite drift kill visible repetition.
 vec3 ieeWaterNormal(vec2 worldPos, float t)
@@ -147,6 +165,16 @@ float ieeCoverage(vec2 worldPos)
 // Reuse that result instead of fetching the same mask texel again.
 float ieeCoverageWithCenter(vec2 worldPos, float centerLiquid)
 {
+	// When an unflagged fragment is more than 8px from its 64px cell edge,
+	// every neighbor tap necessarily addresses the same unflagged cell. Avoid
+	// four texture fetches without changing the coverage result.
+	vec2 inCell = mod(worldPos, 64.0);
+	vec2 edgeDistance = min(inCell, vec2(64.0) - inCell);
+	if (centerLiquid < 0.5 && min(edgeDistance.x, edgeDistance.y) > 8.0)
+	{
+		return 0.0;
+	}
+
 	float cover = centerLiquid;
 	cover += ieeLiquidAt(worldPos + vec2( 8.0, 0.0));
 	cover += ieeLiquidAt(worldPos + vec2(-8.0, 0.0));
@@ -252,22 +280,23 @@ void main()
 		// area's own water overlay tile, fed by the DLL (sea teal, river
 		// brown, ...; neutral grey when the overlay tile could not decode).
 		// Partially opaque contour pixels still contribute their real art.
-		vec3 artColor = mix(uIeeWaterTint, texColor.rgb, texColor.a);
-		float artLuma = dot(artColor, vec3(0.299, 0.587, 0.114));
+		vec3 artLinear = ieeSrgbToLinear(texColor.rgb);
+		vec3 artColor = mix(uIeeWaterTint, artLinear, texColor.a);
+		float artLuma = dot(artColor, vec3(0.2126, 0.7152, 0.0722));
 		// Normalize the art tone so dark night pixels still yield a usable hue;
 		// soften extremes so bright rim pixels can't smear the palette.
 		vec3 artTone = artColor / max(artLuma, 0.06);
 		artTone = mix(vec3(1.0), artTone, 0.75);
 		vec3 deepColor    = artTone * 0.10;
 		vec3 shallowColor = artTone * 0.32;
-		vec3 foamColor    = mix(vec3(0.88), artTone * 0.9, 0.10);
+		vec3 foamColor    = mix(ieeSrgbToLinear(vec3(0.88)), artTone * 0.9, 0.10);
 		float emissive    = 0.0;
 		if (cellMode > 1.5 && cellMode < 2.5)
 		{
 			// Lava keeps an authored-orange emissive identity.
-			deepColor = vec3(0.32, 0.04, 0.00);
-			shallowColor = vec3(0.85, 0.28, 0.02);
-			foamColor = vec3(1.00, 0.78, 0.25);
+			deepColor = ieeSrgbToLinear(vec3(0.32, 0.04, 0.00));
+			shallowColor = ieeSrgbToLinear(vec3(0.85, 0.28, 0.02));
+			foamColor = ieeSrgbToLinear(vec3(1.00, 0.78, 0.25));
 			emissive = 0.5;
 		}
 
@@ -306,7 +335,7 @@ void main()
 		// art rgb is black anyway); the seamSample bilinear already softens
 		// the alpha edge. Raise the output alpha so our water covers the
 		// engine's generic animated tile drawn underneath the cell.
-		texColor.rgb = mix(texColor.rgb, water, waterMask);
+		texColor.rgb = ieeLinearToSrgb(mix(artLinear, water, waterMask));
 		texColor.a = max(texColor.a, waterMask);
 	}
 

@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
+#include <unordered_set>
 #include <utility>
 
 #include "iee/core/pattern_scanner.h"
@@ -14,6 +15,7 @@ constexpr std::uint32_t kWedFileType = 0x20444557;     // "WED "
 constexpr std::uint32_t kWedFileVersion = 0x332E3156;  // "V1.3"
 constexpr std::uint32_t kMaxWedLayers = 8;             // base + seven flag-addressable overlays
 constexpr std::size_t kMaxWedCells = 4 * 1024 * 1024;  // malformed-resource allocation ceiling
+constexpr std::size_t kMaxTintTilemapEntriesScanned = 4096;
 
 template <typename T>
 bool read_struct(const std::byte* base, std::size_t size, std::size_t offset, T& out) noexcept {
@@ -156,8 +158,9 @@ bool parse_loaded_wed(const CRes& resource, WedAreaInfo& out) noexcept {
     }
   }
 
-  // Per-cell overlay tile indices for liquid overlays: tilemap entry ->
-  // nStartingTile -> tile-index lookup (u16). Used for authored tint sampling.
+  // Collect a bounded set of unique overlay tile indices for authored tint
+  // sampling. A per-cell vector is unnecessary: the consumer samples at most a
+  // few dozen tiles, while a malformed overlay may contain millions of cells.
   for (std::size_t overlayIndex = 1; overlayIndex < out.overlays.size() && overlayIndex <= 7;
        ++overlayIndex) {
     auto& overlay = out.overlays[overlayIndex];
@@ -172,16 +175,35 @@ bool parse_loaded_wed(const CRes& resource, WedAreaInfo& out) noexcept {
       out = {};
       return false;
     }
+
+    const auto tilemapOffset = static_cast<std::size_t>(overlay.tilemapOffset);
+    const auto tilemapBytes = overlayCells * sizeof(WED_TileData_st);
+    if (tilemapOffset > size || tilemapBytes > size - tilemapOffset) {
+      continue;
+    }
+
     try {
-      overlay.cellTileIndex.assign(overlayCells, 0xFFFF);
+      overlay.tintTileCandidates.reserve(
+          (std::min)(overlayCells, kMaxTintTileCandidatesPerOverlay));
     } catch (...) {
       out = {};
       return false;
     }
-    for (std::size_t cell = 0; cell < overlayCells; ++cell) {
+
+    std::unordered_set<std::uint16_t> uniqueCandidates;
+    try {
+      uniqueCandidates.reserve(kMaxTintTileCandidatesPerOverlay);
+    } catch (...) {
+      out = {};
+      return false;
+    }
+    const auto cellsToInspect = (std::min)(overlayCells, kMaxTintTilemapEntriesScanned);
+    for (std::size_t cell = 0;
+         cell < cellsToInspect &&
+         overlay.tintTileCandidates.size() < kMaxTintTileCandidatesPerOverlay;
+         ++cell) {
       WED_TileData_st tilemap{};
-      const auto entryOffset =
-          static_cast<std::size_t>(overlay.tilemapOffset) + cell * sizeof(WED_TileData_st);
+      const auto entryOffset = tilemapOffset + cell * sizeof(WED_TileData_st);
       if (!read_struct(base, size, entryOffset, tilemap)) {
         continue;
       }
@@ -192,7 +214,9 @@ bool parse_loaded_wed(const CRes& resource, WedAreaInfo& out) noexcept {
       if (!read_struct(base, size, lookupOffset, tileIndex)) {
         continue;
       }
-      overlay.cellTileIndex[cell] = tileIndex;
+      if (tileIndex != 0xFFFF && uniqueCandidates.insert(tileIndex).second) {
+        overlay.tintTileCandidates.push_back(tileIndex);
+      }
     }
   }
 

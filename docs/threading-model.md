@@ -10,6 +10,8 @@ shutdown are treated as separate producers so ownership remains clear.
 - `DrawColorTone(Seam)` is the world-pass publication point. It resolves the active area, publishes
   the view transform once per frame, and flushes pending area textures while a GL context is current.
 - The swap hook advances the frame counter and refreshes time-dependent uniforms.
+- Safe-read region results are cached only for that frame epoch; `LoadArea`
+  advances the epoch before touching a replacement object graph.
 - Shader/program records are protected by `g_probeMutex`. Steady-state OpenGL introspection and
   shader-dump I/O copy the required record state and release that mutex first. One-time probe
   installation is serialized before those records become visible.
@@ -36,8 +38,10 @@ Windows loader lock is held.
 
 1. Only a thread with the owning WGL context may touch enhancer GL objects.
 2. A program is reclassified after every successful link and forgotten on deletion.
-3. A recreated WGL context invalidates enhancer texture names and triggers lazy recreation.
+3. A recreated WGL context invalidates enhancer texture names, hook entry
+   points, program classifications, and uniform locations; probes are
+   reinstalled against the replacement context before processing programs.
 4. A new area publishes a no-liquid generation before parsing, so stale masks cannot cross an area
    transition.
-5. If the frame hook is unavailable, view publication remains correct and simply falls back to each
-   Seam call instead of the once-per-frame optimization.
+5. If the frame hook is unavailable, view publication remains correct and is
+   time-coalesced across Seam calls instead of using the frame epoch.

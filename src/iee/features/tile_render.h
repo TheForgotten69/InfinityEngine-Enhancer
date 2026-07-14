@@ -26,6 +26,7 @@ struct TileRenderState {
   static constexpr std::size_t kMaxTilesetsPerArea = 16;
 
   std::atomic<int> lastTexId{-1};
+  std::uint64_t lastTextureConfigurationEpoch{};
   std::array<TilesetRenderState, kMaxTilesetsPerArea> tilesets{};
   std::size_t tilesetCount{};
   int consecutiveDecodeFailures{};
@@ -44,6 +45,7 @@ struct TileRenderState {
 
   void reset() noexcept {
     lastTexId.store(-1, std::memory_order_relaxed);
+    lastTextureConfigurationEpoch = 0;
     tilesets = {};
     tilesetCount = 0;
     consecutiveDecodeFailures = 0;

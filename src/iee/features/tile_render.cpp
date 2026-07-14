@@ -49,6 +49,11 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
   if (g_resetRenderStateRequest.exchange(false, std::memory_order_acquire)) {
     state.reset();
   }
+  const auto textureConfigurationEpoch = game::texture_configuration_epoch();
+  if (state.lastTextureConfigurationEpoch != textureConfigurationEpoch) {
+    state.lastTextureConfigurationEpoch = textureConfigurationEpoch;
+    state.lastTexId.store(-1, std::memory_order_relaxed);
+  }
 
   // Try to get tile information
   game::TileInfo tileInfo;
@@ -182,7 +187,10 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
       state.lastTexId.store(texId, std::memory_order_relaxed);
       LOG_DEBUG_FAST("Enhanced tile texture {}", texId);
     } else {
-      LOG_WARN("Failed to configure GL texture parameters for tile texture {}", texId);
+      // The renderer logs and latches the first failure for this GL object.
+      // Mark the consecutive source as attempted so a persistent failure does
+      // not re-enter the driver on every tile draw.
+      state.lastTexId.store(texId, std::memory_order_relaxed);
     }
   }
 

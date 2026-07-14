@@ -57,12 +57,15 @@ Runtime caveats for the current manifest:
 
 ## Adding Another Build
 
+Use the evidence and validation checklist in
+[new-build-validation.md](new-build-validation.md). At minimum:
+
 1. Confirm the hook target RVAs or patterns.
 2. Record the executable file version and verify each signature is unique in executable sections.
 3. Revalidate the render callsites and instruction kinds.
-4. Revalidate `CVidTile::pRes`, TIS header field offset, and the linear-tiles flag.
-5. Add the new manifest entry.
-6. Extend tests and run an in-game smoke test.
+4. Revalidate every runtime offset, including active-area fields.
+5. Add the new manifest entry and host tests.
+6. Complete the Windows build and in-game smoke gates before claiming support.
 
 If a new build cannot satisfy those checks, do not guess. Leave it unsupported and fail early.
 

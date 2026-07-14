@@ -7,10 +7,19 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <charconv>
 #include <limits>
 
 namespace iee::core {
+    namespace {
+        std::atomic<std::uint64_t> g_readabilityCacheEpoch{1};
+        std::atomic<bool> g_readabilityStatsEnabled{false};
+        std::atomic<std::uint64_t> g_readabilityCacheHits{0};
+        std::atomic<std::uint64_t> g_readabilityVirtualQueries{0};
+    }
+
     std::optional<ModuleSpan> get_module_span(void *module_handle) {
 #ifdef _WIN64
         if (!module_handle) module_handle = GetModuleHandleW(nullptr);
@@ -216,12 +225,43 @@ namespace iee::core {
         if (!p) return false;
         if (len == 0) return true;
 
-        MEMORY_BASIC_INFORMATION mbi{};
         auto cur = reinterpret_cast<std::uintptr_t>(p);
         if (len > std::numeric_limits<std::uintptr_t>::max() - cur) return false;
         const auto end = cur + len;
 
+        struct CachedRegion {
+            std::uintptr_t begin{};
+            std::uintptr_t end{};
+        };
+        struct ThreadCache {
+            std::uint64_t epoch{};
+            std::array<CachedRegion, 16> regions{};
+            std::size_t size{};
+            std::size_t nextReplacement{};
+        };
+        thread_local ThreadCache cache;
+        const bool recordStats = g_readabilityStatsEnabled.load(std::memory_order_relaxed);
+        const auto epoch = g_readabilityCacheEpoch.load(std::memory_order_acquire);
+        if (cache.epoch != epoch) {
+            cache = {.epoch = epoch};
+        }
+
         while (cur < end) {
+            const auto cached = std::find_if(
+                cache.regions.begin(), cache.regions.begin() + static_cast<std::ptrdiff_t>(cache.size),
+                [&](const CachedRegion &region) { return cur >= region.begin && cur < region.end; });
+            if (cached != cache.regions.begin() + static_cast<std::ptrdiff_t>(cache.size)) {
+                if (recordStats) {
+                    g_readabilityCacheHits.fetch_add(1, std::memory_order_relaxed);
+                }
+                cur = (std::min)(end, cached->end);
+                continue;
+            }
+
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (recordStats) {
+                g_readabilityVirtualQueries.fetch_add(1, std::memory_order_relaxed);
+            }
             if (!VirtualQuery(reinterpret_cast<const void *>(cur), &mbi, sizeof(mbi))) return false;
             if (mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD) != 0) return false;
 
@@ -238,11 +278,33 @@ namespace iee::core {
             if (mbi.RegionSize > std::numeric_limits<std::uintptr_t>::max() - regionBase) return false;
             const auto region_end = regionBase + mbi.RegionSize;
             if (region_end <= cur) return false;
-            cur = region_end;
+            const auto insertionIndex =
+                cache.size < cache.regions.size() ? cache.size++ : cache.nextReplacement;
+            cache.regions[insertionIndex] = {.begin = regionBase, .end = region_end};
+            if (cache.size == cache.regions.size()) {
+                cache.nextReplacement = (insertionIndex + 1) % cache.regions.size();
+            }
+            cur = (std::min)(end, region_end);
         }
         return true;
 #else
         (void) p; (void) len; return true;
 #endif
+    }
+
+    void advance_readability_cache_epoch() noexcept {
+        g_readabilityCacheEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void set_readability_stats_enabled(bool enabled) noexcept {
+        g_readabilityStatsEnabled.store(enabled, std::memory_order_relaxed);
+        if (!enabled) (void)take_readability_stats();
+    }
+
+    ReadabilityStats take_readability_stats() noexcept {
+        return {
+            .cacheHits = g_readabilityCacheHits.exchange(0, std::memory_order_relaxed),
+            .virtualQueries = g_readabilityVirtualQueries.exchange(0, std::memory_order_relaxed),
+        };
     }
 }

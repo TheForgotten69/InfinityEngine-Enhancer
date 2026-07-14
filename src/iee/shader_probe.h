@@ -29,11 +29,12 @@ void set_override_effect_enabled(bool enabled) noexcept;
 // Published by area_state at area load; consumed by the uniform feed.
 void set_area_world_size(float widthPx, float heightPx) noexcept;
 
-// Authored water color of the current area (average opaque RGB of its
-// decoded liquid overlay tile, linear 0..1). Neutral 0.5 grey = unknown.
+// Authored liquid color of the current area (average opaque RGB from decoded
+// liquid overlay tiles, linear 0..1). Neutral 0.5 grey = unknown.
 void set_area_water_tint(float r, float g, float b) noexcept;
 
-// Published by tile_render per tile draw; consumed by the uniform feed.
+// Published once per world frame from DrawColorTone(Seam); consumed by the
+// uniform feed.
 // viewWorldW/H = rViewPort size (world px visible); the feed derives the
 // physical-per-world zoom from the live GL viewport.
 void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept;

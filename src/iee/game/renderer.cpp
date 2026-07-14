@@ -17,11 +17,18 @@ namespace iee::game {
 namespace {
 constexpr std::size_t kConfiguredTextureCapacity = 64;
 std::atomic<bool> g_textureCacheResetRequested{false};
+std::atomic<std::uint64_t> g_textureConfigurationEpoch{1};
+std::atomic<std::uint64_t> g_textureConfigurationCalls{0};
+std::atomic<std::uint64_t> g_textureConfigurationCacheHits{0};
+std::atomic<std::uint64_t> g_textureConfigurations{0};
+std::atomic<std::uint64_t> g_textureConfigurationFailures{0};
+std::atomic<std::uint64_t> g_textureConfigurationEvictions{0};
 
 struct TextureConfigurationCache {
   struct Entry {
     int sourceTextureId{};
     int glTextureName{};
+    bool failed{};
   };
 
   HGLRC context{};
@@ -126,6 +133,8 @@ bool resolve_draw_api(DrawApi& out, std::uintptr_t renderTextureVA, const BuildM
 }
 
 bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId) {
+  const bool recordStats = cfg.enablePerformanceLogging;
+  if (recordStats) g_textureConfigurationCalls.fetch_add(1, std::memory_order_relaxed);
   auto& gl = gl::get_gl_functions();
   if (!gl.valid || sourceTextureId <= 0) {
     return false;
@@ -169,6 +178,12 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
         return entry.sourceTextureId == sourceTextureId && entry.glTextureName == boundTexture;
       });
   if (configured != configuredEnd) {
+    if (configured->failed) {
+      if (recordStats) {
+        g_textureConfigurationFailures.fetch_add(1, std::memory_order_relaxed);
+      }
+      return false;
+    }
     // Texture names can be recycled. These sentinels differ from a newly
     // created texture's defaults and force a reconfigure if the same
     // source/name pair now refers to a replacement object.
@@ -178,9 +193,34 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
     gl.glGetTexParameteriv(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, &minFilter);
     if (checkError("validating cached texture parameters") &&
         wrapS == static_cast<int>(gl::CLAMP_TO_EDGE) && minFilter == static_cast<int>(gl::LINEAR)) {
+      if (recordStats) {
+        g_textureConfigurationCacheHits.fetch_add(1, std::memory_order_relaxed);
+      }
       return true;
     }
   }
+
+  const auto storeResult = [&](bool failed) {
+    if (configured != configuredEnd) {
+      configured->failed = failed;
+      return;
+    }
+    const auto insertionIndex =
+        cache.size < cache.entries.size() ? cache.size++ : cache.nextReplacement;
+    if (cache.size == cache.entries.size() && insertionIndex == cache.nextReplacement) {
+      if (recordStats) {
+        g_textureConfigurationEvictions.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+    cache.entries[insertionIndex] = {
+        .sourceTextureId = sourceTextureId,
+        .glTextureName = boundTexture,
+        .failed = failed,
+    };
+    if (cache.size == cache.entries.size()) {
+      cache.nextReplacement = (insertionIndex + 1) % cache.entries.size();
+    }
+  };
 
   const auto setInteger = [&](unsigned parameter, int value, const char* operation) {
     gl.glTexParameteri(gl::TEXTURE_2D, parameter, value);
@@ -190,6 +230,7 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
       !setInteger(gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE, "setting texture wrap T") ||
       !setInteger(gl::TEXTURE_MAG_FILTER, gl::LINEAR, "setting texture mag filter") ||
       !setInteger(gl::TEXTURE_MIN_FILTER, gl::LINEAR, "setting texture min filter")) {
+    storeResult(true);
     return false;
   }
 
@@ -198,15 +239,22 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
     gl.glGetIntegerv(gl::MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maximumAnisotropy);
     if (!checkError("querying maximum anisotropy") || maximumAnisotropy < 1) {
       LOG_WARN("Anisotropic filtering was requested but is unavailable");
+      storeResult(true);
       return false;
     }
     const float anisotropy = std::min(cfg.maxAnisotropy, static_cast<float>(maximumAnisotropy));
     gl.glTexParameterf(gl::TEXTURE_2D, gl::TEXTURE_MAX_ANISOTROPY_EXT, anisotropy);
-    if (!checkError("setting texture anisotropy")) return false;
+    if (!checkError("setting texture anisotropy")) {
+      storeResult(true);
+      return false;
+    }
   }
 
   gl.glTexParameterf(gl::TEXTURE_2D, gl::TEXTURE_LOD_BIAS, cfg.lodBias);
-  if (!checkError("setting texture LOD bias")) return false;
+  if (!checkError("setting texture LOD bias")) {
+    storeResult(true);
+    return false;
+  }
 
   if (logDetails) {
     LOG_DEBUG("Configured source texture {} (GL name {}, anisotropy={}, LOD bias={:.2f})",
@@ -214,21 +262,27 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
               cfg.enableAnisotropicFiltering ? cfg.maxAnisotropy : 1.0f, cfg.lodBias);
   }
 
-  if (configured == configuredEnd) {
-    const auto insertionIndex =
-        cache.size < cache.entries.size() ? cache.size++ : cache.nextReplacement;
-    cache.entries[insertionIndex] = {
-        .sourceTextureId = sourceTextureId,
-        .glTextureName = boundTexture,
-    };
-    if (cache.size == cache.entries.size()) {
-      cache.nextReplacement = (insertionIndex + 1) % cache.entries.size();
-    }
-  }
+  storeResult(false);
+  if (recordStats) g_textureConfigurations.fetch_add(1, std::memory_order_relaxed);
   return true;
 }
 
 void request_texture_configuration_cache_reset() noexcept {
   g_textureCacheResetRequested.store(true, std::memory_order_release);
+  g_textureConfigurationEpoch.fetch_add(1, std::memory_order_acq_rel);
+}
+
+std::uint64_t texture_configuration_epoch() noexcept {
+  return g_textureConfigurationEpoch.load(std::memory_order_acquire);
+}
+
+TextureConfigurationStats take_texture_configuration_stats() noexcept {
+  return {
+      .calls = g_textureConfigurationCalls.exchange(0, std::memory_order_relaxed),
+      .cacheHits = g_textureConfigurationCacheHits.exchange(0, std::memory_order_relaxed),
+      .configured = g_textureConfigurations.exchange(0, std::memory_order_relaxed),
+      .latchedFailures = g_textureConfigurationFailures.exchange(0, std::memory_order_relaxed),
+      .evictions = g_textureConfigurationEvictions.exchange(0, std::memory_order_relaxed),
+  };
 }
 }  // namespace iee::game

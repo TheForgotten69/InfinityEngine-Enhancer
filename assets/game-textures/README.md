@@ -57,8 +57,10 @@ tile cleanly on both axes, and keep the foam mask useful after minification.
 
 ## Asset Provenance
 
-Before importing an asset from another game or mod, record its author, source,
-license, and redistribution permission here. Do not assume that availability in
-a mod grants permission to redistribute it under this repository's license.
-The provenance of the current three blobs is not recorded in this repository;
-resolve that before treating a public release bundle as redistribution-cleared.
+The current three raw blobs were generated specifically for this project by the
+project owner; they were not imported from another game or mod.
+
+Before importing any replacement from another game or mod, record its author,
+source, license, and redistribution permission here. Do not assume that
+availability in a mod grants permission to redistribute it under this
+repository's license.

@@ -7,6 +7,8 @@
 
 #include "iee/core/hooking.h"
 #include "iee/core/logger.h"
+#include "iee/core/pattern_scanner.h"
+#include "iee/core/performance_samples.h"
 #include "iee/shader_probe.h"
 
 namespace iee::frame {
@@ -17,10 +19,47 @@ using Fn_SwapBuffers = BOOL(WINAPI*)(HDC);
 core::Hook<Fn_SdlSwapWindow> g_sdlSwapHook;
 core::Hook<Fn_SwapBuffers> g_gdiSwapHook;
 std::atomic<unsigned long long> g_frames{0};
+std::atomic<bool> g_boundaryAvailable{false};
 LARGE_INTEGER g_freq{};
 LARGE_INTEGER g_start{};
+bool g_performanceLogging{};
+LARGE_INTEGER g_lastFrameTick{};
+LARGE_INTEGER g_performanceWindowStart{};
+core::PerformanceSamples<2048> g_frameIntervalsMs;
+
+void record_frame_interval() noexcept {
+  try {
+    if (!g_performanceLogging || g_freq.QuadPart <= 0) return;
+
+    LARGE_INTEGER now{};
+    if (!QueryPerformanceCounter(&now)) return;
+    if (g_performanceWindowStart.QuadPart == 0) g_performanceWindowStart = now;
+    if (g_lastFrameTick.QuadPart != 0 && now.QuadPart >= g_lastFrameTick.QuadPart) {
+      const double elapsedMs =
+          static_cast<double>(now.QuadPart - g_lastFrameTick.QuadPart) * 1000.0 /
+          static_cast<double>(g_freq.QuadPart);
+      g_frameIntervalsMs.add(elapsedMs);
+    }
+    g_lastFrameTick = now;
+
+    if (now.QuadPart - g_performanceWindowStart.QuadPart < g_freq.QuadPart * 5) return;
+    const auto summary = g_frameIntervalsMs.summarize();
+    const double fps = summary.average > 0.0 ? 1000.0 / summary.average : 0.0;
+    LOG_INFO(
+        "Frame presentation perf: samples={}, dropped={}, avg={:.2f}ms, p95={:.2f}ms, "
+        "max={:.2f}ms, cadence={:.1f}fps over 5s",
+        summary.count, summary.dropped, summary.average, summary.percentile95, summary.maximum,
+        fps);
+    g_frameIntervalsMs.reset();
+    g_performanceWindowStart = now;
+  } catch (...) {
+    // Diagnostics must never escape through the SDL/GDI swap ABI.
+  }
+}
 
 void frame_tick() {
+  record_frame_interval();
+  core::advance_readability_cache_epoch();
   g_frames.fetch_add(1, std::memory_order_relaxed);
   probe::on_frame_tick(seconds_since_install());
 }
@@ -69,19 +108,27 @@ bool install_gdi_hook() {
 }
 }  // namespace
 
-bool install() {
+bool install(bool enablePerformanceLogging) {
+  g_boundaryAvailable.store(false, std::memory_order_release);
   QueryPerformanceFrequency(&g_freq);
   QueryPerformanceCounter(&g_start);
+  g_performanceLogging = enablePerformanceLogging;
+  g_lastFrameTick = {};
+  g_performanceWindowStart = {};
+  g_frameIntervalsMs.reset();
 
   try {
     if (install_sdl_hook()) {
+      g_boundaryAvailable.store(true, std::memory_order_release);
       return true;
     }
     if (install_gdi_hook()) {
+      g_boundaryAvailable.store(true, std::memory_order_release);
       return true;
     }
     LOG_WARN(
         "Frame hook unavailable: neither SDL2!SDL_GL_SwapWindow nor gdi32!SwapBuffers resolved");
+    g_boundaryAvailable.store(false, std::memory_order_release);
     return false;
   } catch (const std::exception& e) {
     LOG_WARN("Frame hook install failed: {}", e.what());
@@ -99,9 +146,14 @@ bool install() {
 void uninstall() noexcept {
   (void)g_sdlSwapHook.remove();
   (void)g_gdiSwapHook.remove();
+  g_boundaryAvailable.store(false, std::memory_order_release);
 }
 
 unsigned long long frame_count() noexcept { return g_frames.load(std::memory_order_relaxed); }
+
+bool boundary_available() noexcept {
+  return g_boundaryAvailable.load(std::memory_order_acquire);
+}
 
 float seconds_since_install() noexcept {
   if (g_freq.QuadPart == 0) {

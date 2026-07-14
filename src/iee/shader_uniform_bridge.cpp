@@ -1,5 +1,7 @@
 #include "shader_uniform_bridge.h"
 
+#include <windows.h>
+
 #include <algorithm>
 #include <atomic>
 
@@ -23,6 +25,13 @@ std::atomic<float> g_waterTintG{0.5f};
 std::atomic<float> g_waterTintB{0.5f};
 std::atomic<float> g_effectValue{0.0f};
 std::atomic<unsigned> g_feedCount{0};
+std::atomic<std::uint64_t> g_stateRevision{1};
+std::atomic<std::uint64_t> g_performanceCalls{0};
+std::atomic<std::uint64_t> g_performanceSkipped{0};
+std::atomic<std::uint64_t> g_performanceTextureBindPasses{0};
+std::atomic<std::uint64_t> g_performanceTotalTicks{0};
+std::atomic<std::uint64_t> g_performanceMaximumTicks{0};
+std::atomic<bool> g_performanceEnabled{false};
 
 int resolve_location(const game::gl::OpenGLFunctions& gl, unsigned program, int current,
                      const char* name) {
@@ -32,11 +41,45 @@ int resolve_location(const game::gl::OpenGLFunctions& gl, unsigned program, int 
   return gl.glGetUniformLocation(program, name);
 }
 
+void advance_state_revision() noexcept {
+  g_stateRevision.fetch_add(1, std::memory_order_release);
+}
+
+bool replace_if_changed(std::atomic<float>& target, float value) noexcept {
+  return target.exchange(value, std::memory_order_relaxed) != value;
+}
+
+void update_maximum_ticks(std::uint64_t elapsed) noexcept {
+  auto current = g_performanceMaximumTicks.load(std::memory_order_relaxed);
+  while (current < elapsed && !g_performanceMaximumTicks.compare_exchange_weak(
+                                  current, elapsed, std::memory_order_relaxed)) {
+  }
+}
+
+void record_feed_performance(const LARGE_INTEGER& started, bool measured, bool skipped,
+                             bool boundTextures) noexcept {
+  if (!g_performanceEnabled.load(std::memory_order_relaxed)) return;
+  g_performanceCalls.fetch_add(1, std::memory_order_relaxed);
+  if (skipped) g_performanceSkipped.fetch_add(1, std::memory_order_relaxed);
+  if (boundTextures) {
+    g_performanceTextureBindPasses.fetch_add(1, std::memory_order_relaxed);
+  }
+  if (!measured) return;
+
+  LARGE_INTEGER finished{};
+  if (!QueryPerformanceCounter(&finished) || finished.QuadPart < started.QuadPart) return;
+  const auto elapsed = static_cast<std::uint64_t>(finished.QuadPart - started.QuadPart);
+  g_performanceTotalTicks.fetch_add(elapsed, std::memory_order_relaxed);
+  update_maximum_ticks(elapsed);
+}
+
 }  // namespace
 
-void initialize(bool effectEnabled) noexcept {
+void initialize(bool effectEnabled, bool performanceEnabled) noexcept {
   g_effectValue.store(effectEnabled ? 1.0f : 0.0f, std::memory_order_relaxed);
+  g_performanceEnabled.store(performanceEnabled, std::memory_order_relaxed);
   g_feedCount.store(0, std::memory_order_relaxed);
+  g_stateRevision.store(1, std::memory_order_release);
 }
 
 void reset() noexcept {
@@ -51,15 +94,18 @@ void reset() noexcept {
   g_waterTintG.store(0.5f, std::memory_order_relaxed);
   g_waterTintB.store(0.5f, std::memory_order_relaxed);
   g_effectValue.store(0.0f, std::memory_order_relaxed);
+  g_performanceEnabled.store(false, std::memory_order_relaxed);
   g_feedCount.store(0, std::memory_order_relaxed);
+  g_stateRevision.store(1, std::memory_order_release);
+  (void)take_performance_stats();
 }
 
 void set_time(float secondsSinceStart) noexcept {
-  g_time.store(secondsSinceStart, std::memory_order_relaxed);
+  if (replace_if_changed(g_time, secondsSinceStart)) advance_state_revision();
 }
 
 void set_effect_enabled(bool enabled) noexcept {
-  g_effectValue.store(enabled ? 1.0f : 0.0f, std::memory_order_relaxed);
+  if (replace_if_changed(g_effectValue, enabled ? 1.0f : 0.0f)) advance_state_revision();
 }
 
 bool effect_enabled() noexcept { return g_effectValue.load(std::memory_order_relaxed) >= 0.5f; }
@@ -68,25 +114,28 @@ float cycle_debug_effect() noexcept {
   const float current = g_effectValue.load(std::memory_order_relaxed);
   const float next = current < 0.5f ? 1.0f : (current < 1.5f ? 2.0f : 0.0f);
   g_effectValue.store(next, std::memory_order_relaxed);
+  advance_state_revision();
   return next;
 }
 
 void set_world_size(float widthPx, float heightPx) noexcept {
-  g_worldWidth.store(std::max(widthPx, 0.0f), std::memory_order_relaxed);
-  g_worldHeight.store(std::max(heightPx, 0.0f), std::memory_order_relaxed);
+  const bool changed = replace_if_changed(g_worldWidth, std::max(widthPx, 0.0f)) |
+                       replace_if_changed(g_worldHeight, std::max(heightPx, 0.0f));
+  if (changed) advance_state_revision();
 }
 
 void set_water_tint(float r, float g, float b) noexcept {
-  g_waterTintR.store(r, std::memory_order_relaxed);
-  g_waterTintG.store(g, std::memory_order_relaxed);
-  g_waterTintB.store(b, std::memory_order_relaxed);
+  const bool changed = replace_if_changed(g_waterTintR, r) | replace_if_changed(g_waterTintG, g) |
+                       replace_if_changed(g_waterTintB, b);
+  if (changed) advance_state_revision();
 }
 
 void set_view(float scrollX, float scrollY, float viewWorldWidth, float viewWorldHeight) noexcept {
-  g_scrollX.store(scrollX, std::memory_order_relaxed);
-  g_scrollY.store(scrollY, std::memory_order_relaxed);
-  g_viewWorldWidth.store(std::max(viewWorldWidth, 0.0f), std::memory_order_relaxed);
-  g_viewWorldHeight.store(std::max(viewWorldHeight, 0.0f), std::memory_order_relaxed);
+  const bool changed =
+      replace_if_changed(g_scrollX, scrollX) | replace_if_changed(g_scrollY, scrollY) |
+      replace_if_changed(g_viewWorldWidth, std::max(viewWorldWidth, 0.0f)) |
+      replace_if_changed(g_viewWorldHeight, std::max(viewWorldHeight, 0.0f));
+  if (changed) advance_state_revision();
 }
 
 Snapshot snapshot() noexcept {
@@ -102,10 +151,25 @@ Snapshot snapshot() noexcept {
   };
 }
 
+FeedPerformanceStats take_performance_stats() noexcept {
+  return {
+      .calls = g_performanceCalls.exchange(0, std::memory_order_relaxed),
+      .skippedUnchanged = g_performanceSkipped.exchange(0, std::memory_order_relaxed),
+      .textureBindPasses =
+          g_performanceTextureBindPasses.exchange(0, std::memory_order_relaxed),
+      .totalTicks = g_performanceTotalTicks.exchange(0, std::memory_order_relaxed),
+      .maximumTicks = g_performanceMaximumTicks.exchange(0, std::memory_order_relaxed),
+  };
+}
+
 void feed(unsigned program, Locations& locations) {
+  LARGE_INTEGER performanceStart{};
+  const bool measurePerformance = g_performanceEnabled.load(std::memory_order_relaxed) &&
+                                  QueryPerformanceCounter(&performanceStart) != 0;
   const auto& gl = game::gl::get_gl_functions();
   if (!gl.glGetUniformLocation || !gl.glUniform1f || !gl.glUniform1i || !gl.glUniform2f ||
       !gl.glUniform3f) {
+    record_feed_performance(performanceStart, measurePerformance, false, false);
     return;
   }
 
@@ -123,8 +187,17 @@ void feed(unsigned program, Locations& locations) {
   locations.foamMap = resolve_location(gl, program, locations.foamMap, "uIeeFoamMap");
 
   g_feedCount.fetch_add(1, std::memory_order_relaxed);
+  const auto stateRevision = g_stateRevision.load(std::memory_order_acquire);
+  if (locations.lastAppliedRevision == stateRevision) {
+    record_feed_performance(performanceStart, measurePerformance, true, false);
+    return;
+  }
+
   float effectValue = g_effectValue.load(std::memory_order_relaxed);
+  bool boundTextures = false;
   if (effectValue >= 0.5f) {
+    boundTextures = locations.areaMask >= 0 || locations.normalMap >= 0 || locations.dudvMap >= 0 ||
+                    locations.foamMap >= 0;
     if (locations.areaMask >= 0 && !area::bind_area_texture()) {
       effectValue = 0.0f;
     }
@@ -209,6 +282,8 @@ void feed(unsigned program, Locations& locations) {
       gl.glUniform1i(locations.foamMap, static_cast<int>(game::texture_units::WaterFoam));
     locations.samplersInitialized = true;
   }
+  locations.lastAppliedRevision = stateRevision;
+  record_feed_performance(performanceStart, measurePerformance, false, boundTextures);
 }
 
 }  // namespace iee::probe::uniforms

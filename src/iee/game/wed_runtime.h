@@ -8,6 +8,8 @@
 #include "tis_runtime.h"
 
 namespace iee::game {
+inline constexpr std::size_t kMaxTintTileCandidatesPerOverlay = 128;
+
 struct WedOverlayInfo {
   std::uint16_t width{};
   std::uint16_t height{};
@@ -16,10 +18,10 @@ struct WedOverlayInfo {
   std::uint32_t tileIndexLookupOffset{};
   TileLiquidMode liquidMode{TileLiquidMode::None};
   std::uint32_t coverageCells{};
-  // Per-cell tile index into the overlay's tileset (0xFFFF = none).
-  // Parsed only for liquid overlays; same cell coordinates as the base
-  // grid (decompile: GetTileData uses identical x,y for every layer).
-  std::vector<std::uint16_t> cellTileIndex{};
+  // Bounded unique tile indices used only for authored liquid-tint sampling.
+  // Keeping per-cell indices would permit millions of entries per overlay even
+  // though the runtime consumes only a small sample.
+  std::vector<std::uint16_t> tintTileCandidates{};
 
   [[nodiscard]] std::string_view tilesetResrefView() const noexcept;
 };

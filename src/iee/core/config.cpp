@@ -4,9 +4,9 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 
-#include "logger.h"
 #ifdef _WIN64
 #include <windows.h>
 #endif
@@ -34,19 +34,22 @@ static bool iequals(std::string a, std::string b) {
   return a == b;
 }
 
-static bool parse_bool(const std::string& s, bool def) {
+static std::optional<bool> parse_bool(const std::string& s) {
   if (iequals(s, "1") || iequals(s, "true") || iequals(s, "yes") || iequals(s, "on")) return true;
   if (iequals(s, "0") || iequals(s, "false") || iequals(s, "no") || iequals(s, "off")) return false;
-  return def;
+  return std::nullopt;
 }
 
-static float parse_float(const std::string& s, float def) {
+static std::optional<float> parse_float(const std::string& s) {
   try {
-    return std::stof(s);
+    std::size_t parsedBytes = 0;
+    const float value = std::stof(s, &parsedBytes);
+    return parsedBytes == s.size() && std::isfinite(value) ? std::optional<float>{value}
+                                                           : std::nullopt;
   } catch (const std::invalid_argument&) {
-    return def;
+    return std::nullopt;
   } catch (const std::out_of_range&) {
-    return def;
+    return std::nullopt;
   }
 }
 
@@ -58,35 +61,50 @@ static void normalize(EngineConfig& cfg) noexcept {
 }
 
 static void apply_kv(EngineConfig& cfg, const std::string& section, const std::string& key,
-                     const std::string& val) {
+                     const std::string& val, ConfigLoadDiagnostics* diagnostics) {
+  const auto assign_bool = [&](bool& target) {
+    if (const auto parsed = parse_bool(val)) {
+      target = *parsed;
+    } else if (diagnostics) {
+      ++diagnostics->invalidValues;
+    }
+  };
+  const auto assign_float = [&](float& target) {
+    if (const auto parsed = parse_float(val)) {
+      target = *parsed;
+    } else if (diagnostics) {
+      ++diagnostics->invalidValues;
+    }
+  };
+
   // [Core]
   if (iequals(section, "core")) {
     if (iequals(key, "VerboseLogs"))
-      cfg.enableVerboseLogging = parse_bool(val, cfg.enableVerboseLogging);
+      assign_bool(cfg.enableVerboseLogging);
     else if (iequals(key, "PerformanceLogs"))
-      cfg.enablePerformanceLogging = parse_bool(val, cfg.enablePerformanceLogging);
+      assign_bool(cfg.enablePerformanceLogging);
     return;
   }
 
   // [Rendering]
   if (iequals(section, "rendering")) {
     if (iequals(key, "EnableAnisotropicFiltering"))
-      cfg.enableAnisotropicFiltering = parse_bool(val, cfg.enableAnisotropicFiltering);
+      assign_bool(cfg.enableAnisotropicFiltering);
     else if (iequals(key, "MaxAnisotropy"))
-      cfg.maxAnisotropy = parse_float(val, cfg.maxAnisotropy);
+      assign_float(cfg.maxAnisotropy);
     else if (iequals(key, "LODBias"))
-      cfg.lodBias = parse_float(val, cfg.lodBias);
+      assign_float(cfg.lodBias);
     return;
   }
 
   // [Shaders]
   if (iequals(section, "shaders")) {
     if (iequals(key, "DumpEngineShaders"))
-      cfg.dumpEngineShaders = parse_bool(val, cfg.dumpEngineShaders);
+      assign_bool(cfg.dumpEngineShaders);
     else if (iequals(key, "EnableDebugHotkeys"))
-      cfg.enableDebugHotkeys = parse_bool(val, cfg.enableDebugHotkeys);
+      assign_bool(cfg.enableDebugHotkeys);
     else if (iequals(key, "EnableWaterEffect"))
-      cfg.enableWaterEffect = parse_bool(val, cfg.enableWaterEffect);
+      assign_bool(cfg.enableWaterEffect);
     return;
   }
 }
@@ -109,7 +127,8 @@ std::filesystem::path ConfigManager::config_path() {
 #endif
 }
 
-bool ConfigManager::load(const std::filesystem::path& path, EngineConfig& out) {
+bool ConfigManager::load(const std::filesystem::path& path, EngineConfig& out,
+                         ConfigLoadDiagnostics* diagnostics) {
   std::ifstream in(path);
   if (!in) {
     return false;
@@ -118,10 +137,8 @@ bool ConfigManager::load(const std::filesystem::path& path, EngineConfig& out) {
   EngineConfig cfg = out;
   std::string section;
   std::string line;
-  std::size_t lineno = 0;
 
   while (std::getline(in, line)) {
-    ++lineno;
     auto raw = trim(line);
     if (raw.empty() || raw[0] == ';' || raw[0] == '#') continue;
 
@@ -132,13 +149,13 @@ bool ConfigManager::load(const std::filesystem::path& path, EngineConfig& out) {
 
     auto eq = raw.find('=');
     if (eq == std::string::npos) {
-      LOG_WARN("Malformed INI line {}: {}", lineno, raw);
+      if (diagnostics) ++diagnostics->malformedLines;
       continue;
     }
 
     auto key = trim(raw.substr(0, eq));
     auto val = trim(raw.substr(eq + 1));
-    apply_kv(cfg, section, key, val);
+    apply_kv(cfg, section, key, val, diagnostics);
   }
 
   normalize(cfg);
@@ -173,14 +190,20 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   return true;
 }
 
-EngineConfig ConfigManager::load_or_default() {
+EngineConfig ConfigManager::load_or_default(ConfigLoadDiagnostics* diagnostics) {
+  if (diagnostics) *diagnostics = {};
   EngineConfig cfg{};
   const auto path = config_path();
-  if (!std::filesystem::exists(path)) {
-    (void)save(path, cfg);
+  std::error_code existsError;
+  const bool exists = std::filesystem::exists(path, existsError);
+  if (diagnostics) diagnostics->fileExisted = exists && !existsError;
+  if (existsError || !exists) {
+    const bool written = !existsError && save(path, cfg);
+    if (diagnostics) diagnostics->defaultFileWritten = written;
     return cfg;
   }
-  (void)load(path, cfg);
+  const bool loaded = load(path, cfg, diagnostics);
+  if (diagnostics) diagnostics->loadSucceeded = loaded;
   return cfg;
 }
 }  // namespace iee::core

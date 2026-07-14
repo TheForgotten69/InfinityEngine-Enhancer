@@ -67,8 +67,8 @@ Locally validated for this project/build:
 ## Tile Detection Facts
 
 - TIS header field `+0x14` is the authored tile dimension used by the asset pipeline.
-- `0x40` means standard tiles.
-- `0x100` means authored 4x tiles.
+- Explicit values `0x40`, `0x80`, `0x100`, and `0x200` map to `1x`, `2x`,
+  `4x`, and `8x`; other values are not trusted as scale metadata.
 - `CResTileSet::h` is present for at least the authored 4x path, but can be null for standard tilesets.
 - When `h` is null, the 12-byte PVR entry table in `pData` can classify scale
   from the GCD of bounded, same-page `u`/`v` coordinate deltas. Raw atlas

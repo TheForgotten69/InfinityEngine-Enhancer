@@ -4,17 +4,18 @@
 
 ## What It Does
 
-The first supported feature is 4x TIS/PVRZ tile upscaling, with an optional WED-masked water shader. Scale detection is header-first:
+The first supported feature is higher-resolution TIS/PVRZ tile rendering, with an optional WED-masked water shader. Scale detection is header-first:
 
-- `TIS header + 0x14 == 0x40` means standard tiles
-- `TIS header + 0x14 == 0x100` means authored 4x tiles
+- `TIS header + 0x14` is the authored tile dimension
+- explicit `64`, `128`, `256`, and `512` dimensions map to `1x`, `2x`, `4x`, and `8x`
 
 Some standard tilesets legitimately have no live header pointer. In those cases the runtime classifies scale from the PVR entry table before considering the old UV / texture-id heuristic fallback.
 
 Runtime tileset decisions and configured GL textures are cached only for the
 current area, with fixed capacities, so visiting more maps does not accumulate
-cache state. Set `PerformanceLogs = true` in the `[Core]` section to emit an
-aggregate five-second timing window for the `RenderTexture` enhancement path.
+cache state. Set `PerformanceLogs = true` in the `[Core]` section to emit
+five-second CPU timing windows (including per-frame p95), shader-feed work,
+safe-read cache, and GL texture-configuration counters.
 
 ## Requirements
 
@@ -48,6 +49,9 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
   `cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DIEE_BUILD_WINDOWS_DLL=ON -DBUILD_TESTING=ON`
   `cmake --build build --config Release --target release_bundle`
 
+`cmake --install build --config Release --prefix <directory>` produces the
+same game-root layout as `release_bundle`.
+
 C++ changes follow the repository's Google-derived [`.clang-format`](.clang-format).
 
 GitHub Dependabot maintains workflow actions. Commit-pinned CMake
@@ -61,6 +65,7 @@ while keeping builds reproducibly pinned to full commit SHAs.
 - [docs/threading-model.md](docs/threading-model.md)
 - [docs/reverse-engineering.md](docs/reverse-engineering.md)
 - [docs/build-manifests.md](docs/build-manifests.md)
+- [docs/new-build-validation.md](docs/new-build-validation.md)
 - [docs/tile-upscale.md](docs/tile-upscale.md)
 - [docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md](docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md) — graphics enhancement roadmap
 - [CLAUDE.md](CLAUDE.md)
