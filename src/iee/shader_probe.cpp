@@ -221,8 +221,7 @@ std::optional<int> infer_program_slot(std::string_view vertexShaderName,
 }
 
 void submit_shader_source(unsigned shader, int count, const char* const* strings,
-                          const int* lengths, Fn_glShaderSource forward, bool isArb,
-                          bool& forwarded) {
+                          const int* lengths, Fn_glShaderSource forward, bool& forwarded) {
   const std::string fullSource = gather_full_source(count, strings, lengths);
   const auto name = game::extract_shader_name(fullSource, "");
 
@@ -284,7 +283,7 @@ static void APIENTRY detour_glShaderSource(unsigned shader, int count, const cha
                                            const int* lengths) noexcept {
   bool forwarded = false;
   try {
-    submit_shader_source(shader, count, strings, lengths, g_glShaderSourceHook.original(), false,
+    submit_shader_source(shader, count, strings, lengths, g_glShaderSourceHook.original(),
                          forwarded);
   } catch (...) {
     if (!forwarded) {
@@ -298,7 +297,7 @@ static void APIENTRY detour_glShaderSourceARB(unsigned shader, int count,
                                               const int* lengths) noexcept {
   bool forwarded = false;
   try {
-    submit_shader_source(shader, count, strings, lengths, g_glShaderSourceARBHook.original(), true,
+    submit_shader_source(shader, count, strings, lengths, g_glShaderSourceARBHook.original(),
                          forwarded);
   } catch (...) {
     if (!forwarded) {
