@@ -1,3 +1,4 @@
+// ARCHIVED PROTOTYPE: not compiled and not representative of the supported runtime.
 #include <windows.h>
 #include <psapi.h>
 #include <cstdint>

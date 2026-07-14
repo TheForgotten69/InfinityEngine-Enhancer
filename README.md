@@ -23,7 +23,7 @@ Some standard tilesets legitimately have no live header pointer. In those cases 
 1. Install [EEex](https://github.com/Bubb13/EEex).
 2. Download the release bundle from [Releases](../../releases).
 3. Copy `InfinityEngine-Enhancer.dll`, `iee-shaders/`, and `iee-textures/` into the game root.
-4. Copy [M_IEEE.lua](tools/M_IEEE.lua) and the contents of `game-override/` into the game's `override` directory.
+4. Copy [M_IEEE.lua](tools/M_IEEE.lua) and the contents of `override/` into the game's `override` directory.
 5. Optionally copy [InfinityEngine-Enhancer.sample.ini](tools/InfinityEngine-Enhancer.sample.ini) to the game root as `InfinityEngine-Enhancer.ini` and customize it.
 
 The runtime writes `InfinityEngine-Enhancer.ini` and `InfinityEngine-Enhancer.log` next to the game executable.
@@ -40,9 +40,12 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
   `cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DIEE_BUILD_WINDOWS_DLL=ON -DBUILD_TESTING=ON`
   `cmake --build build --config Release --target release_bundle`
 
+C++ changes follow the repository's Google-derived [`.clang-format`](.clang-format).
+
 ## Docs
 
 - [docs/architecture.md](docs/architecture.md)
+- [docs/threading-model.md](docs/threading-model.md)
 - [docs/reverse-engineering.md](docs/reverse-engineering.md)
 - [docs/build-manifests.md](docs/build-manifests.md)
 - [docs/tile-upscale.md](docs/tile-upscale.md)
@@ -51,7 +54,7 @@ Use WSL for analysis and host-side tests. The actual DLL build is Windows-only.
 
 ## Notes
 
-- [shaders/InfinityEngine-Enhancer.cpp](shaders/InfinityEngine-Enhancer.cpp) is archival research code, not the supported runtime path.
+- Unsupported experiments live under [docs/archive/prototypes](docs/archive/prototypes/README.md).
 - Build-specific offsets and callsites live in the manifest layer under [src/iee/game/build_manifest.cpp](src/iee/game/build_manifest.cpp).
 
 ## License

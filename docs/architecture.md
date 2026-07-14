@@ -46,6 +46,7 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 - Encapsulates scale detection.
 - TIS header metadata is authoritative.
+- Headerless PVR tables are classified from same-page coordinate deltas, not raw atlas origins.
 - UV / texture-id heuristics remain fallback only.
 
 `src/iee/hooks.*`
@@ -56,7 +57,7 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/area_state.*`
 
-- Active-area resolution (manifest-driven CInfGame offsets), scroll reads, and
+- Active-area resolution (manifest-driven CInfGame offsets), view-transform reads, and
   the post-LoadArea WED cache refresh plus render-thread area-texture queue.
 - GL objects are recreated when the current WGL context changes.
 
@@ -75,9 +76,16 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/shader_probe.*`
 
-- Windows GL detours (glShaderSource/Compile/Link/UseProgram + ARB): override
-  substitution with compile-failure fallback, retroactive engine-shader archival,
-  per-frame uniform feed (uIeeTime/uIeeEnabled), V5 FBO probe, F10 A/B hotkey.
+- Thin Windows GL detours (source/compile/link/use/delete + ARB), program classification,
+  compile-failure fallback, and hook lifecycle.
+
+`src/iee/shader_uniform_bridge.*`
+
+- Owns atomic uniform inputs, location resolution, and render-thread uniform/texture binding.
+
+`src/iee/shader_diagnostics.*`
+
+- Owns optional caller-symbol resolution and engine-shader dump file I/O.
 
 `src/iee/frame_hook.*`
 
@@ -86,9 +94,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 `src/iee/game/area_texture.*`
 
-- Host-safe packing of WED per-cell overlay flags into an R8 grid for GL upload.
-- Packs both raw overlay flags and per-cell liquid modes; the liquid variant
-  feeds the unit-2 mask texture consumed by the water shader override.
+- Host-safe packing of WED per-cell liquid modes into the R8 unit-2 mask texture.
+- The compact cell mask is an outer bound; base-tile alpha supplies the authored contour.
 
 ## Build Layout
 
@@ -109,7 +116,9 @@ This keeps reverse-engineering and parsing code testable without requiring a Win
 - A loader that calls `FreeLibrary` must invoke exported `ShutdownBindings`
   first; MinHook, logging, and GL teardown are deliberately never run from
   `DllMain` under the Windows loader lock.
+- [threading-model.md](threading-model.md) defines callback ownership and exception boundaries.
 
 ## Archival Code
 
-[shaders/InfinityEngine-Enhancer.cpp](../shaders/InfinityEngine-Enhancer.cpp) is preserved as research material only. It is not part of the supported build and should not be treated as the source of truth for current runtime behavior.
+[docs/archive/prototypes](archive/prototypes/README.md) preserves unsupported experiments. Nothing
+in that directory is part of the build or a source of truth for runtime behavior.

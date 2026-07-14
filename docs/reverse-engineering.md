@@ -70,5 +70,7 @@ Locally validated for this project/build:
 - `0x40` means standard tiles.
 - `0x100` means authored 4x tiles.
 - `CResTileSet::h` is present for at least the authored 4x path, but can be null for standard tilesets.
-- When `h` is null, the 12-byte PVR entry table in `pData` is still sufficient to classify scale deterministically by scanning the smallest positive `u`/`v` step.
+- When `h` is null, the 12-byte PVR entry table in `pData` can classify scale
+  from the GCD of bounded, same-page `u`/`v` coordinate deltas. Raw atlas
+  origins are not dimensions.
 - The `+0x1DC` flag is kept only for the current seam/linear tone handling path, not for deciding upscale factor.

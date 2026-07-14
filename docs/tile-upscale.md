@@ -11,10 +11,15 @@ Render authored 4x tile assets while keeping the engine's 64x64 screen-space qua
 3. Map:
    - `0x40 -> scale 1`
    - `0x100 -> scale 4`
-4. If the header is missing, inspect the 12-byte PVR entry table and classify by the smallest positive `u`/`v` step.
+4. If the header is missing, inspect up to 32 entries from the 12-byte PVR table.
+   Validate page/coordinate bounds, then take the GCD of non-zero `u`/`v`
+   deltas between entries on the same atlas page.
 5. Only if both deterministic paths fail, fall back to the legacy UV / texture-id heuristic path and log that fallback.
 
-The header is authoritative when present. Standard tilesets can legitimately have `header == null`, so table-based detection is also an expected deterministic path. Heuristics are there only as a final safety net.
+The header is authoritative when present. Standard tilesets can legitimately have `header == null`,
+so table-based detection is also an expected deterministic path. Raw `u`/`v` origins are never tile
+dimensions; only their translation-invariant grid deltas are considered. Heuristics are a final
+safety net.
 
 The value at `+0x14` is TIS metadata. The PVRZ header describes the atlas page
 and does not replace this logical tile-size field. The current implementation
