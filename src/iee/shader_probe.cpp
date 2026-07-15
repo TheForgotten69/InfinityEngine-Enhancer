@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -79,6 +80,22 @@ core::Hook<Fn_glUseProgramObjectARB> g_glUseProgramObjectARBHook;
 core::Hook<Fn_glDeleteObjectARB> g_glDeleteObjectARBHook;
 core::Hook<Fn_glBindFramebuffer> g_glBindFramebufferHook;
 core::Hook<Fn_glDeleteTextures> g_glDeleteTexturesHook;
+
+void finish_queued_probe_hooks() noexcept {
+  g_glShaderSourceHook.finish_queued_enable();
+  g_glCompileShaderHook.finish_queued_enable();
+  g_glDeleteShaderHook.finish_queued_enable();
+  g_glLinkProgramHook.finish_queued_enable();
+  g_glUseProgramHook.finish_queued_enable();
+  g_glDeleteProgramHook.finish_queued_enable();
+  g_glDeleteTexturesHook.finish_queued_enable();
+  g_glShaderSourceARBHook.finish_queued_enable();
+  g_glCompileShaderARBHook.finish_queued_enable();
+  g_glLinkProgramARBHook.finish_queued_enable();
+  g_glUseProgramObjectARBHook.finish_queued_enable();
+  g_glDeleteObjectARBHook.finish_queued_enable();
+  g_glBindFramebufferHook.finish_queued_enable();
+}
 
 bool remove_probe_hooks() noexcept {
   bool removed = true;
@@ -775,11 +792,11 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
 
       g_dumpDir = dllDir / "iee-shader-dumps";
 
-      // Water textures (render thread, context current here). Keep them
-      // available for the optional F10 debug cycle even when the effect starts
-      // disabled, but skip all asset/GL work when neither path can use them.
+      // CPU assets were prepared during DLL initialization. Keep the GL
+      // upload on this render thread while removing file I/O and decoding from
+      // the first RenderTexture call.
       if (cfg.enableWaterEffect || cfg.enableDebugHotkeys) {
-        (void)water::load_water_textures(dllDir / "iee-textures");
+        (void)water::upload_water_textures();
       }
     }
 #else
@@ -799,37 +816,37 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
       if (gl.glShaderSource) {
         g_glShaderSourceHook.create(reinterpret_cast<void*>(gl.glShaderSource),
                                     reinterpret_cast<void*>(&detour_glShaderSource));
-        g_glShaderSourceHook.enable();
+        g_glShaderSourceHook.queue_enable();
       }
       if (gl.glCompileShader) {
         g_glCompileShaderHook.create(reinterpret_cast<void*>(gl.glCompileShader),
                                      reinterpret_cast<void*>(&detour_glCompileShader));
-        g_glCompileShaderHook.enable();
+        g_glCompileShaderHook.queue_enable();
       }
       if (gl.glDeleteShader) {
         g_glDeleteShaderHook.create(reinterpret_cast<void*>(gl.glDeleteShader),
                                     reinterpret_cast<void*>(&detour_glDeleteShader));
-        g_glDeleteShaderHook.enable();
+        g_glDeleteShaderHook.queue_enable();
       }
       if (gl.glLinkProgram) {
         g_glLinkProgramHook.create(reinterpret_cast<void*>(gl.glLinkProgram),
                                    reinterpret_cast<void*>(&detour_glLinkProgram));
-        g_glLinkProgramHook.enable();
+        g_glLinkProgramHook.queue_enable();
       }
       if (gl.glUseProgram) {
         g_glUseProgramHook.create(reinterpret_cast<void*>(gl.glUseProgram),
                                   reinterpret_cast<void*>(&detour_glUseProgram));
-        g_glUseProgramHook.enable();
+        g_glUseProgramHook.queue_enable();
       }
       if (gl.glDeleteProgram) {
         g_glDeleteProgramHook.create(reinterpret_cast<void*>(gl.glDeleteProgram),
                                      reinterpret_cast<void*>(&detour_glDeleteProgram));
-        g_glDeleteProgramHook.enable();
+        g_glDeleteProgramHook.queue_enable();
       }
       if (gl.glDeleteTextures) {
         g_glDeleteTexturesHook.create(reinterpret_cast<void*>(gl.glDeleteTextures),
                                       reinterpret_cast<void*>(&detour_glDeleteTextures));
-        g_glDeleteTexturesHook.enable();
+        g_glDeleteTexturesHook.queue_enable();
       }
       // Some ICDs return the same dispatch address for promoted ARB/core
       // pairs; a second MH_CreateHook on the same target would throw and
@@ -838,25 +855,25 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
                                       reinterpret_cast<void*>(gl.glShaderSource)) {
         g_glShaderSourceARBHook.create(reinterpret_cast<void*>(gl.glShaderSourceARB),
                                        reinterpret_cast<void*>(&detour_glShaderSourceARB));
-        g_glShaderSourceARBHook.enable();
+        g_glShaderSourceARBHook.queue_enable();
       }
       if (gl.glCompileShaderARB && reinterpret_cast<void*>(gl.glCompileShaderARB) !=
                                        reinterpret_cast<void*>(gl.glCompileShader)) {
         g_glCompileShaderARBHook.create(reinterpret_cast<void*>(gl.glCompileShaderARB),
                                         reinterpret_cast<void*>(&detour_glCompileShaderARB));
-        g_glCompileShaderARBHook.enable();
+        g_glCompileShaderARBHook.queue_enable();
       }
       if (gl.glLinkProgramARB && reinterpret_cast<void*>(gl.glLinkProgramARB) !=
                                      reinterpret_cast<void*>(gl.glLinkProgram)) {
         g_glLinkProgramARBHook.create(reinterpret_cast<void*>(gl.glLinkProgramARB),
                                       reinterpret_cast<void*>(&detour_glLinkProgramARB));
-        g_glLinkProgramARBHook.enable();
+        g_glLinkProgramARBHook.queue_enable();
       }
       if (gl.glUseProgramObjectARB && reinterpret_cast<void*>(gl.glUseProgramObjectARB) !=
                                           reinterpret_cast<void*>(gl.glUseProgram)) {
         g_glUseProgramObjectARBHook.create(reinterpret_cast<void*>(gl.glUseProgramObjectARB),
                                            reinterpret_cast<void*>(&detour_glUseProgramObjectARB));
-        g_glUseProgramObjectARBHook.enable();
+        g_glUseProgramObjectARBHook.queue_enable();
       }
       if (gl.glDeleteObjectARB &&
           reinterpret_cast<void*>(gl.glDeleteObjectARB) !=
@@ -865,18 +882,27 @@ bool install_shader_probes(const core::EngineConfig& cfg) noexcept {
               reinterpret_cast<void*>(gl.glDeleteProgram)) {
         g_glDeleteObjectARBHook.create(reinterpret_cast<void*>(gl.glDeleteObjectARB),
                                        reinterpret_cast<void*>(&detour_glDeleteObjectARB));
-        g_glDeleteObjectARBHook.enable();
+        g_glDeleteObjectARBHook.queue_enable();
       }
       if (cfg.enableVerboseLogging && gl.glBindFramebuffer) {
         g_glBindFramebufferHook.create(reinterpret_cast<void*>(gl.glBindFramebuffer),
                                        reinterpret_cast<void*>(&detour_glBindFramebuffer));
-        g_glBindFramebufferHook.enable();
+        g_glBindFramebufferHook.queue_enable();
+      }
+      const auto applyStatus = MH_ApplyQueued();
+      finish_queued_probe_hooks();
+      if (applyStatus != MH_OK) {
+        throw std::runtime_error("MH_ApplyQueued failed for GL shader probes");
       }
     } catch (const std::exception& e) {
+      (void)MH_ApplyQueued();
+      finish_queued_probe_hooks();
       LOG_WARN("Failed to install GL shader probes: {}", e.what());
       remove_probe_hooks();
       return false;
     } catch (...) {
+      (void)MH_ApplyQueued();
+      finish_queued_probe_hooks();
       LOG_WARN("Failed to install GL shader probes with an unknown exception");
       remove_probe_hooks();
       return false;
@@ -1008,10 +1034,10 @@ void on_frame_tick(float secondsSinceStart) noexcept {
         }();
         const double ticksToMicroseconds =
             frequency > 0 ? 1'000'000.0 / static_cast<double>(frequency) : 0.0;
-        const double averageMicroseconds =
-            stats.calls > 0 ? static_cast<double>(stats.totalTicks) * ticksToMicroseconds /
-                                  static_cast<double>(stats.calls)
-                            : 0.0;
+        const double averageMicroseconds = stats.calls > 0 ? static_cast<double>(stats.totalTicks) *
+                                                                 ticksToMicroseconds /
+                                                                 static_cast<double>(stats.calls)
+                                                           : 0.0;
         LOG_INFO(
             "Shader uniform feed perf: calls={}, unchangedSkipped={}, textureBindPasses={}, "
             "avg={:.2f}us, max={:.2f}us over 5s",

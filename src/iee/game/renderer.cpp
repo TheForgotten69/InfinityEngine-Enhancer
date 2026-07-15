@@ -15,7 +15,8 @@
 
 namespace iee::game {
 namespace {
-constexpr std::size_t kConfiguredTextureCapacity = 64;
+constexpr std::size_t kConfiguredTextureCapacity = 512;
+constexpr std::uint16_t kCacheValidationInterval = 256;
 std::atomic<bool> g_textureCacheResetRequested{false};
 std::atomic<std::uint64_t> g_textureConfigurationEpoch{1};
 std::atomic<std::uint64_t> g_textureConfigurationCalls{0};
@@ -28,6 +29,7 @@ struct TextureConfigurationCache {
   struct Entry {
     int sourceTextureId{};
     int glTextureName{};
+    std::uint16_t hitsUntilValidation{kCacheValidationInterval};
     bool failed{};
   };
 
@@ -145,8 +147,7 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
   const bool logDetails = callCount <= 3 || cfg.enableVerboseLogging;
 
   // Discard errors from engine work before attributing a failure to this operation.
-  for (int errorCount = 0; errorCount < 16 && gl.glGetError() != gl::GL_NO_ERROR; ++errorCount) {
-  }
+  gl::discard_errors();
 
   const auto checkError = [&](const char* operation) {
     const unsigned error = gl.glGetError();
@@ -184,9 +185,19 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
       }
       return false;
     }
-    // Texture names can be recycled. These sentinels differ from a newly
-    // created texture's defaults and force a reconfigure if the same
-    // source/name pair now refers to a replacement object.
+    if (configured->hitsUntilValidation > 1) {
+      --configured->hitsUntilValidation;
+      if (recordStats) {
+        g_textureConfigurationCacheHits.fetch_add(1, std::memory_order_relaxed);
+      }
+      return true;
+    }
+
+    // glDeleteTextures invalidates this cache immediately through the probe
+    // hook. Keep an infrequent sentinel check as a fail-safe for deletion paths
+    // that bypass that entry point, without synchronizing with the driver on
+    // every cache hit.
+    configured->hitsUntilValidation = kCacheValidationInterval;
     int wrapS = 0;
     int minFilter = 0;
     gl.glGetTexParameteriv(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, &wrapS);
@@ -215,6 +226,7 @@ bool configure_bound_texture(const core::EngineConfig& cfg, int sourceTextureId)
     cache.entries[insertionIndex] = {
         .sourceTextureId = sourceTextureId,
         .glTextureName = boundTexture,
+        .hitsUntilValidation = kCacheValidationInterval,
         .failed = failed,
     };
     if (cache.size == cache.entries.size()) {

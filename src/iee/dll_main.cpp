@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "app_context.h"
@@ -31,8 +33,26 @@ enum class LifecycleState : std::uint8_t {
 };
 static std::atomic<LifecycleState> g_lifecycle{LifecycleState::NotStarted};
 static std::atomic<HANDLE> g_initThread{nullptr};
+static std::mutex g_initThreadMutex;
 const std::string LOG_FILE = "InfinityEngine-Enhancer.log";
 static void CleanupHooks() noexcept;
+
+static std::filesystem::path ModuleDirectory(const std::filesystem::path& fallback) noexcept {
+  try {
+    HMODULE selfModule = nullptr;
+    if (!GetModuleHandleExA(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCSTR>(&ModuleDirectory), &selfModule)) {
+      return fallback;
+    }
+    wchar_t path[MAX_PATH]{};
+    const auto length = GetModuleFileNameW(selfModule, path, MAX_PATH);
+    if (length == 0 || length >= MAX_PATH) return fallback;
+    return std::filesystem::path(path).parent_path();
+  } catch (...) {
+    return fallback;
+  }
+}
 
 static DWORD WINAPI InitThread(LPVOID) {
   struct FinalizeState {
@@ -45,6 +65,7 @@ static DWORD WINAPI InitThread(LPVOID) {
   } finalize;
 
   try {
+    if (g_lifecycle.load(std::memory_order_acquire) != LifecycleState::Starting) return 1;
     const auto cfgPath = core::ConfigManager::config_path();
     core::ConfigLoadDiagnostics configDiagnostics{};
     core::EngineConfig cfg = core::ConfigManager::load_or_default(&configDiagnostics);
@@ -69,19 +90,31 @@ static DWORD WINAPI InitThread(LPVOID) {
     auto& ctx = *g_appContext;
     ctx.cfg = cfg;
     game::ExecutableVersion detectedVersion{};
-    ctx.manifest = game::detect_manifest(&detectedVersion);
+    std::string detectedProductName;
+    ctx.manifest = game::detect_manifest(&detectedVersion, &detectedProductName);
 
     LOG_INFO("InfinityEngine-Enhancer loaded (config applied)");
     if (!ctx.manifest) {
       if (detectedVersion.major != 0) {
-        LOG_ERROR("Unsupported executable version {}.{}.{}; no hooks were installed",
-                  detectedVersion.major, detectedVersion.minor, detectedVersion.patch);
+        LOG_ERROR(
+            "Unsupported executable identity: product='{}', version={}.{}.{}.{}; no hooks were "
+            "installed",
+            detectedProductName.empty() ? "<unavailable>" : detectedProductName,
+            detectedVersion.major, detectedVersion.minor, detectedVersion.patch,
+            detectedVersion.revision);
       } else {
         LOG_ERROR("Could not read the executable version; no hooks were installed");
       }
       return 1;
     }
     LOG_INFO("Selected build manifest: {}", ctx.manifest->buildId);
+
+    if (cfg.enableWaterEffect || cfg.enableDebugHotkeys) {
+      // Decode retained CPU assets before any render hook can run. GL object
+      // creation remains lazy on the context-owning render thread.
+      const auto moduleDir = ModuleDirectory(cfgPath.parent_path());
+      (void)water::prepare_water_textures(moduleDir / "iee-textures");
+    }
 
     if (cfg.enableVerboseLogging) {
       LOG_DEBUG(
@@ -106,6 +139,8 @@ static DWORD WINAPI InitThread(LPVOID) {
       LOG_ERROR("Failed to resolve draw API functions");
       return 1;
     }
+
+    if (g_lifecycle.load(std::memory_order_acquire) != LifecycleState::Starting) return 1;
 
     if (!hooks::install_all(ctx)) {
       LOG_ERROR("Failed to install hooks");
@@ -163,11 +198,18 @@ extern "C" __declspec(dllexport) void __stdcall InitBindings(void* argSharedStat
     return;
   }
 
-  if (HANDLE thread = CreateThread(nullptr, 0, iee::InitThread, nullptr, 0, nullptr)) {
-    iee::g_initThread.store(thread, std::memory_order_release);
-  } else {
-    iee::g_lifecycle.store(iee::LifecycleState::Failed, std::memory_order_release);
-    OutputDebugStringA("InfinityEngine-Enhancer: Failed to create initialization thread");
+  {
+    // Publish the worker handle while shutdown is excluded. Without this
+    // handshake, ShutdownBindings can observe Starting plus a null handle and
+    // unload state while an untracked worker continues initialization.
+    std::lock_guard lock(iee::g_initThreadMutex);
+    if (iee::g_lifecycle.load(std::memory_order_acquire) != iee::LifecycleState::Starting) return;
+    if (HANDLE thread = CreateThread(nullptr, 0, iee::InitThread, nullptr, 0, nullptr)) {
+      iee::g_initThread.store(thread, std::memory_order_release);
+    } else {
+      iee::g_lifecycle.store(iee::LifecycleState::Failed, std::memory_order_release);
+      OutputDebugStringA("InfinityEngine-Enhancer: Failed to create initialization thread");
+    }
   }
 }
 
@@ -185,7 +227,12 @@ extern "C" __declspec(dllexport) void __stdcall ShutdownBindings() {
     return;
   }
 
-  if (HANDLE thread = iee::g_initThread.exchange(nullptr, std::memory_order_acq_rel)) {
+  HANDLE thread = nullptr;
+  {
+    std::lock_guard lock(iee::g_initThreadMutex);
+    thread = iee::g_initThread.exchange(nullptr, std::memory_order_acq_rel);
+  }
+  if (thread) {
     if (GetThreadId(thread) != GetCurrentThreadId()) {
       WaitForSingleObject(thread, INFINITE);
     }

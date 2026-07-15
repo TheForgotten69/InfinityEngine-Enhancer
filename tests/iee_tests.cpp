@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <array>
-#include <cstddef>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -120,8 +120,14 @@ void test_rel32_target_checked() {
 void test_manifest_loading() {
   const auto& manifest = iee::game::current_manifest();
   expect_true(manifest.validate(), "Current build manifest should validate");
-  expect_true(manifest.executableVersion.matches(2, 6, 6),
+  expect_true(manifest.executableVersion.matches(2, 6, 6, 0),
               "Current manifest should require a BGEE 2.6.6 executable");
+  expect_true(manifest.executableVersion.matches(2, 6, 6, 999),
+              "The documented 2.6.6.x manifest should explicitly accept any revision");
+  expect_true(iee::game::supports_product_name(manifest, "Baldur's Gate: Enhanced Edition"),
+              "BGEE product-name punctuation should normalize safely");
+  expect_true(!iee::game::supports_product_name(manifest, "Baldur's Gate II: Enhanced Edition"),
+              "A sibling Infinity Engine game must not match the BGEE manifest");
   expect_eq(manifest.referenceRvas.loadArea, std::uintptr_t{0x27E710},
             "LoadArea reference RVA should match");
   expect_eq(manifest.referenceRvas.renderTexture, std::uintptr_t{0x4247E0},
@@ -133,9 +139,9 @@ void test_manifest_loading() {
     expect_eq(found->get().offsets.tisHeaderTileDimension, std::uintptr_t{0x14},
               "Manifest should carry the TIS header tile dimension offset");
   }
-  expect_true(iee::game::find_manifest_for_version(2, 6, 6).has_value(),
+  expect_true(iee::game::find_manifest_for_version(2, 6, 6, 123).has_value(),
               "BGEE 2.6.6 should resolve by executable version");
-  expect_true(!iee::game::find_manifest_for_version(2, 7, 3).has_value(),
+  expect_true(!iee::game::find_manifest_for_version(2, 7, 3, 0).has_value(),
               "Unknown BGEE 2.7 builds must fail closed until validated");
 }
 
@@ -763,8 +769,7 @@ void test_wed_tint_candidates_are_bounded() {
   constexpr std::size_t baseTilemapOffset = layerOffset + 2 * sizeof(WED_LayerHeader_st);
   constexpr std::size_t overlayTilemapOffset =
       baseTilemapOffset + cellCount * sizeof(WED_TileData_st);
-  constexpr std::size_t lookupOffset =
-      overlayTilemapOffset + cellCount * sizeof(WED_TileData_st);
+  constexpr std::size_t lookupOffset = overlayTilemapOffset + cellCount * sizeof(WED_TileData_st);
   std::vector<std::byte> bytes(lookupOffset + cellCount * sizeof(std::uint16_t));
 
   WED_WedHeader_st header{};
@@ -786,8 +791,7 @@ void test_wed_tint_candidates_are_bounded() {
   overlayLayer.rrTileSet = {'W', 'T', 'W', 'A', 'V', 'E', '0', '1'};
   overlayLayer.nOffsetToTileData = static_cast<std::uint32_t>(overlayTilemapOffset);
   overlayLayer.nOffsetToTileList = static_cast<std::uint32_t>(lookupOffset);
-  write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &overlayLayer,
-              sizeof(overlayLayer));
+  write_bytes(bytes, layerOffset + sizeof(WED_LayerHeader_st), &overlayLayer, sizeof(overlayLayer));
 
   std::vector<WED_TileData_st> baseTiles(cellCount);
   std::vector<WED_TileData_st> overlayTiles(cellCount);
@@ -865,8 +869,10 @@ void test_decode_palette_tile_alpha() {
   const auto avg = palette_tile_average_color(colorTile.data(), colorTile.size());
   expect_true(avg.has_value(), "Opaque tile should yield an average color");
   if (avg) {
-    expect_true((*avg)[0] == 0.5f && (*avg)[1] == 0.0f && (*avg)[2] == 0.5f,
+    expect_true(avg->linearRgb[0] == 0.5f && avg->linearRgb[1] == 0.0f && avg->linearRgb[2] == 0.5f,
                 "Average color should be the exact opaque-pixel mean");
+    expect_eq(avg->opaquePixelCount, std::size_t{kTilePixels * kTilePixels},
+              "Average should report its opaque-pixel weight");
   }
   // Mid-grey is encoded sRGB. A linear-light average must decode it before
   // feeding shader math rather than returning 128/255 (~0.502).
@@ -878,9 +884,9 @@ void test_decode_palette_tile_alpha() {
   const auto grey = palette_tile_average_color(greyTile.data(), greyTile.size());
   expect_true(grey.has_value(), "Opaque grey tile should yield an average color");
   if (grey) {
-    expect_true(std::abs((*grey)[0] - 0.215861f) < 0.00001f &&
-                    std::abs((*grey)[1] - 0.215861f) < 0.00001f &&
-                    std::abs((*grey)[2] - 0.215861f) < 0.00001f,
+    expect_true(std::abs(grey->linearRgb[0] - 0.215861f) < 0.00001f &&
+                    std::abs(grey->linearRgb[1] - 0.215861f) < 0.00001f &&
+                    std::abs(grey->linearRgb[2] - 0.215861f) < 0.00001f,
                 "Palette averages should be decoded into linear light");
   }
 
@@ -1020,8 +1026,7 @@ void test_tis_header_dimension_decoding() {
 void test_supported_tile_dimensions_are_inferred_dynamically() {
   using namespace iee::game;
 
-  for (const auto& [dimension, expectedScale] :
-       std::array<std::pair<std::uint32_t, int>, 4>{{
+  for (const auto& [dimension, expectedScale] : std::array<std::pair<std::uint32_t, int>, 4>{{
            {TisTileDimensions::Standard, 1},
            {TisTileDimensions::Upscaled2x, 2},
            {TisTileDimensions::Upscaled4x, 4},
@@ -1040,8 +1045,8 @@ void test_supported_tile_dimensions_are_inferred_dynamically() {
     }
   }
 
-  for (const auto dimension : {std::uint32_t{0}, std::uint32_t{96}, std::uint32_t{192},
-                               std::uint32_t{1024}}) {
+  for (const auto dimension :
+       {std::uint32_t{0}, std::uint32_t{96}, std::uint32_t{192}, std::uint32_t{1024}}) {
     expect_true(!scale_factor_from_tile_dimension(dimension).has_value(),
                 "unsupported tile dimensions must fail closed");
   }
@@ -1279,6 +1284,10 @@ void test_fpseam_override_asset_contract() {
               "water grading should explicitly cross the encoded/linear color boundary");
   expect_true(source.find("min(edgeDistance.x, edgeDistance.y) > 8.0") != std::string::npos,
               "interior land fragments should skip provably redundant coverage fetches");
+  expect_true(source.find("if (ieeIsInteriorWater(worldPos, centerCoverage))") !=
+                      std::string::npos &&
+                  source.find("vec2(-cell, -cell)") != std::string::npos,
+              "confirmed interior water should skip the shoreline filter");
 }
 
 int main() {

@@ -107,6 +107,7 @@ using PFN_glUseProgramObjectARB = void(APIENTRY*)(unsigned program);
 using PFN_glDeleteObjectARB = void(APIENTRY*)(unsigned object);
 
 const char* error_string(unsigned error_code) noexcept;
+void discard_errors(unsigned maximumErrors = 16) noexcept;
 bool check_error(const char* operation) noexcept;
 
 struct OpenGLFunctions {

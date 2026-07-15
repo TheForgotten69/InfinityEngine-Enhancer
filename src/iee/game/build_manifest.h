@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace iee::game {
@@ -47,19 +48,24 @@ struct RuntimeOffsets {
 };
 
 struct ExecutableVersion {
+  static constexpr std::uint16_t kAnyRevision = 0xFFFF;
+
   std::uint16_t major{};
   std::uint16_t minor{};
   std::uint16_t patch{};
+  std::uint16_t revision{};
 
   [[nodiscard]] constexpr bool matches(std::uint16_t candidateMajor, std::uint16_t candidateMinor,
-                                       std::uint16_t candidatePatch) const noexcept {
-    return major == candidateMajor && minor == candidateMinor && patch == candidatePatch;
+                                       std::uint16_t candidatePatch,
+                                       std::uint16_t candidateRevision) const noexcept {
+    return major == candidateMajor && minor == candidateMinor && patch == candidatePatch &&
+           (revision == kAnyRevision || revision == candidateRevision);
   }
 };
 
 struct BuildManifest {
   std::string_view buildId{};
-  std::array<std::string_view, 2> supportedGames{};
+  std::array<std::string_view, 2> supportedProductNames{};
   ExecutableVersion executableVersion{};
   PatternSet patterns{};
   ReferenceRvas referenceRvas{};
@@ -67,8 +73,8 @@ struct BuildManifest {
   std::array<BranchInstructionDesc, 11> renderTextureCallsites{};
 
   [[nodiscard]] constexpr bool validate() const noexcept {
-    if (buildId.empty() || executableVersion.major == 0 || patterns.loadArea.empty() ||
-        patterns.renderTexture.empty()) {
+    if (buildId.empty() || supportedProductNames[0].empty() || executableVersion.major == 0 ||
+        patterns.loadArea.empty() || patterns.renderTexture.empty()) {
       return false;
     }
     if (!referenceRvas.loadArea || !referenceRvas.renderTexture) {
@@ -98,11 +104,18 @@ struct BuildManifest {
     std::string_view buildId) noexcept;
 
 [[nodiscard]] std::optional<std::reference_wrapper<const BuildManifest>> find_manifest_for_version(
-    std::uint16_t major, std::uint16_t minor, std::uint16_t patch) noexcept;
+    std::uint16_t major, std::uint16_t minor, std::uint16_t patch, std::uint16_t revision) noexcept;
+
+// Product names are compared case-insensitively after removing ASCII
+// punctuation/spacing. This accepts harmless version-resource punctuation
+// differences while rejecting sibling Infinity Engine games.
+[[nodiscard]] bool supports_product_name(const BuildManifest& manifest,
+                                         std::string_view productName);
 
 // Selects a manifest from the main executable's fixed file version. Unknown
 // versions are deliberately unsupported and return nullptr before scanning
 // or installing any hooks.
 [[nodiscard]] const BuildManifest* detect_manifest(
-    ExecutableVersion* detectedVersion = nullptr) noexcept;
+    ExecutableVersion* detectedVersion = nullptr,
+    std::string* detectedProductName = nullptr) noexcept;
 }  // namespace iee::game

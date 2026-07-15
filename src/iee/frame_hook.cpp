@@ -9,6 +9,7 @@
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
+#include "iee/hooks.h"
 #include "iee/shader_probe.h"
 
 namespace iee::frame {
@@ -61,6 +62,7 @@ void frame_tick() {
   record_frame_interval();
   core::advance_readability_cache_epoch();
   g_frames.fetch_add(1, std::memory_order_relaxed);
+  hooks::retry_shader_probe_install();
   probe::on_frame_tick(seconds_since_install());
 }
 

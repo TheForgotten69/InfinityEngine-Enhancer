@@ -13,12 +13,7 @@
 
 namespace iee::features {
 namespace {
-std::atomic<bool> g_disableRenderHookRequest{false};
 std::atomic<bool> g_resetRenderStateRequest{false};
-
-void request_render_hook_disable() noexcept {
-  g_disableRenderHookRequest.store(true, std::memory_order_relaxed);
-}
 }  // namespace
 
 TileRenderState& tile_render_state() noexcept {
@@ -28,14 +23,6 @@ TileRenderState& tile_render_state() noexcept {
 
 void request_tile_render_state_reset() noexcept {
   g_resetRenderStateRequest.store(true, std::memory_order_release);
-}
-
-bool should_disable_render_hook() noexcept {
-  return g_disableRenderHookRequest.load(std::memory_order_relaxed);
-}
-
-void clear_disable_request() noexcept {
-  g_disableRenderHookRequest.store(false, std::memory_order_relaxed);
 }
 
 bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x, int y,
@@ -62,11 +49,10 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
     ++state.consecutiveDecodeFailures;
     if (!state.sawUpscaledTileset &&
         state.consecutiveDecodeFailures >= game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
-      request_render_hook_disable();
       if (state.consecutiveDecodeFailures == game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
         LOG_WARN(
-            "RenderTexture hook could not decode {} consecutive tile resources; disabling tile "
-            "upscaling for this area while retaining the engine renderer",
+            "RenderTexture hook could not decode {} consecutive tile resources; delegating them "
+            "to the engine renderer while continuing to observe later tilesets",
             state.consecutiveDecodeFailures);
       }
     }
@@ -97,9 +83,9 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
     return false;
   }
 
-  // Detect scale independently for each observed tileset. Standard-only areas
-  // keep the existing fast-disable path; standard overlays discovered after a
-  // 4x base tileset delegate to the engine without inheriting the 4x scale.
+  // Detect scale independently for each observed tileset. Standard resources
+  // delegate to the engine without preventing a later modded overlay from
+  // being classified as upscaled.
   if (!tilesetState->scaleDetected) {
     if (const auto detection = game::detect_scale(tileInfo, texId, *ctx.manifest)) {
       tilesetState->scaleFactor = detection->scaleFactor;
@@ -126,7 +112,6 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
 
       if (detection->scaleFactor == 1) {
         state.lastTexId.store(-1, std::memory_order_relaxed);
-        if (!state.sawUpscaledTileset) request_render_hook_disable();
         return false;
       }
     } else if (tilesetState->detectionCount < game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
@@ -150,7 +135,6 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
       if (sampleCount == game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
         tilesetState->scaleFactor = 1;
         tilesetState->scaleDetected = true;
-        if (!state.sawUpscaledTileset) request_render_hook_disable();
         LOG_INFO("Tileset 0x{:X} delegated as standard after {} inconclusive samples",
                  reinterpret_cast<std::uintptr_t>(tileInfo.tileset), sampleCount);
       }

@@ -21,8 +21,10 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 - Resolves draw API entry points from `CVidTile::RenderTexture`.
 - Handles opcode-aware rel32 decoding, including the `DrawPopState` tail jump.
-- Applies GL texture parameter upgrades and keeps a bounded, deletion-aware
-  configuration cache. Failed configurations are latched only until an area,
+- Applies GL texture parameter upgrades and keeps a bounded 512-entry,
+  deletion-aware configuration cache. Successful hits avoid driver queries;
+  periodic sentinel validation covers deletion paths that bypass the observed
+  GL entry point. Failed configurations are latched only until an area,
   deletion, or context reset.
 
 `src/iee/game/tis_runtime.*`
@@ -33,8 +35,9 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 `src/iee/game/tis_palette.*`
 
 - Decodes classic palette-tile transparency and derives authored liquid tint.
-- Converts encoded palette RGB to linear light before averaging; the water
-  shader grades in the same space and re-encodes the affected result.
+- Converts each palette entry to linear light once, weights area tint by opaque
+  pixel count, and avoids treating a sparsely painted tile like a full tile;
+  the water shader grades in the same space and re-encodes the affected result.
 
 `src/iee/game/runtime_types_x64.h`
 
@@ -61,12 +64,16 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 - Owns the runtime hook lifecycle as a thin detour -> dispatch layer.
 - `LoadArea` resets area-scoped feature state; `RenderTexture` dispatches into
-  the tile render feature and honors feature hook-disable requests.
+  the tile render feature and delegates unsupported resources to the engine.
+- A frame-boundary retry makes shader-probe recovery independent of tile
+  dispatch and transient RenderTexture decode failures.
 
 `src/iee/area_state.*`
 
 - Active-area resolution (manifest-driven CInfGame offsets), view-transform reads, and
   the post-LoadArea WED cache refresh plus render-thread area-texture queue.
+- Refresh publication is generation-checked; an older load/render callback
+  cannot overwrite the newest immutable WED snapshot.
 - GL objects are recreated when the current WGL context changes.
 
 `src/iee/features/tile_render.*`
@@ -95,6 +102,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
   source of the compiled shader.
 - Probe entry points and program classifications are discarded and reinstalled
   when the current WGL context changes.
+- Water assets are decoded during DLL initialization, while render-thread GL
+  upload stays lazy; probe hooks are queued and enabled in one MinHook batch.
 
 `src/iee/shader_uniform_bridge.*`
 

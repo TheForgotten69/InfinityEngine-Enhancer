@@ -12,6 +12,10 @@ shutdown are treated as separate producers so ownership remains clear.
 - The swap hook advances the frame counter and refreshes time-dependent uniforms.
 - Safe-read region results are cached only for that frame epoch; `LoadArea`
   advances the epoch before touching a replacement object graph.
+- Readability is not object lifetime. Area refreshes copy palette bytes before
+  processing them, revalidate the WED pointer before publication, and commit
+  only the newest refresh generation so an older callback cannot overwrite a
+  newer area snapshot.
 - Shader/program records are protected by `g_probeMutex`. Steady-state OpenGL introspection and
   shader-dump I/O copy the required record state and release that mutex first. One-time probe
   installation is serialized before those records become visible.
@@ -19,7 +23,7 @@ shutdown are treated as separate producers so ownership remains clear.
   `shared_ptr<const AreaGpuSnapshot>` after releasing the mutex.
 - Uniform inputs are independent relaxed atomics. They are a latest-value snapshot, not a
   transaction; the render thread is the only consumer that calls OpenGL.
-- `AppContext::activeArea`, `infGame`, `wed`, and the hook-active flag are atomic because load and
+- `AppContext::activeArea`, `infGame`, and `wed` are atomic because load and
   render callbacks may observe them at different engine boundaries.
 
 ## Hook and Exception Rules

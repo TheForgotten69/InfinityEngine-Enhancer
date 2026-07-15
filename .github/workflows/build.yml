@@ -25,12 +25,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Cache CMake FetchContent
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .cache/fetchcontent
+          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Configure host tests
         run: >-
           cmake -S . -B build
           -DBUILD_TESTING=ON
           -DIEE_WARNINGS_AS_ERRORS=ON
           -DIEE_ENABLE_SANITIZERS=ON
+          -DFETCHCONTENT_BASE_DIR=${{ github.workspace }}/.cache/fetchcontent
 
       - name: Build host tests
         run: cmake --build build --target iee_tests --parallel
@@ -39,7 +46,6 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   windows-build:
-    needs: host-tests
     # Pinned: windows-latest rolled over to the VS2026 image, which no longer
     # ships VS2022 — the validated toolchain for this project's generator.
     runs-on: windows-2022
@@ -50,6 +56,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
+
+      - name: Cache CMake FetchContent
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .cache/fetchcontent
+          key: fetchcontent-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
@@ -65,6 +77,7 @@ jobs:
           -DIEE_BUILD_WINDOWS_DLL=ON
           -DBUILD_TESTING=ON
           -DIEE_WARNINGS_AS_ERRORS=ON
+          -DFETCHCONTENT_BASE_DIR=${{ github.workspace }}/.cache/fetchcontent
 
       - name: Build Release
         run: cmake --build build --config Release --parallel
@@ -141,9 +154,17 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: InfinityEngine-Enhancer-symbols-${{ github.sha }}
+          path: build/symbols/InfinityEngine-Enhancer.pdb
+          if-no-files-found: error
+          retention-days: 14
+
   alpha-release:
     if: github.ref == 'refs/heads/main'
-    needs: windows-build
+    needs: [host-tests, windows-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -185,7 +206,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: windows-build
+    needs: [host-tests, windows-build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
