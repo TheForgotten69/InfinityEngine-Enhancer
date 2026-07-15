@@ -30,7 +30,14 @@ Each render callsite records:
 
 That format is what allows `renderer.cpp` to resolve both `CALL rel32` and `JMP rel32`.
 
-## Current Manifest
+## Current Manifests
+
+Build id: `BGEE 2.7.3.x` (offline-validated; in-game gates pending — see
+[validation/bgee-2.7.3-evidence.md](validation/bgee-2.7.3-evidence.md)):
+
+- Executable version `2.7.3.x` (any revision)
+- Same signatures and runtime offsets as 2.6.6.x
+- Reference RVAs: `LoadArea = 0x27EBD0`, `RenderTexture = 0x4257C0`
 
 Build id: `BGEE 2.6.6.x`
 

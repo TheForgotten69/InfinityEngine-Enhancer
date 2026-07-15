@@ -141,8 +141,26 @@ void test_manifest_loading() {
   }
   expect_true(iee::game::find_manifest_for_version(2, 6, 6, 123).has_value(),
               "BGEE 2.6.6 should resolve by executable version");
-  expect_true(!iee::game::find_manifest_for_version(2, 7, 3, 0).has_value(),
-              "Unknown BGEE 2.7 builds must fail closed until validated");
+
+  const auto found273 = iee::game::find_manifest("BGEE 2.7.3.x");
+  expect_true(found273.has_value(), "2.7.3 manifest should be discoverable by id");
+  if (found273) {
+    expect_true(found273->get().validate(), "2.7.3 manifest should validate");
+    expect_eq(found273->get().referenceRvas.loadArea, std::uintptr_t{0x27EBD0},
+              "2.7.3 LoadArea reference RVA should match the offline scan");
+    expect_eq(found273->get().referenceRvas.renderTexture, std::uintptr_t{0x4257C0},
+              "2.7.3 RenderTexture reference RVA should match the offline scan");
+  }
+  expect_true(iee::game::find_manifest_for_version(2, 7, 3, 0).has_value(),
+              "BGEE 2.7.3.0 should resolve by executable version");
+  expect_true(iee::game::find_manifest_for_version(2, 7, 3, 42).has_value(),
+              "BGEE 2.7.3.x should accept any revision");
+  expect_true(!iee::game::find_manifest_for_version(2, 7, 2, 0).has_value(),
+              "Adjacent unknown 2.7.2 must fail closed");
+  expect_true(!iee::game::find_manifest_for_version(2, 7, 4, 0).has_value(),
+              "Adjacent unknown 2.7.4 must fail closed");
+  expect_true(!iee::game::find_manifest_for_version(2, 8, 0, 0).has_value(),
+              "Unknown BGEE 2.8 builds must fail closed until validated");
 }
 
 void test_runtime_type_layouts() {
