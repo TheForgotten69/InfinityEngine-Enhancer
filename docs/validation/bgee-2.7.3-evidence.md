@@ -53,7 +53,31 @@ the expected opcode, and every rel32 target resolves inside `.text`:
 - Final layout proof is the in-game gate session below: the runtime probes
   every offset through fail-closed `safe_read` paths.
 
-## In-Game Gates (pending)
+## First In-Game Run: EEex Prologue Detour (2026-07-16)
+
+The first 2.7.3 launch failed address resolution: the manifest was selected,
+but `RenderTexture` matched **zero** times in the live process while matching
+exactly once on disk. A byte dump at the reference RVA explained it:
+
+```
+RenderTexture bytes at 0x4257C0: FF 25 02 00 00 00 00 00 70 E7 92 42 F9 7F 00 00 DA 48 89 68 10 ...
+```
+
+`FF 25 02 00 00 00` is `jmp qword ptr [rip+2]`, whose pointer (`0x00007FF94292E770`,
+a separately-loaded DLL) is EEex's detour target. EEex — which loads this DLL —
+hooks `RenderTexture` before our scan, overwriting its 14-byte prologue.
+`LoadArea` is left untouched. The pattern tail from byte 16 (`DA 48 89 68 10 ...`)
+is intact, and every render callsite lives at offset >= `0x36`, past the
+clobbered region.
+
+**Resolution**: `resolve_addresses` now recovers a detoured target at its
+identity-gated reference RVA via `confirm_pattern_with_patched_prologue` — it
+re-verifies the pattern tail past a 16-byte prologue. This never fabricates an
+address on an unknown build (identity must match and the tail must still match
+the original). MinHook chains cleanly onto the pre-existing EEex hook; the
+in-game gates below prove the chained hook at runtime.
+
+## In-Game Gates (pending re-run with the detour-tolerant build)
 
 Per the runbook: clean install, verbose + performance logs, standard tileset,
 authored 4x area, water area, area transition, resize/fullscreen, save/load,

@@ -195,6 +195,49 @@ namespace iee::core {
         return result.unique() ? result.address : nullptr;
     }
 
+    bool matches_past_prologue(std::span<const std::byte> haystack, std::span<const std::byte> needle,
+                               const std::vector<bool> &mask, std::size_t prologue_bytes,
+                               std::size_t min_tail) {
+        if (needle.empty() || needle.size() != mask.size() || haystack.size() < needle.size() ||
+            needle.size() <= prologue_bytes) {
+            return false;
+        }
+        // Every non-wildcard byte from prologue_bytes onward must match; count
+        // them so an all-wildcard tail cannot pass on the prologue alone.
+        std::size_t verifiedTail = 0;
+        for (std::size_t i = prologue_bytes; i < needle.size(); ++i) {
+            if (!mask[i]) continue;
+            if (haystack[i] != needle[i]) return false;
+            ++verifiedTail;
+        }
+        return verifiedTail >= min_tail;
+    }
+
+    void *confirm_pattern_with_patched_prologue(void *module_handle, std::uintptr_t rva,
+                                                std::string_view ida_pattern,
+                                                std::size_t prologue_bytes, std::size_t min_tail) {
+        const auto mod = get_module_span(module_handle);
+        if (!mod || !mod->base) return nullptr;
+
+        std::vector<std::byte> bytes;
+        std::vector<bool> mask;
+        if (!parse_ida_pattern(ida_pattern, bytes, mask)) {
+            LOG_ERROR("parse_ida_pattern failed for '{}'", ida_pattern);
+            return nullptr;
+        }
+        if (rva >= mod->size || bytes.size() > mod->size - rva) return nullptr;
+
+        auto *address = mod->base + rva;
+        if (!is_readable(address, bytes.size())) return nullptr;
+
+        if (!matches_past_prologue(std::span<const std::byte>(address, bytes.size()),
+                                   std::span<const std::byte>(bytes.data(), bytes.size()), mask,
+                                   prologue_bytes, min_tail)) {
+            return nullptr;
+        }
+        return address;
+    }
+
     void *rel32_target(void *addr, std::size_t disp_offset, std::size_t size) {
         auto *p = static_cast<std::byte *>(addr);
         auto *disp_ptr = reinterpret_cast<int32_t *>(p + disp_offset);

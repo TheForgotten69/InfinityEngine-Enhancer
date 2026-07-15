@@ -37,6 +37,31 @@ namespace iee::game {
         out.RenderTexture = reinterpret_cast<std::uintptr_t>(
             core::find_unique_in_module(nullptr, manifest.patterns.renderTexture, &renderTextureMatches));
 
+        // Detour-tolerant recovery: EEex (which loads this DLL) installs its own
+        // engine hooks, and on some builds it detours a target's prologue before
+        // our scan runs, so the signature no longer appears in memory. The build
+        // identity gate has already positively confirmed this exact executable
+        // and the reference RVA was offline-validated for it, so re-confirm the
+        // target at that RVA while ignoring a detour-sized prologue. This never
+        // fabricates an address on an unknown build: identity must match first,
+        // and the pattern tail past the prologue must still match the original.
+        const auto recover = [&](const char *name, std::uintptr_t &target,
+                                 std::size_t matches, std::uintptr_t referenceRva,
+                                 std::string_view pattern) {
+            if (target || matches != 0) return;
+            if (auto *address =
+                    core::confirm_pattern_with_patched_prologue(nullptr, referenceRva, pattern)) {
+                target = reinterpret_cast<std::uintptr_t>(address);
+                LOG_WARN("{} prologue is detoured (likely EEex); recovered at reference RVA 0x{:X} "
+                         "by verifying the un-patched pattern tail",
+                         name, referenceRva);
+            }
+        };
+        recover("LoadArea", out.LoadArea, loadAreaMatches, manifest.referenceRvas.loadArea,
+                manifest.patterns.loadArea);
+        recover("RenderTexture", out.RenderTexture, renderTextureMatches,
+                manifest.referenceRvas.renderTexture, manifest.patterns.renderTexture);
+
         const bool success = out.LoadArea && out.RenderTexture;
 
         if (success) {

@@ -97,6 +97,48 @@ void test_unique_pattern_matching() {
               "A unique signature should return its exact address");
 }
 
+void test_detour_tolerant_matching() {
+  using iee::core::matches_past_prologue;
+
+  // 21-byte RenderTexture signature; a 14-byte absolute-jump detour (FF 25 ...)
+  // clobbered bytes 0..13, the rest is the original tail (see the 2.7.3 log).
+  const std::array<std::uint8_t, 21> pattern{0x48, 0x8B, 0xC4, 0x44, 0x89, 0x48, 0x20,
+                                             0x48, 0x83, 0xEC, 0x48, 0x48, 0x89, 0x58,
+                                             0x08, 0x8B, 0xDA, 0x48, 0x89, 0x68, 0x10};
+  std::array<std::uint8_t, 21> live = pattern;
+  const std::array<std::uint8_t, 14> detour{0xFF, 0x25, 0x02, 0x00, 0x00, 0x00, 0x00,
+                                            0x00, 0x70, 0xE7, 0x92, 0x42, 0xF9, 0x7F};
+  std::copy(detour.begin(), detour.end(), live.begin());
+
+  const auto toBytes = [](const auto& src) {
+    std::vector<std::byte> out(src.size());
+    for (std::size_t i = 0; i < src.size(); ++i) out[i] = std::byte{src[i]};
+    return out;
+  };
+  const auto needle = toBytes(pattern);
+  const auto haystack = toBytes(live);
+  const std::vector<bool> mask(pattern.size(), true);
+
+  expect_true(matches_past_prologue(haystack, needle, mask, 16, 4),
+              "A detoured prologue with an intact tail should be accepted");
+
+  // Corrupt a tail byte: the function is genuinely different -> reject.
+  auto corrupted = haystack;
+  corrupted[18] = std::byte{0xEE};
+  expect_true(!matches_past_prologue(corrupted, needle, mask, 16, 4),
+              "A mismatched tail byte must reject the candidate");
+
+  // Too few verifiable tail bytes -> reject (cannot pass on prologue alone).
+  expect_true(!matches_past_prologue(haystack, needle, mask, 16, 8),
+              "Fewer verified tail bytes than required must reject");
+
+  // A wholly different tail (e.g. wrong function at the RVA) -> reject.
+  std::array<std::uint8_t, 21> other = live;
+  for (std::size_t i = 16; i < other.size(); ++i) other[i] = 0x00;
+  expect_true(!matches_past_prologue(toBytes(other), needle, mask, 16, 4),
+              "An unrelated tail must reject the candidate");
+}
+
 void test_rel32_target_checked() {
   std::array<std::byte, 32> callBytes{};
   auto* callInstruction = callBytes.data() + 4;
@@ -1311,6 +1353,7 @@ void test_fpseam_override_asset_contract() {
 int main() {
   test_parse_ida_pattern();
   test_unique_pattern_matching();
+  test_detour_tolerant_matching();
   test_rel32_target_checked();
   test_manifest_loading();
   test_runtime_type_layouts();
