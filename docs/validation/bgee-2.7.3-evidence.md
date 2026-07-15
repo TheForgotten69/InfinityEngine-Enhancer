@@ -77,9 +77,16 @@ address on an unknown build (identity must match and the tail must still match
 the original). MinHook chains cleanly onto the pre-existing EEex hook; the
 in-game gates below prove the chained hook at runtime.
 
-## In-Game Gates (pending re-run with the detour-tolerant build)
+## In-Game Gates
 
 Per the runbook: clean install, verbose + performance logs, standard tileset,
 authored 4x area, water area, area transition, resize/fullscreen, save/load,
-clean shutdown via `ShutdownBindings`. Record verdicts here before claiming
-2.7.3 support in the README.
+clean shutdown via `ShutdownBindings`.
+
+**PASS — 2026-07-16 (maintainer confirmation).** With the detour-tolerant
+build, the 2.7.3 install selects the `BGEE 2.7.3.x` manifest, recovers the
+EEex-detoured `RenderTexture` at its reference RVA, and runs the enhanced
+renderer: tile upscaling and WED-masked water both work. MinHook chains onto
+EEex's existing hook without a mis-relocation, confirming the runtime path the
+offline evidence could not. (Verdict recorded from the maintainer's in-game
+session; capture a verbose+perf log here on the next run for the archive.)

@@ -1,6 +1,6 @@
 # InfinityEngine-Enhancer
 
-`InfinityEngine-Enhancer` is an EEex-loaded Windows DLL that extends Infinity Engine tile rendering without changing ARE/WED coordinates. The validated target is BGEE `2.6.6.x`; newer executables, including BGEE 2.7, are detected and rejected until their manifests are validated.
+`InfinityEngine-Enhancer` is an EEex-loaded Windows DLL that extends Infinity Engine tile rendering without changing ARE/WED coordinates. The validated targets are BGEE `2.6.6.x` and `2.7.3.x`; other executables are detected by version and product identity and rejected until their manifests are validated.
 
 ## What It Does
 
