@@ -51,6 +51,27 @@ namespace iee::core {
                                 std::string_view ida_pattern,
                                 std::size_t *matchCount = nullptr);
 
+    // Core (host-testable) of the detour-tolerant match: true when every
+    // non-wildcard needle byte from `prologue_bytes` onward equals the
+    // corresponding haystack byte and at least `min_tail` such bytes were
+    // verified. `haystack` must be at least needle-length.
+    [[nodiscard]] bool matches_past_prologue(std::span<const std::byte> haystack,
+                                             std::span<const std::byte> needle,
+                                             const std::vector<bool> &mask,
+                                             std::size_t prologue_bytes, std::size_t min_tail);
+
+    // Confirms `ida_pattern` at a specific module RVA while tolerating a detour
+    // that another component may have written over the function prologue: the
+    // first `prologue_bytes` are ignored, every non-wildcard byte after them must
+    // match, and at least `min_tail` non-wildcard tail bytes must be verified so
+    // a short pattern cannot pass on prologue alone. Intended only for a target
+    // whose build identity is already positively confirmed. Returns the RVA's
+    // absolute address on success, nullptr otherwise.
+    void *confirm_pattern_with_patched_prologue(void *module_handle, std::uintptr_t rva,
+                                                std::string_view ida_pattern,
+                                                std::size_t prologue_bytes = 16,
+                                                std::size_t min_tail = 4);
+
     // Decode a relative 32-bit displacement target (e.g., call/jmp rel32).
     // addr = instruction address; disp_offset = offset of the displacement inside the instruction.
     // size = full instruction length in bytes.

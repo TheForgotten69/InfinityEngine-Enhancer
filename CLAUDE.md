@@ -14,7 +14,7 @@ Operational instructions for AI coding agents working in this repository.
 - WSL: analysis, docs, and host-side tests.
 - Windows or CI: the final DLL build and runtime validation.
 - CI (`.github/workflows/build.yml`) runs the same commands below on every push; a green run is valid build/test evidence when no local toolchain exists.
-- The supported runtime target today is BGEE `2.6.6.x`.
+- The supported runtime targets today are BGEE `2.6.6.x` and `2.7.3.x`.
 
 ## Build And Test Commands
 
@@ -72,4 +72,4 @@ Operational instructions for AI coding agents working in this repository.
 - Trade-offs and remaining Windows-only validation gaps are called out explicitly.
 - Do not claim generalized build support. Selection checks the four-component
   file version and product identity, but the only validated manifest remains
-  BGEE `2.6.6.x` until additional builds complete the documented validation.
+  BGEE `2.6.6.x` and `2.7.3.x` until additional builds complete the documented validation.

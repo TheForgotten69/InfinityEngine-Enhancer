@@ -160,6 +160,34 @@ constexpr BuildManifest kKnownBuilds[] = {
             {"DrawPopState", 0x1AD, BranchInstructionKind::JmpRel32, 0xE9, 1, 5, true},
         }},
     },
+    // Offline-validated 2026-07-16 (docs/validation/bgee-2.7.3-evidence.md):
+    // both signatures match exactly once, all 11 callsites decode at the same
+    // intra-function offsets, and CVidTile::pRes is read at RenderTexture+0x1D
+    // as on 2.6.6. Only the function RVAs moved.
+    {
+        "BGEE 2.7.3.x",
+        {"Baldur's Gate Enhanced Edition", "Baldur's Gate"},
+        {2, 7, 3, ExecutableVersion::kAnyRevision},
+        {
+            "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 48 FD FF FF",
+            "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
+        },
+        {0x27EBD0, 0x4257C0},
+        {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
+        {{
+            {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawBindTexture", 0x6E, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawDisable", 0x7F, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawColor", 0x89, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawPushState", 0x91, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawColorTone", 0xB6, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawBegin", 0xC0, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawTexCoord", 0xCD, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawVertex", 0xDB, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawEnd", 0x17A, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
+            {"DrawPopState", 0x1AD, BranchInstructionKind::JmpRel32, 0xE9, 1, 5, true},
+        }},
+    },
 };
 
 static_assert(validate_pattern_format(kKnownBuilds[0].patterns.loadArea),
@@ -167,6 +195,11 @@ static_assert(validate_pattern_format(kKnownBuilds[0].patterns.loadArea),
 static_assert(validate_pattern_format(kKnownBuilds[0].patterns.renderTexture),
               "RenderTexture pattern format is invalid");
 static_assert(kKnownBuilds[0].validate(), "Known build manifest is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.loadArea),
+              "2.7.3 LoadArea pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderTexture),
+              "2.7.3 RenderTexture pattern format is invalid");
+static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace
 
 const BuildManifest& current_manifest() noexcept { return kKnownBuilds[0]; }

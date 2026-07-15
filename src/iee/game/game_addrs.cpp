@@ -1,8 +1,15 @@
 #include "game_addrs.h"
+
+#include <array>
+#include <iterator>
+#include <string>
+
+#include <spdlog/fmt/fmt.h>
+
 #include "build_manifest.h"
-#include "iee/core/pattern_scanner.h"
-#include "iee/core/logger.h"
 #include "iee/core/config.h"
+#include "iee/core/logger.h"
+#include "iee/core/pattern_scanner.h"
 
 namespace iee::game {
     bool resolve_addresses(GameAddresses &out, const core::EngineConfig &cfg, const BuildManifest &manifest) {
@@ -30,6 +37,31 @@ namespace iee::game {
         out.RenderTexture = reinterpret_cast<std::uintptr_t>(
             core::find_unique_in_module(nullptr, manifest.patterns.renderTexture, &renderTextureMatches));
 
+        // Detour-tolerant recovery: EEex (which loads this DLL) installs its own
+        // engine hooks, and on some builds it detours a target's prologue before
+        // our scan runs, so the signature no longer appears in memory. The build
+        // identity gate has already positively confirmed this exact executable
+        // and the reference RVA was offline-validated for it, so re-confirm the
+        // target at that RVA while ignoring a detour-sized prologue. This never
+        // fabricates an address on an unknown build: identity must match first,
+        // and the pattern tail past the prologue must still match the original.
+        const auto recover = [&](const char *name, std::uintptr_t &target,
+                                 std::size_t matches, std::uintptr_t referenceRva,
+                                 std::string_view pattern) {
+            if (target || matches != 0) return;
+            if (auto *address =
+                    core::confirm_pattern_with_patched_prologue(nullptr, referenceRva, pattern)) {
+                target = reinterpret_cast<std::uintptr_t>(address);
+                LOG_WARN("{} prologue is detoured (likely EEex); recovered at reference RVA 0x{:X} "
+                         "by verifying the un-patched pattern tail",
+                         name, referenceRva);
+            }
+        };
+        recover("LoadArea", out.LoadArea, loadAreaMatches, manifest.referenceRvas.loadArea,
+                manifest.patterns.loadArea);
+        recover("RenderTexture", out.RenderTexture, renderTextureMatches,
+                manifest.referenceRvas.renderTexture, manifest.patterns.renderTexture);
+
         const bool success = out.LoadArea && out.RenderTexture;
 
         if (success) {
@@ -56,8 +88,31 @@ namespace iee::game {
             out.initialized = true;
         } else {
             LOG_ERROR("Build signature validation failed; refusing unsafe reference RVAs");
-            LOG_ERROR("  LoadArea matches: {}", loadAreaMatches);
-            LOG_ERROR("  RenderTexture matches: {}", renderTextureMatches);
+            LOG_ERROR("  LoadArea matches: {} (found RVA 0x{:X}, reference 0x{:X})", loadAreaMatches,
+                      out.LoadArea ? out.LoadArea - moduleBase : 0, manifest.referenceRvas.loadArea);
+            LOG_ERROR("  RenderTexture matches: {} (reference 0x{:X})", renderTextureMatches,
+                      manifest.referenceRvas.renderTexture);
+
+            // Diagnosis aid: a signature that exists on disk but not in memory
+            // means another component (loader, EEex, overlay) patched the
+            // prologue before our scan. Dump the live bytes at each reference
+            // RVA so the divergence is visible in one failing run.
+            const auto dumpReference = [&](const char *name, std::uintptr_t rva) {
+                const auto *address = reinterpret_cast<const std::uint8_t *>(moduleBase + rva);
+                std::array<std::uint8_t, 24> bytes{};
+                if (!core::safe_read(address, bytes)) {
+                    LOG_ERROR("  {} bytes at reference RVA 0x{:X}: <unreadable>", name, rva);
+                    return;
+                }
+                std::string hex;
+                hex.reserve(bytes.size() * 3);
+                for (const auto value : bytes) {
+                    fmt::format_to(std::back_inserter(hex), "{:02X} ", value);
+                }
+                LOG_ERROR("  {} bytes at reference RVA 0x{:X}: {}", name, rva, hex);
+            };
+            dumpReference("LoadArea", manifest.referenceRvas.loadArea);
+            dumpReference("RenderTexture", manifest.referenceRvas.renderTexture);
             out = {};
             return false;
         }
