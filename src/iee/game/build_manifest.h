@@ -31,11 +31,18 @@ struct BranchInstructionDesc {
 struct PatternSet {
   std::string_view loadArea{};
   std::string_view renderTexture{};
+  // Optional: CGameObjectArray::GetShare. Sourced from EEex's
+  // version-independent binding pattern; resolves the static object-array
+  // globals for the ARE-animation memory path. Empty (or a non-unique match
+  // at runtime) disables that path — the disk reader remains the fallback.
+  std::string_view objectArrayGetShare{};
 };
 
 struct ReferenceRvas {
   std::uintptr_t loadArea{};
   std::uintptr_t renderTexture{};
+  // Diagnostic only; 0 means "not yet observed on this build".
+  std::uintptr_t objectArrayGetShare{};
 };
 
 struct RuntimeOffsets {

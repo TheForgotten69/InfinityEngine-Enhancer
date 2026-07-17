@@ -58,7 +58,24 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - Encapsulates scale detection.
 - TIS header metadata is authoritative.
 - Headerless PVR tables are classified from same-page coordinate deltas, not raw atlas origins.
-- UV / texture-id heuristics remain fallback only.
+- No heuristic tier: unresolved metadata fails closed to standard 1x
+  delegation (the former UV / texture-id fallback produced false 4x
+  detections on vanilla areas and was removed).
+
+`src/iee/game/are_animations.*`
+
+- Host-safe ARE V1.0 animation-section parsing and conservative
+  fire/smoke/fountain/light classification of authored ambient animations.
+- The classification table grows from runtime logs of unclassified resrefs,
+  not speculation. See [are-animation-detection.md](are-animation-detection.md).
+
+`src/iee/game/object_statics.*`
+
+- Host-safe decode of the `CGameObjectArray` globals out of the engine's
+  `GetShare` body (manifest pattern + RIP-operand decode) and the read-only
+  walk that collects the live `CGameStatic` records for an area.
+- Sole source for the ARE-animation snapshot; any resolution ambiguity fails
+  closed and disables the scan for the session.
 
 `src/iee/hooks.*`
 
@@ -72,6 +89,8 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 
 - Active-area resolution (manifest-driven CInfGame offsets), view-transform reads, and
   the post-LoadArea WED cache refresh plus render-thread area-texture queue.
+- Also refreshes the ARE ambient-animation snapshot (`AppContext::areaAnimations`)
+  from the live object array at the same boundary, generation-checked.
 - Refresh publication is generation-checked; an older load/render callback
   cannot overwrite the newest immutable WED snapshot.
 - GL objects are recreated when the current WGL context changes.
@@ -110,6 +129,9 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - Owns atomic uniform inputs, location resolution, and render-thread
   uniform/texture binding. A state revision avoids repeating unchanged GL
   queries, sampler writes, and enhancer texture binds.
+- Also carries the area's classified ambient-animation point set
+  (`uIeePointCount`/`uIeePoints[32]`) with its own revision, feeding the
+  fpSEAM fire/smoke/light point effects.
 
 `src/iee/shader_diagnostics.*`
 

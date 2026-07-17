@@ -92,6 +92,7 @@ using PFN_glUniform1f = void(APIENTRY*)(int location, float v0);
 using PFN_glUniform1i = void(APIENTRY*)(int location, int v0);
 using PFN_glUniform2f = void(APIENTRY*)(int location, float v0, float v1);
 using PFN_glUniform3f = void(APIENTRY*)(int location, float v0, float v1, float v2);
+using PFN_glUniform4fv = void(APIENTRY*)(int location, int count, const float* value);
 using PFN_glActiveTexture = void(APIENTRY*)(unsigned texture);
 using PFN_glCompressedTexImage2D = void(APIENTRY*)(unsigned target, int level,
                                                    unsigned internalformat, int width, int height,
@@ -144,6 +145,7 @@ struct OpenGLFunctions {
   PFN_glUniform1i glUniform1i{};
   PFN_glUniform2f glUniform2f{};
   PFN_glUniform3f glUniform3f{};
+  PFN_glUniform4fv glUniform4fv{};
   PFN_glActiveTexture glActiveTexture{};
   PFN_glCompressedTexImage2D glCompressedTexImage2D{};
   PFN_glGenerateMipmap glGenerateMipmap{};

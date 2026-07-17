@@ -1,8 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace iee::probe::uniforms {
+
+// Matches the fpSEAM override's uIeePoints[] capacity.
+inline constexpr std::size_t kMaxEffectPoints = 32;
 
 struct Locations {
   static constexpr int kUnresolved = -2;
@@ -14,6 +18,8 @@ struct Locations {
   int viewport{kUnresolved};
   int worldSizeInv{kUnresolved};
   int waterTint{kUnresolved};
+  int pointCount{kUnresolved};
+  int points{kUnresolved};
   int areaMask{kUnresolved};
   int normalMap{kUnresolved};
   int dudvMap{kUnresolved};
@@ -23,6 +29,7 @@ struct Locations {
   bool viewInitialized{};
   bool worldSizeInitialized{};
   bool waterTintInitialized{};
+  std::uint64_t lastPointsRevision{};
   float lastScrollX{};
   float lastScrollY{};
   float lastViewWorldWidth{};
@@ -64,6 +71,9 @@ void set_effect_enabled(bool enabled) noexcept;
 [[nodiscard]] float cycle_debug_effect() noexcept;
 void set_world_size(float widthPx, float heightPx) noexcept;
 void set_water_tint(float r, float g, float b) noexcept;
+// `xyzw` holds `count` vec4 point records (world x, world y, kind, strength).
+// nullptr or count 0 clears the point set.
+void set_effect_points(const float* xyzw, std::size_t count) noexcept;
 void set_view(float scrollX, float scrollY, float viewWorldWidth, float viewWorldHeight) noexcept;
 [[nodiscard]] Snapshot snapshot() noexcept;
 [[nodiscard]] FeedPerformanceStats take_performance_stats() noexcept;

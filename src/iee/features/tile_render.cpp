@@ -103,11 +103,6 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
                    detection->scaleFactor, reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
                    detection->detectedTileDimension);
           break;
-        case game::ScaleDetectionSource::Heuristic:
-          LOG_INFO("Detected {}x tileset 0x{:X} via heuristic fallback (texId={}, UV=({}, {}))",
-                   detection->scaleFactor, reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
-                   texId, entry.u, entry.v);
-          break;
       }
 
       if (detection->scaleFactor == 1) {

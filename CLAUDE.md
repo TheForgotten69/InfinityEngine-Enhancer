@@ -33,7 +33,9 @@ Operational instructions for AI coding agents working in this repository.
   and `8x`. Other values fail closed to the existing fallback path.
 - `CResTileSet::h` is optional. Standard tilesets can have `header == null` while still exposing a valid 12-byte PVR entry table through `pData`. A null header does not imply missing deterministic metadata.
 - Deterministic detection order for this build is:
-  `TIS header -> PVR entry table coordinate-grid GCD -> legacy heuristic fallback`
+  `TIS header -> PVR entry table coordinate-grid GCD -> fail closed to 1x`
+  (the legacy UV/texture-id heuristic produced false 4x detections on vanilla
+  areas and was removed — do not reintroduce it).
 - `+0x1DC` is only the current linear-tiles tone flag for this build.
 
 ## Runtime Facts — Renderer / GL
@@ -59,6 +61,10 @@ Operational instructions for AI coding agents working in this repository.
 - `src/iee/game/build_manifest.*` holds build-specific offsets, patterns, and callsites.
 - `src/iee/game/tis_runtime.*` holds explicit runtime views.
 - `src/iee/game/tile_upscale.*` holds scale selection logic.
+- `src/iee/game/are_animations.*` + `src/iee/game/object_statics.*` classify
+  the active area's authored ARE ambient animations (fire/smoke/fountain/light
+  point sources) from the live CGameStatic objects; see
+  `docs/are-animation-detection.md`. Water bodies stay on the WED overlay path.
 - `docs/` contains the architecture and reverse-engineering notes future agents should read first.
 - `docs/threading-model.md` defines callback ownership, GL-thread rules, and ABI exception boundaries.
 - `docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md` is the graphics roadmap: four feature pillars, validation gates (V1-V6), and the full evaluated/dropped/rejected idea ledger. Read it before proposing any rendering feature — most ideas have already been evaluated there.

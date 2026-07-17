@@ -395,6 +395,41 @@ namespace iee::game {
         std::array<std::byte, 0x1A0> _tail{};
     };
 
+    // Shared CGameObject header prefix of every area game object. Verified
+    // against the 2.6.6 decompilation (PDB-named); the full base is 0x60
+    // bytes. See docs/are-animation-detection.md for the evidence trail.
+    struct CGameObject {
+        void *_vtable{};
+        std::uint8_t m_objectType{};
+        std::byte _pad0[3]{};
+        CPoint m_pos{};
+        std::int32_t m_posZ{};
+        CGameArea *m_pArea{};
+        std::array<std::byte, 0x40> _tail{};
+    };
+
+    // CGameObject::m_objectType for ARE "static" ambient animations
+    // (script share type '0'; CGameStatic).
+    inline constexpr std::uint8_t kGameObjectTypeStatic = 0x30;
+
+    // Runtime object created from each ARE animation record. The engine keeps
+    // the raw authored 76-byte record (CAreaFileStaticObject in the PDB, our
+    // ARE_Animation_st) embedded at +0x60; script state (e.g. the shown flag
+    // toggled by StaticStart) mutates it in place.
+    struct CGameStatic {
+        CGameObject baseclass_0{};
+        ARE_Animation_st m_header{};
+        std::array<std::byte, 0x2BC> _tail{};
+    };
+
+    // CGameObjectArray's static entry table: object id in the low word,
+    // object pointer at +0x8, stride 16 (CGameObjectArray::GetShare).
+    struct CGameObjectArrayEntry {
+        std::int16_t m_objectId{};
+        std::byte _pad0[6]{};
+        CGameObject *m_objectPtr{};
+    };
+
     struct CGameSprite {
         std::array<std::byte, 0x540> _pad0{};
         CResRef m_resref{};
@@ -498,6 +533,14 @@ namespace iee::game {
     static_assert(offsetof(CGameArea, m_visibility) == 0xBB0);
     static_assert(offsetof(CGameArea, m_lTiledObjects) == 0xED0);
     static_assert(offsetof(CGameArea, m_ptOldViewPos) == 0xF78);
+    static_assert(offsetof(CGameObject, m_objectType) == 0x8);
+    static_assert(offsetof(CGameObject, m_pos) == 0xC);
+    static_assert(offsetof(CGameObject, m_pArea) == 0x18);
+    static_assert(sizeof(CGameObject) == 0x60);
+    static_assert(offsetof(CGameStatic, m_header) == 0x60);
+    static_assert(sizeof(CGameStatic) == 0x368);
+    static_assert(sizeof(CGameObjectArrayEntry) == 0x10);
+    static_assert(offsetof(CGameObjectArrayEntry, m_objectPtr) == 0x8);
     static_assert(offsetof(CGameSprite, m_resref) == 0x540);
     static_assert(offsetof(CGameSprite, m_currentArea) == 0x3A20);
     static_assert(offsetof(CGameSprite, m_spriteEffectVidCell) == 0x3C70);

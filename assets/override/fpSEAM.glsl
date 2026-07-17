@@ -22,6 +22,8 @@ uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform highp	vec3		uIeeWaterTint;     // authored water color (avg of the area's water overlay tile)
+uniform highp	float		uIeePointCount;    // 0..32 classified ambient-animation points
+uniform highp	vec4		uIeePoints[32];    // xy=world px, z=kind (1 fire/2 smoke/4 light), w=strength
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: one liquid mode per 64px WED cell
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
@@ -207,6 +209,89 @@ bool ieeIsInteriorWater(vec2 worldPos, float centerCoverage)
 	return true;
 }
 
+// --- IEE ambient point effects (fire glow / heat shimmer / smoke haze /
+// --- candle glow), placed from the area's classified ARE animations. ---
+
+// Accumulated per-fragment point-effect terms.
+struct IeePointFx
+{
+	vec3  glow;      // linear warm light accumulated from fire/light points
+	float shimmer;   // heat-distortion weight 0..1
+	float haze;      // smoke haze density 0..1
+	vec3  hazeTint;  // veil color for the haze mix
+};
+
+IeePointFx ieePointEffects(vec2 worldPos, float t)
+{
+	IeePointFx fx;
+	fx.glow = vec3(0.0);
+	fx.shimmer = 0.0;
+	fx.haze = 0.0;
+	fx.hazeTint = vec3(0.42, 0.42, 0.46);
+
+	for (int i = 0; i < 32; ++i)
+	{
+		if (float(i) >= uIeePointCount) { break; }
+		vec4 p = uIeePoints[i];
+		vec2 offs = worldPos - p.xy;
+		float kind = p.z;
+		float strength = p.w;
+
+		if (kind < 1.5) // fire: warm flickering glow + heat shimmer above
+		{
+			float radius = 95.0 * strength;
+			float d = length(offs);
+			if (d < radius)
+			{
+				float fall = 1.0 - d / radius;
+				fall *= fall;
+				// Two-rate flicker, unsynchronized between points.
+				float fi = float(i) * 7.31;
+				float flick = 0.80 + 0.14 * sin(t * 9.7 + fi) + 0.06 * sin(t * 23.0 + fi * 1.7);
+				fx.glow += vec3(1.0, 0.44, 0.14) * (fall * 0.65 * strength * flick);
+				// Shimmer only above the flame (world y grows downward).
+				float above = clamp(-offs.y / (radius * 0.9), 0.0, 1.0);
+				fx.shimmer += fall * above * strength;
+			}
+		}
+		else if (kind < 2.5) // smoke: drifting haze column rising from the point
+		{
+			float height = 130.0 * strength;
+			float rise = -offs.y; // px above the source
+			if (rise > -10.0 && rise < height)
+			{
+				float sway = sin(t * 0.8 + rise * 0.045 + float(i)) * (6.0 + rise * 0.16);
+				float lateral = abs(offs.x - sway);
+				float widthPx = 14.0 + rise * 0.30;
+				if (lateral < widthPx * 2.0)
+				{
+					float across = exp(-(lateral * lateral) / (widthPx * widthPx));
+					float along = smoothstep(-10.0, 18.0, rise) * (1.0 - rise / height);
+					float puff = ieeNoise(vec2(worldPos.x * 0.05,
+					                           (worldPos.y + t * 34.0) * 0.05) + vec2(float(i)));
+					fx.haze += across * along * (0.35 + 0.65 * puff) * 0.55 * strength;
+				}
+			}
+		}
+		else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
+		{
+			float radius = 70.0 * strength;
+			float d = length(offs);
+			if (d < radius)
+			{
+				float fall = 1.0 - d / radius;
+				fall *= fall;
+				float breathe = 0.92 + 0.08 * sin(t * 2.1 + float(i) * 3.3);
+				fx.glow += vec3(1.0, 0.72, 0.38) * (fall * 0.35 * strength * breathe);
+			}
+		}
+	}
+
+	fx.shimmer = clamp(fx.shimmer, 0.0, 1.0);
+	fx.haze = clamp(fx.haze, 0.0, 0.85);
+	return fx;
+}
+
 // Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
 float ieeShoreFactor(vec2 worldPos, float centerCoverage)
 {
@@ -269,7 +354,31 @@ void main()
 		return;
 	}
 
-	vec4 texColor = seamSample(vTc);
+	// Ambient point effects: computed before sampling so heat shimmer can
+	// ride the one seamSample call as a texture-coordinate offset. Base pass
+	// only; the WATER_ALPHA secondary pass and fades stay vanilla.
+	IeePointFx fx;
+	fx.glow = vec3(0.0);
+	fx.shimmer = 0.0;
+	fx.haze = 0.0;
+	fx.hazeTint = vec3(0.42, 0.42, 0.46);
+	if (uIeeEnabled > 0.5 && uIeeEnabled < 1.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
+	{
+		fx = ieePointEffects(worldPos, uIeeTime);
+	}
+
+	vec2 sampleTc = vTc;
+	if (fx.shimmer > 0.01)
+	{
+		// Small wavering refraction above flames; uTcScale converts the
+		// world-pixel amplitude into atlas units, so the offset stays within
+		// the seam handling's tolerance.
+		vec2 wobble = vec2(sin(uIeeTime * 13.0 + worldPos.y * 0.35),
+		                   cos(uIeeTime * 11.0 + worldPos.x * 0.30));
+		sampleTc += wobble * fx.shimmer * 1.4 * uTcScale;
+	}
+
+	vec4 texColor = seamSample(sampleTc);
 
 	// Inside flagged cells the engine draws the
 	// base tile with TRANSPARENT pixels exactly where water composites
@@ -366,6 +475,18 @@ void main()
 		// engine's generic animated tile drawn underneath the cell.
 		texColor.rgb = ieeLinearToSrgb(mix(artLinear, water, waterMask));
 		texColor.a = max(texColor.a, waterMask);
+	}
+
+	// Firelight, candle glow, and smoke haze over the (possibly water-graded)
+	// background art, in linear light so the warm lift does not band.
+	if (fx.haze > 0.004 || fx.glow.r + fx.glow.g + fx.glow.b > 0.004)
+	{
+		vec3 lin = ieeSrgbToLinear(texColor.rgb);
+		// Multiplicative warm lift preserves the art's detail; the small
+		// additive term lets glow read on dark night maps.
+		lin = lin * (vec3(1.0) + fx.glow * 1.6) + fx.glow * 0.045;
+		lin = mix(lin, fx.hazeTint * (0.35 + 0.40 * lin), fx.haze);
+		texColor.rgb = ieeLinearToSrgb(lin);
 	}
 
 	texColor = texColor * vColor;

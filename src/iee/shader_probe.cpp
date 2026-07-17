@@ -1086,6 +1086,10 @@ void set_area_world_size(float widthPx, float heightPx) noexcept {
 
 void set_area_water_tint(float r, float g, float b) noexcept { uniforms::set_water_tint(r, g, b); }
 
+void set_area_effect_points(const float* xyzw, std::size_t count) noexcept {
+  uniforms::set_effect_points(xyzw, count);
+}
+
 void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept {
   uniforms::set_view(scrollX, scrollY, viewWorldW, viewWorldH);
 }

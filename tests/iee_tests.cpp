@@ -19,7 +19,9 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
+#include "iee/game/are_animations.h"
 #include "iee/game/area_texture.h"
+#include "iee/game/object_statics.h"
 #include "iee/game/build_manifest.h"
 #include "iee/game/dds_texture.h"
 #include "iee/game/eeex_doc_layouts_x64.h"
@@ -1204,17 +1206,15 @@ void test_scale_selection_precedence() {
                 "Fallback should prefer deterministic table provenance over heuristics");
   }
 
-  auto heuristicInfo = make_tile_info(0x80, 20000, 4096, 4096);
-  heuristicInfo.header = nullptr;
-  heuristicInfo.tileCount = 1;
-  const auto heuristicDetection = iee::game::detect_scale(heuristicInfo, 20000, manifest);
-  expect_true(heuristicDetection.has_value(), "Heuristics should still exist as a final fallback");
-  if (heuristicDetection) {
-    expect_eq(heuristicDetection->scaleFactor, 4,
-              "Heuristic fallback should still detect upscaled tiles");
-    expect_true(heuristicDetection->source == iee::game::ScaleDetectionSource::Heuristic,
-                "Final fallback should report heuristic provenance");
-  }
+  // Large raw UVs and high texture ids are not scale signals: with no header
+  // and an unresolvable table, detection must fail closed (the render path
+  // then samples and delegates the tileset as standard 1x).
+  auto garbageInfo = make_tile_info(0x80, 20000, 4096, 4096);
+  garbageInfo.header = nullptr;
+  garbageInfo.tileCount = 1;
+  const auto garbageDetection = iee::game::detect_scale(garbageInfo, 20000, manifest);
+  expect_true(!garbageDetection.has_value(),
+              "Garbage UV/texture-id input must not produce a scale detection");
 
   bool linearFlag = true;
   auto linearInfo = make_tile_info(iee::game::TisTileDimensions::Upscaled4x, 12000,
@@ -1296,7 +1296,9 @@ void test_area_liquid_texture_packing_rejects_mismatch() {
   iee::game::WedAreaInfo wed{};
   wed.baseWidth = 3;
   wed.baseHeight = 1;
-  wed.baseOverlayFlags = {0x00};  // wrong size
+  // assign() instead of a 1-element initializer list: GCC 13 -O2 emits a
+  // false-positive -Warray-bounds on the list's backing-array copy.
+  wed.baseOverlayFlags.assign(1, 0x00);  // wrong size
   expect_true(!iee::game::pack_area_liquid_texture(wed).has_value(),
               "flag/dimension mismatch -> nullopt");
   iee::game::WedAreaInfo empty{};
@@ -1330,9 +1332,13 @@ void test_fpseam_override_asset_contract() {
   // Our feed contract.
   for (const std::string_view name :
        {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom", "uIeeViewport", "uIeeWorldSizeInv",
-        "uIeeWaterTint", "uIeeAreaMask", "uIeeNormalMap", "uIeeDudvMap", "uIeeFoamMap"}) {
+        "uIeeWaterTint", "uIeePointCount", "uIeePoints", "uIeeAreaMask", "uIeeNormalMap",
+        "uIeeDudvMap", "uIeeFoamMap"}) {
     expect_true(source.find(name) != std::string::npos, "fpSEAM override declares feed uniform");
   }
+  // The uniform-array capacity in the shader must match the bridge/packing cap.
+  expect_true(source.find("uIeePoints[32]") != std::string::npos,
+              "fpSEAM point array capacity matches kMaxAreaEffectPoints");
   expect_true(source.find("#version") == std::string::npos,
               "no #version line (engine sources are ARB-era GLSL)");
   expect_true(
@@ -1348,6 +1354,336 @@ void test_fpseam_override_asset_contract() {
                       std::string::npos &&
                   source.find("vec2(-cell, -cell)") != std::string::npos,
               "confirmed interior water should skip the shoreline filter");
+}
+
+void test_classify_area_animation() {
+  using iee::game::AreaAnimationKind;
+  using iee::game::classify_area_animation;
+
+  expect_true(classify_area_animation("FLAMBIG", "") == AreaAnimationKind::Fire,
+              "FLAM* resrefs should classify as fire");
+  expect_true(classify_area_animation("torch01", "") == AreaAnimationKind::Fire,
+              "Resref classification should be case-insensitive");
+  expect_true(classify_area_animation("ZZANIM", "Village fireplace") == AreaAnimationKind::Fire,
+              "Authored names should classify when the resref does not");
+  expect_true(classify_area_animation("FPIT1S", "FPIT1S") == AreaAnimationKind::Fire,
+              "Fire pits (BG2EE AR0406) should classify as fire");
+  expect_true(classify_area_animation("FLMSW", "FLMSW") == AreaAnimationKind::Fire,
+              "Bare FLM* flame BAMs (BG1EE) should classify as fire");
+  expect_true(classify_area_animation("FLMS", "Candle03") == AreaAnimationKind::Light,
+              "Candle-named flames (BG1EE FLMS family) are dim lights, not fires");
+  expect_true(classify_area_animation("FLMM", "Sconce01") == AreaAnimationKind::Fire,
+              "Sconces are wall flames");
+  expect_true(classify_area_animation("AR900WN1", "AR900WN1") == AreaAnimationKind::None,
+              "AR<area>W[DN]* overlays are night/day shadow scenery (verified from frames)");
+  expect_true(classify_area_animation("AR900WD1", "AR900WD1") == AreaAnimationKind::None,
+              "Day shadow overlays stay unclassified scenery");
+  expect_true(classify_area_animation("FIM1YLN1", "FIM1YLN1") == AreaAnimationKind::Fire,
+              "FIM* yellow flames (verified from frames) classify as fire");
+  expect_true(classify_area_animation("YSFLBLU2", "YSFLBLU2") == AreaAnimationKind::Fire,
+              "YSFL* blue flames (verified from frames) classify as fire");
+  expect_true(classify_area_animation("AM003XA", "AM003XA") == AreaAnimationKind::Fire,
+              "The hearth overlay is an exact-resref fire");
+  expect_true(classify_area_animation("AM5508C", "AM5508C") == AreaAnimationKind::Light,
+              "The glow orb overlay is an exact-resref light");
+  expect_true(classify_area_animation("AM6004A", "AM6004A") == AreaAnimationKind::Smoke,
+              "The dark plume overlay is an exact-resref smoke");
+  expect_true(classify_area_animation("AM0604A", "AM0604A") == AreaAnimationKind::Fountain,
+              "The tiered fountain overlay is an exact-resref fountain");
+  expect_true(classify_area_animation("AM0202FL", "AM0202FL") == AreaAnimationKind::Light,
+              "The star glint overlay is a light, not a flame, despite the FL suffix");
+  expect_true(classify_area_animation("SPLASH", "SPLASH") == AreaAnimationKind::Water,
+              "Splashes classify as water effects");
+  expect_true(classify_area_animation("DS6000W3", "Waterfall") == AreaAnimationKind::Water,
+              "Waterfall names classify as water effects");
+  expect_true(classify_area_animation("BD0130LL", "Lava_Left") == AreaAnimationKind::Lava,
+              "Lava names classify as lava");
+  expect_true(classify_area_animation("FISH3S", "Fish") == AreaAnimationKind::Wildlife,
+              "Fish classify as wildlife");
+  expect_true(classify_area_animation("FLIESS", "FLIESS") == AreaAnimationKind::Wildlife,
+              "Fly swarms classify as wildlife");
+  expect_true(classify_area_animation("BUTRFLY", "BUTRFLY3") == AreaAnimationKind::Wildlife,
+              "Butterflies classify as wildlife");
+  expect_true(classify_area_animation("BD5100M1", "Mist_BD5100M1") == AreaAnimationKind::Smoke,
+              "Authored mist folds into the smoke kind");
+  expect_true(classify_area_animation("AMSTEAM1", "AMB_Pipe1A") == AreaAnimationKind::Smoke,
+              "Steam pipes (BG2EE AR3017) fold into the smoke kind");
+  expect_true(classify_area_animation("BUBBLES2", "BUBBLES2") == AreaAnimationKind::Water,
+              "Bubbles (BG2EE sewers) classify as water effects");
+  expect_true(classify_area_animation("AMOH7300", "Tank_Bubbles") == AreaAnimationKind::Water,
+              "Bubble-named overlays classify as water effects");
+  expect_true(classify_area_animation("SMOKE2", "") == AreaAnimationKind::Smoke,
+              "SMOK* resrefs should classify as smoke");
+  expect_true(classify_area_animation("ZZANIM", "chimney smoke") == AreaAnimationKind::Smoke,
+              "Chimney names should classify as smoke");
+  expect_true(classify_area_animation("FOUNT1", "") == AreaAnimationKind::Fountain,
+              "FOUNT* resrefs should classify as fountain");
+  expect_true(classify_area_animation("GLOW01", "") == AreaAnimationKind::Light,
+              "GLOW* resrefs should classify as light");
+  expect_true(classify_area_animation("ZZANIM", "window light") == AreaAnimationKind::Light,
+              "Light names should classify as light");
+  expect_true(classify_area_animation("ZZANIM", "lightning strike") == AreaAnimationKind::None,
+              "Lightning is weather, not an authored light source");
+  expect_true(classify_area_animation("ZZANIM", "mystery") == AreaAnimationKind::None,
+              "Unknown entries must stay unclassified");
+  expect_true(classify_area_animation("", "") == AreaAnimationKind::None,
+              "Empty input classifies as none");
+}
+
+void test_parse_are_animations() {
+  using namespace iee::game;
+
+  ARE_Header_st header{};
+  header.nFileType = 0x41455241;     // "AREA"
+  header.nFileVersion = 0x302E3156;  // "V1.0"
+  header.nAnimations = 2;
+  header.nAnimationsOffset = sizeof(ARE_Header_st);
+
+  ARE_Animation_st fire{};
+  const char fireName[] = "Fireplace big";
+  std::memcpy(fire.szName.data(), fireName, sizeof(fireName) - 1);
+  fire.nX = 320;
+  fire.nY = 240;
+  fire.nHeight = 5;
+  fire.rrAnimation = {'F', 'L', 'A', 'M', 'B', 'I', 'G', 0};
+  fire.nFlags = kAreAnimationFlagIsShown;
+  fire.nSchedule = 0x00FFFFFF;
+
+  ARE_Animation_st unknown{};
+  const char unknownName[] = "mystery";
+  std::memcpy(unknown.szName.data(), unknownName, sizeof(unknownName) - 1);
+  unknown.rrAnimation = {'Z', 'Z', 'X', 'Y', 0, 0, 0, 0};
+  unknown.nFlags = kAreAnimationFlagNotLightSource;
+
+  std::vector<std::byte> bytes;
+  write_bytes(bytes, 0, &header, sizeof(header));
+  write_bytes(bytes, sizeof(ARE_Header_st), &fire, sizeof(fire));
+  write_bytes(bytes, sizeof(ARE_Header_st) + sizeof(ARE_Animation_st), &unknown, sizeof(unknown));
+
+  AreaAnimationsInfo info{};
+  expect_true(parse_are_animations(bytes.data(), bytes.size(), info),
+              "A valid ARE V1.0 animation section should parse");
+  expect_eq(info.animations.size(), std::size_t{2}, "Both animation records should be read");
+  expect_true(info.animations[0].kind == AreaAnimationKind::Fire,
+              "The FLAM* record should classify as fire");
+  expect_true(info.animations[0].resrefView() == "FLAMBIG", "Animation resref should round-trip");
+  expect_true(info.animations[0].nameView() == "Fireplace big",
+              "Animation name should round-trip NUL-terminated");
+  expect_eq(info.animations[0].x, std::uint16_t{320}, "Animation X coordinate should round-trip");
+  expect_eq(info.animations[0].y, std::uint16_t{240}, "Animation Y coordinate should round-trip");
+  expect_true(info.animations[0].isShown(), "Flag bit 0 should report as shown");
+  expect_true(info.animations[0].isLightSource(),
+              "An animation without the not-light-source bit is a light source");
+  expect_true(!info.animations[1].isShown(), "Missing flag bit 0 should report as not shown");
+  expect_true(!info.animations[1].isLightSource(),
+              "The not-light-source bit should suppress light-source status");
+  expect_eq(info.count_of(AreaAnimationKind::Fire), std::size_t{1},
+            "count_of should tally classified kinds");
+  expect_eq(info.count_of(AreaAnimationKind::None), std::size_t{1},
+            "count_of should tally unclassified records");
+
+  // Zero animations is a valid area.
+  auto emptyHeader = header;
+  emptyHeader.nAnimations = 0;
+  emptyHeader.nAnimationsOffset = 0;
+  std::vector<std::byte> emptyBytes;
+  write_bytes(emptyBytes, 0, &emptyHeader, sizeof(emptyHeader));
+  AreaAnimationsInfo emptyInfo{};
+  expect_true(parse_are_animations(emptyBytes.data(), emptyBytes.size(), emptyInfo),
+              "An ARE without animations should parse");
+  expect_true(emptyInfo.animations.empty(), "An ARE without animations should yield no records");
+
+  // Unsupported version (IWD2 V9.1 shifts the section offsets).
+  auto v91 = header;
+  v91.nFileVersion = 0x312E3956;  // "V9.1"
+  std::vector<std::byte> v91Bytes(bytes);
+  write_bytes(v91Bytes, 0, &v91, sizeof(v91));
+  AreaAnimationsInfo v91Info{};
+  expect_true(!parse_are_animations(v91Bytes.data(), v91Bytes.size(), v91Info),
+              "Non-V1.0 ARE versions must fail closed");
+
+  // Truncated section: count says two records but only one fits.
+  std::vector<std::byte> truncated(bytes.begin(),
+                                   bytes.end() - static_cast<std::ptrdiff_t>(sizeof(fire)));
+  AreaAnimationsInfo truncatedInfo{};
+  expect_true(!parse_are_animations(truncated.data(), truncated.size(), truncatedInfo),
+              "A truncated animation section must fail closed");
+  expect_true(truncatedInfo.animations.empty(), "A failed parse must leave the output empty");
+
+  // Malicious count.
+  auto hugeHeader = header;
+  hugeHeader.nAnimations = 1'000'000;
+  std::vector<std::byte> hugeBytes(bytes);
+  write_bytes(hugeBytes, 0, &hugeHeader, sizeof(hugeHeader));
+  AreaAnimationsInfo hugeInfo{};
+  expect_true(!parse_are_animations(hugeBytes.data(), hugeBytes.size(), hugeInfo),
+              "An implausible animation count must fail closed");
+
+  AreaAnimationsInfo shortInfo{};
+  expect_true(!parse_are_animations(bytes.data(), sizeof(ARE_Header_st) - 1, shortInfo),
+              "A buffer smaller than the ARE header must fail closed");
+}
+
+void test_decode_object_array_globals() {
+  using namespace iee::game;
+
+  // Synthetic CGameObjectArray::GetShare body: manifest pattern prologue,
+  // then the RIP-relative max-index compare, the (ignored) next-id compare,
+  // and the entry-table lea, each pointing at slots inside the same buffer.
+  std::array<std::byte, 0x100> code{};
+  const auto put = [&](std::size_t offset, std::initializer_list<std::uint8_t> bytes) {
+    std::size_t index = offset;
+    for (const auto value : bytes) code[index++] = static_cast<std::byte>(value);
+  };
+  const auto putRip = [&](std::size_t offset, std::initializer_list<std::uint8_t> opcode,
+                          std::size_t target) {
+    put(offset, opcode);
+    const auto displacement = static_cast<std::int32_t>(static_cast<std::ptrdiff_t>(target) -
+                                                        static_cast<std::ptrdiff_t>(offset + 7));
+    std::memcpy(code.data() + offset + 3, &displacement, sizeof(displacement));
+  };
+  put(0, {0x48, 0xC7, 0x02, 0x00, 0x00, 0x00, 0x00, 0x83, 0xF9, 0xFF});
+  putRip(10, {0x66, 0x39, 0x05}, 0x80);  // cmp [rip+d], ax -> m_maxArrayIndex
+  putRip(17, {0x66, 0x39, 0x0D}, 0x84);  // cmp [rip+d], cx -> ignored
+  putRip(24, {0x4C, 0x8D, 0x05}, 0x90);  // lea r8, [rip+d] -> entry table
+
+  ObjectArrayGlobals globals{};
+  expect_true(decode_object_array_globals(code.data(), 0x60, globals),
+              "GetShare RIP operands should decode from a well-formed body");
+  expect_true(reinterpret_cast<const std::byte*>(globals.maxArrayIndex) == code.data() + 0x80,
+              "The max-index compare operand should decode to its RIP target");
+  expect_true(reinterpret_cast<const std::byte*>(globals.entries) == code.data() + 0x90,
+              "The entry-table lea operand should decode to its RIP target");
+
+  ObjectArrayGlobals tooSmall{};
+  expect_true(!decode_object_array_globals(code.data(), 0x10, tooSmall),
+              "A window without both instructions must fail closed");
+
+  putRip(40, {0x66, 0x39, 0x05}, 0x88);  // duplicate max-index compare
+  ObjectArrayGlobals ambiguous{};
+  expect_true(!decode_object_array_globals(code.data(), 0x60, ambiguous),
+              "Ambiguous instruction matches must fail closed");
+}
+
+void test_collect_area_static_animations() {
+  using namespace iee::game;
+
+  CGameArea areaA{};
+  CGameArea areaB{};
+  std::array<CGameStatic, 3> statics{};
+
+  statics[0].baseclass_0.m_objectType = kGameObjectTypeStatic;
+  statics[0].baseclass_0.m_pArea = &areaA;
+  statics[0].m_header.rrAnimation = {'F', 'L', 'A', 'M', 'B', 'I', 'G', 0};
+  const char fireName[] = "FLAMBIG";
+  std::memcpy(statics[0].m_header.szName.data(), fireName, sizeof(fireName) - 1);
+  statics[0].m_header.nX = 320;
+  statics[0].m_header.nY = 240;
+  statics[0].m_header.nFlags = kAreAnimationFlagIsShown;
+
+  // Same type, different area: filtered.
+  statics[1].baseclass_0.m_objectType = kGameObjectTypeStatic;
+  statics[1].baseclass_0.m_pArea = &areaB;
+  statics[1].m_header.rrAnimation = {'S', 'M', 'O', 'K', 'E', '2', 0, 0};
+
+  // Same area, different object type: filtered.
+  statics[2].baseclass_0.m_objectType = 0x31;
+  statics[2].baseclass_0.m_pArea = &areaA;
+
+  std::array<CGameObjectArrayEntry, 6> entries{};
+  entries[1].m_objectPtr = &statics[0].baseclass_0;
+  entries[3].m_objectPtr = &statics[1].baseclass_0;
+  entries[4].m_objectPtr = &statics[2].baseclass_0;
+
+  std::int16_t maxIndex = 5;
+  const ObjectArrayGlobals globals{entries.data(), &maxIndex};
+
+  AreaAnimationsInfo out{};
+  expect_true(collect_area_static_animations(globals, &areaA, out),
+              "A readable object array should collect");
+  expect_eq(out.animations.size(), std::size_t{1},
+            "Only statics owned by the requested area should be collected");
+  expect_true(!out.animations.empty() && out.animations[0].kind == AreaAnimationKind::Fire,
+              "Collected records should classify like the disk parser");
+  expect_true(!out.animations.empty() && out.animations[0].x == 320 &&
+                  out.animations[0].isShown(),
+              "Collected records should carry the live header fields");
+
+  AreaAnimationsInfo invalidOut{};
+  expect_true(!collect_area_static_animations(ObjectArrayGlobals{}, &areaA, invalidOut),
+              "Unresolved globals must fail closed");
+  std::int16_t negativeIndex = -1;
+  const ObjectArrayGlobals negative{entries.data(), &negativeIndex};
+  expect_true(!collect_area_static_animations(negative, &areaA, invalidOut),
+              "A negative max index must fail closed");
+}
+
+void test_build_area_effect_points() {
+  using namespace iee::game;
+
+  AreaAnimationsInfo info{};
+  const auto add = [&](AreaAnimationKind kind, std::uint16_t x, bool shown) {
+    AreaAnimationInfo animation{};
+    animation.kind = kind;
+    animation.x = x;
+    animation.y = 100;
+    animation.flags = shown ? kAreAnimationFlagIsShown : 0;
+    info.animations.push_back(animation);
+  };
+
+  add(AreaAnimationKind::Smoke, 10, true);
+  add(AreaAnimationKind::Fire, 20, true);
+  add(AreaAnimationKind::Fire, 30, false);      // hidden: excluded
+  add(AreaAnimationKind::Light, 40, true);
+  add(AreaAnimationKind::Wildlife, 50, true);   // no effect kind: excluded
+  add(AreaAnimationKind::Water, 60, true);      // handled by the water path: excluded
+
+  const auto points = build_area_effect_points(info);
+  expect_eq(points.size(), std::size_t{3}, "Only shown fire/smoke/light become points");
+  expect_true(!points.empty() && points[0].kind == 1.0f && points[0].x == 20.0f,
+              "Fire points are packed first");
+  expect_true(points.size() >= 2 && points[1].kind == 4.0f && points[1].strength < 1.0f,
+              "Light points follow with a reduced strength");
+  expect_true(points.size() >= 3 && points[2].kind == 2.0f,
+              "Smoke points are packed last");
+
+  AreaAnimationsInfo overflow{};
+  for (int i = 0; i < 80; ++i) {
+    AreaAnimationInfo animation{};
+    animation.kind = i < 40 ? AreaAnimationKind::Smoke : AreaAnimationKind::Fire;
+    animation.flags = kAreAnimationFlagIsShown;
+    overflow.animations.push_back(animation);
+  }
+  const auto capped = build_area_effect_points(overflow);
+  expect_eq(capped.size(), kMaxAreaEffectPoints, "The point set is capped at the uniform size");
+  expect_true(!capped.empty() && capped[0].kind == 1.0f,
+              "Under capacity pressure, fire wins over smoke");
+}
+
+void test_config_detection_section() {
+  const auto tempPath =
+      std::filesystem::current_path() / "InfinityEngine-Enhancer-detection-test.ini";
+  {
+    std::ofstream out(tempPath, std::ios::trunc);
+    out << "[Detection]\n";
+    out << "AreaAnimationScan = false\n";
+  }
+
+  iee::core::EngineConfig cfg{};
+  expect_true(cfg.enableAreaAnimationScan, "The area animation scan should default to enabled");
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg),
+              "ConfigManager::load should parse the detection section");
+  expect_true(!cfg.enableAreaAnimationScan, "AreaAnimationScan=false should disable the scan");
+
+  expect_true(iee::core::ConfigManager::save(tempPath, cfg),
+              "ConfigManager::save should persist the detection section");
+  iee::core::EngineConfig reloaded{};
+  expect_true(iee::core::ConfigManager::load(tempPath, reloaded),
+              "The saved detection section should reload");
+  expect_true(!reloaded.enableAreaAnimationScan, "AreaAnimationScan should round-trip");
+
+  std::error_code error;
+  std::filesystem::remove(tempPath, error);
 }
 
 int main() {
@@ -1386,6 +1722,12 @@ int main() {
   test_area_liquid_texture_packing();
   test_area_liquid_texture_packing_rejects_mismatch();
   test_fpseam_override_asset_contract();
+  test_classify_area_animation();
+  test_parse_are_animations();
+  test_decode_object_array_globals();
+  test_collect_area_static_animations();
+  test_build_area_effect_points();
+  test_config_detection_section();
 
   if (g_failures != 0) {
     std::cerr << g_failures << " test(s) failed\n";

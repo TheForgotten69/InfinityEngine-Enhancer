@@ -3,9 +3,13 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstring>
+#include <mutex>
 
 #include "area_state.h"
+#include "iee/core/logger.h"
 #include "iee/game/opengl_types.h"
 #include "iee/game/texture_units.h"
 #include "iee/water_textures.h"
@@ -26,6 +30,14 @@ std::atomic<float> g_waterTintB{0.5f};
 std::atomic<float> g_effectValue{0.0f};
 std::atomic<unsigned> g_feedCount{0};
 std::atomic<std::uint64_t> g_stateRevision{1};
+
+// Effect point set (area-scoped, written by area refresh threads, read by the
+// render-thread feed). The array cannot be atomic; a mutex plus its own
+// revision keeps the feed's copy coherent and cheap when unchanged.
+std::mutex g_effectPointsMutex;
+std::array<float, kMaxEffectPoints * 4> g_effectPoints{};
+std::size_t g_effectPointCount{0};
+std::atomic<std::uint64_t> g_effectPointsRevision{1};
 std::atomic<std::uint64_t> g_performanceCalls{0};
 std::atomic<std::uint64_t> g_performanceSkipped{0};
 std::atomic<std::uint64_t> g_performanceTextureBindPasses{0};
@@ -96,6 +108,7 @@ void reset() noexcept {
   g_effectValue.store(0.0f, std::memory_order_relaxed);
   g_performanceEnabled.store(false, std::memory_order_relaxed);
   g_feedCount.store(0, std::memory_order_relaxed);
+  set_effect_points(nullptr, 0);
   g_stateRevision.store(1, std::memory_order_release);
   (void)take_performance_stats();
 }
@@ -136,6 +149,29 @@ void set_view(float scrollX, float scrollY, float viewWorldWidth, float viewWorl
       replace_if_changed(g_viewWorldWidth, std::max(viewWorldWidth, 0.0f)) |
       replace_if_changed(g_viewWorldHeight, std::max(viewWorldHeight, 0.0f));
   if (changed) advance_state_revision();
+}
+
+void set_effect_points(const float* xyzw, std::size_t count) noexcept {
+  try {
+    if (!xyzw) count = 0;
+    const auto clamped = (std::min)(count, kMaxEffectPoints);
+    std::lock_guard lock(g_effectPointsMutex);
+    if (clamped == g_effectPointCount &&
+        (clamped == 0 ||
+         std::memcmp(g_effectPoints.data(), xyzw, clamped * 4 * sizeof(float)) == 0)) {
+      return;
+    }
+    g_effectPointCount = clamped;
+    if (clamped > 0 && xyzw) {
+      std::memcpy(g_effectPoints.data(), xyzw, clamped * 4 * sizeof(float));
+    }
+    std::fill(g_effectPoints.begin() + static_cast<std::ptrdiff_t>(clamped * 4),
+              g_effectPoints.end(), 0.0f);
+    g_effectPointsRevision.fetch_add(1, std::memory_order_release);
+    advance_state_revision();
+  } catch (...) {
+    // A failed point update must never affect rendering.
+  }
 }
 
 Snapshot snapshot() noexcept {
@@ -181,6 +217,15 @@ void feed(unsigned program, Locations& locations) {
   locations.worldSizeInv =
       resolve_location(gl, program, locations.worldSizeInv, "uIeeWorldSizeInv");
   locations.waterTint = resolve_location(gl, program, locations.waterTint, "uIeeWaterTint");
+  locations.pointCount = resolve_location(gl, program, locations.pointCount, "uIeePointCount");
+  // Array uniforms: GL reports the canonical name as "uIeePoints[0]" and some
+  // drivers only resolve that spelling; try it first, then the bare name.
+  if (locations.points == Locations::kUnresolved) {
+    locations.points = gl.glGetUniformLocation(program, "uIeePoints[0]");
+    if (locations.points < 0) {
+      locations.points = gl.glGetUniformLocation(program, "uIeePoints");
+    }
+  }
   locations.areaMask = resolve_location(gl, program, locations.areaMask, "uIeeAreaMask");
   locations.normalMap = resolve_location(gl, program, locations.normalMap, "uIeeNormalMap");
   locations.dudvMap = resolve_location(gl, program, locations.dudvMap, "uIeeDudvMap");
@@ -271,6 +316,32 @@ void feed(unsigned program, Locations& locations) {
     locations.lastWaterTintG = waterTintG;
     locations.lastWaterTintB = waterTintB;
   }
+  const auto pointsRevision = g_effectPointsRevision.load(std::memory_order_acquire);
+  if (locations.lastPointsRevision != pointsRevision &&
+      (locations.pointCount >= 0 || locations.points >= 0)) {
+    std::array<float, kMaxEffectPoints * 4> points{};
+    std::size_t pointCount = 0;
+    {
+      std::lock_guard lock(g_effectPointsMutex);
+      points = g_effectPoints;
+      pointCount = g_effectPointCount;
+    }
+    if (locations.pointCount >= 0) {
+      gl.glUniform1f(locations.pointCount, static_cast<float>(pointCount));
+    }
+    if (locations.points >= 0 && gl.glUniform4fv) {
+      gl.glUniform4fv(locations.points, static_cast<int>(kMaxEffectPoints), points.data());
+    }
+    if (locations.lastPointsRevision == 0) {
+      LOG_DEBUG(
+          "Point uniforms first feed: program={}, countLocation={}, pointsLocation={}, "
+          "glUniform4fv={}, count={}",
+          program, locations.pointCount, locations.points, gl.glUniform4fv != nullptr,
+          pointCount);
+    }
+    locations.lastPointsRevision = pointsRevision;
+  }
+
   if (!locations.samplersInitialized && gl.glUniform1i) {
     if (locations.areaMask >= 0)
       gl.glUniform1i(locations.areaMask, static_cast<int>(game::texture_units::AreaMask));
