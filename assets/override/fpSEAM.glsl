@@ -209,89 +209,6 @@ bool ieeIsInteriorWater(vec2 worldPos, float centerCoverage)
 	return true;
 }
 
-// --- IEE ambient point effects (fire glow / heat shimmer / smoke haze /
-// --- candle glow), placed from the area's classified ARE animations. ---
-
-// Accumulated per-fragment point-effect terms.
-struct IeePointFx
-{
-	vec3  glow;      // linear warm light accumulated from fire/light points
-	float shimmer;   // heat-distortion weight 0..1
-	float haze;      // smoke haze density 0..1
-	vec3  hazeTint;  // veil color for the haze mix
-};
-
-IeePointFx ieePointEffects(vec2 worldPos, float t)
-{
-	IeePointFx fx;
-	fx.glow = vec3(0.0);
-	fx.shimmer = 0.0;
-	fx.haze = 0.0;
-	fx.hazeTint = vec3(0.42, 0.42, 0.46);
-
-	for (int i = 0; i < 32; ++i)
-	{
-		if (float(i) >= uIeePointCount) { break; }
-		vec4 p = uIeePoints[i];
-		vec2 offs = worldPos - p.xy;
-		float kind = p.z;
-		float strength = p.w;
-
-		if (kind < 1.5) // fire: warm flickering glow + heat shimmer above
-		{
-			float radius = 95.0 * strength;
-			float d = length(offs);
-			if (d < radius)
-			{
-				float fall = 1.0 - d / radius;
-				fall *= fall;
-				// Two-rate flicker, unsynchronized between points.
-				float fi = float(i) * 7.31;
-				float flick = 0.80 + 0.14 * sin(t * 9.7 + fi) + 0.06 * sin(t * 23.0 + fi * 1.7);
-				fx.glow += vec3(1.0, 0.44, 0.14) * (fall * 0.65 * strength * flick);
-				// Shimmer only above the flame (world y grows downward).
-				float above = clamp(-offs.y / (radius * 0.9), 0.0, 1.0);
-				fx.shimmer += fall * above * strength;
-			}
-		}
-		else if (kind < 2.5) // smoke: drifting haze column rising from the point
-		{
-			float height = 130.0 * strength;
-			float rise = -offs.y; // px above the source
-			if (rise > -10.0 && rise < height)
-			{
-				float sway = sin(t * 0.8 + rise * 0.045 + float(i)) * (6.0 + rise * 0.16);
-				float lateral = abs(offs.x - sway);
-				float widthPx = 14.0 + rise * 0.30;
-				if (lateral < widthPx * 2.0)
-				{
-					float across = exp(-(lateral * lateral) / (widthPx * widthPx));
-					float along = smoothstep(-10.0, 18.0, rise) * (1.0 - rise / height);
-					float puff = ieeNoise(vec2(worldPos.x * 0.05,
-					                           (worldPos.y + t * 34.0) * 0.05) + vec2(float(i)));
-					fx.haze += across * along * (0.35 + 0.65 * puff) * 0.55 * strength;
-				}
-			}
-		}
-		else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
-		{
-			float radius = 70.0 * strength;
-			float d = length(offs);
-			if (d < radius)
-			{
-				float fall = 1.0 - d / radius;
-				fall *= fall;
-				float breathe = 0.92 + 0.08 * sin(t * 2.1 + float(i) * 3.3);
-				fx.glow += vec3(1.0, 0.72, 0.38) * (fall * 0.35 * strength * breathe);
-			}
-		}
-	}
-
-	fx.shimmer = clamp(fx.shimmer, 0.0, 1.0);
-	fx.haze = clamp(fx.haze, 0.0, 0.85);
-	return fx;
-}
-
 // Smoothed shore proximity: 0 deep inside water, ~1 at the land boundary.
 float ieeShoreFactor(vec2 worldPos, float centerCoverage)
 {
@@ -351,31 +268,121 @@ void main()
 			vec4 base = art * vColor;
 			gl_FragColor = vec4(base.rgb, base.a);
 		}
+
+		// Point-placement markers: a filled dot plus a 40px ring at every fed
+		// effect point — orange = fire, grey = smoke, yellow = light. Absent
+		// rings in ALIGN mode mean the point feed (not the effect math) is
+		// broken.
+		if (uIeePointCount > 0.5 && vColor.a > 0.9)
+		{
+			float ring = 0.0;
+			vec3 ringColor = vec3(0.0);
+			for (int i = 0; i < 32; ++i)
+			{
+				if (float(i) >= uIeePointCount) { break; }
+				vec4 p = uIeePoints[i];
+				float d = length(worldPos - p.xy);
+				float m = smoothstep(4.0, 1.5, abs(d - 40.0)) + smoothstep(6.0, 2.0, d);
+				if (m > ring)
+				{
+					ring = m;
+					if (p.z < 1.5)      { ringColor = vec3(1.0, 0.45, 0.05); }
+					else if (p.z < 2.5) { ringColor = vec3(0.75, 0.75, 0.85); }
+					else                { ringColor = vec3(1.0, 0.95, 0.20); }
+				}
+			}
+			if (ring > 0.02)
+			{
+				gl_FragColor = vec4(mix(gl_FragColor.rgb, ringColor, clamp(ring, 0.0, 1.0)),
+				                    gl_FragColor.a);
+			}
+		}
 		return;
 	}
 
 	// Ambient point effects: computed before sampling so heat shimmer can
 	// ride the one seamSample call as a texture-coordinate offset. Base pass
-	// only; the WATER_ALPHA secondary pass and fades stay vanilla.
-	IeePointFx fx;
-	fx.glow = vec3(0.0);
-	fx.shimmer = 0.0;
-	fx.haze = 0.0;
-	fx.hazeTint = vec3(0.42, 0.42, 0.46);
-	if (uIeeEnabled > 0.5 && uIeeEnabled < 1.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
+	// only; the WATER_ALPHA secondary pass and fades stay vanilla. Kept as
+	// flat locals (no struct/function) for maximum GLSL-frontend
+	// compatibility.
+	vec3 fxGlow = vec3(0.0);
+	float fxShimmer = 0.0;
+	float fxHaze = 0.0;
+	if (uIeeEnabled > 0.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
 	{
-		fx = ieePointEffects(worldPos, uIeeTime);
+		float fxT = uIeeTime;
+		for (int i = 0; i < 32; ++i)
+		{
+			if (float(i) >= uIeePointCount) { break; }
+			vec4 p = uIeePoints[i];
+			vec2 offs = worldPos - p.xy;
+			float kind = p.z;
+			float strength = p.w;
+
+			if (kind < 1.5) // fire: warm flickering glow + heat shimmer above
+			{
+				float radius = 95.0 * strength;
+				float d = length(offs);
+				if (d < radius)
+				{
+					float fall = 1.0 - d / radius;
+					fall *= fall;
+					// Two-rate flicker, unsynchronized between points.
+					float fi = float(i) * 7.31;
+					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
+					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
+					fxGlow += vec3(1.0, 0.44, 0.14) * (fall * 0.65 * strength * flick);
+					// Shimmer only above the flame (world y grows downward).
+					float above = clamp(-offs.y / (radius * 0.9), 0.0, 1.0);
+					fxShimmer += fall * above * strength;
+				}
+			}
+			else if (kind < 2.5) // smoke: drifting haze column rising from the point
+			{
+				float height = 130.0 * strength;
+				float rise = -offs.y; // px above the source
+				if (rise > -10.0 && rise < height)
+				{
+					float sway = sin(fxT * 0.8 + rise * 0.045 + float(i)) * (6.0 + rise * 0.16);
+					float lateral = abs(offs.x - sway);
+					float widthPx = 14.0 + rise * 0.30;
+					if (lateral < widthPx * 2.0)
+					{
+						float across = exp(-(lateral * lateral) / (widthPx * widthPx));
+						float along = smoothstep(-10.0, 18.0, rise) * (1.0 - rise / height);
+						float puff = ieeNoise(vec2(worldPos.x * 0.05,
+						                           (worldPos.y + fxT * 34.0) * 0.05)
+						                      + vec2(float(i)));
+						fxHaze += across * along * (0.35 + 0.65 * puff) * 0.55 * strength;
+					}
+				}
+			}
+			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
+			{
+				float radius = 70.0 * strength;
+				float d = length(offs);
+				if (d < radius)
+				{
+					float fall = 1.0 - d / radius;
+					fall *= fall;
+					float breathe = 0.92 + 0.08 * sin(fxT * 2.1 + float(i) * 3.3);
+					fxGlow += vec3(1.0, 0.72, 0.38) * (fall * 0.35 * strength * breathe);
+				}
+			}
+		}
+		fxShimmer = clamp(fxShimmer, 0.0, 1.0);
+		fxHaze = clamp(fxHaze, 0.0, 0.85);
 	}
 
 	vec2 sampleTc = vTc;
-	if (fx.shimmer > 0.01)
+	if (fxShimmer > 0.01)
 	{
 		// Small wavering refraction above flames; uTcScale converts the
 		// world-pixel amplitude into atlas units, so the offset stays within
 		// the seam handling's tolerance.
 		vec2 wobble = vec2(sin(uIeeTime * 13.0 + worldPos.y * 0.35),
 		                   cos(uIeeTime * 11.0 + worldPos.x * 0.30));
-		sampleTc += wobble * fx.shimmer * 1.4 * uTcScale;
+		sampleTc += wobble * fxShimmer * 1.4 * uTcScale;
 	}
 
 	vec4 texColor = seamSample(sampleTc);
@@ -479,13 +486,13 @@ void main()
 
 	// Firelight, candle glow, and smoke haze over the (possibly water-graded)
 	// background art, in linear light so the warm lift does not band.
-	if (fx.haze > 0.004 || fx.glow.r + fx.glow.g + fx.glow.b > 0.004)
+	if (fxHaze > 0.004 || fxGlow.r + fxGlow.g + fxGlow.b > 0.004)
 	{
 		vec3 lin = ieeSrgbToLinear(texColor.rgb);
 		// Multiplicative warm lift preserves the art's detail; the small
 		// additive term lets glow read on dark night maps.
-		lin = lin * (vec3(1.0) + fx.glow * 1.6) + fx.glow * 0.045;
-		lin = mix(lin, fx.hazeTint * (0.35 + 0.40 * lin), fx.haze);
+		lin = lin * (vec3(1.0) + fxGlow * 1.6) + fxGlow * 0.045;
+		lin = mix(lin, vec3(0.42, 0.42, 0.46) * (0.35 + 0.40 * lin), fxHaze);
 		texColor.rgb = ieeLinearToSrgb(lin);
 	}
 
