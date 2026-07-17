@@ -321,17 +321,21 @@ void main()
 
 			if (kind < 1.5) // fire: warm flickering glow + heat shimmer above
 			{
-				float radius = 95.0 * strength;
+				// The ARE anchor sits below the visible flame (BAM frames draw
+				// upward from it); bias the glow center up onto the fire.
+				offs.y += 24.0 * strength;
+				float radius = 140.0 * strength;
 				float d = length(offs);
 				if (d < radius)
 				{
 					float fall = 1.0 - d / radius;
-					fall *= fall;
+					// Fuller mid-falloff with a hot core.
+					fall = fall * fall * (0.55 + 0.45 * fall) + 0.6 * smoothstep(0.75, 1.0, fall);
 					// Two-rate flicker, unsynchronized between points.
 					float fi = float(i) * 7.31;
-					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
-					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
-					fxGlow += vec3(1.0, 0.44, 0.14) * (fall * 0.65 * strength * flick);
+					float flick = 0.78 + 0.16 * sin(fxT * 9.7 + fi)
+					                   + 0.08 * sin(fxT * 23.0 + fi * 1.7);
+					fxGlow += vec3(1.0, 0.45, 0.15) * (fall * 0.85 * strength * flick);
 					// Shimmer only above the flame (world y grows downward).
 					float above = clamp(-offs.y / (radius * 0.9), 0.0, 1.0);
 					fxShimmer += fall * above * strength;
@@ -339,34 +343,34 @@ void main()
 			}
 			else if (kind < 2.5) // smoke: drifting haze column rising from the point
 			{
-				float height = 130.0 * strength;
+				float height = 200.0 * strength;
 				float rise = -offs.y; // px above the source
-				if (rise > -10.0 && rise < height)
+				if (rise > -14.0 && rise < height)
 				{
-					float sway = sin(fxT * 0.8 + rise * 0.045 + float(i)) * (6.0 + rise * 0.16);
+					float sway = sin(fxT * 0.9 + rise * 0.04 + float(i)) * (7.0 + rise * 0.18);
 					float lateral = abs(offs.x - sway);
-					float widthPx = 14.0 + rise * 0.30;
+					float widthPx = 18.0 + rise * 0.35;
 					if (lateral < widthPx * 2.0)
 					{
 						float across = exp(-(lateral * lateral) / (widthPx * widthPx));
-						float along = smoothstep(-10.0, 18.0, rise) * (1.0 - rise / height);
-						float puff = ieeNoise(vec2(worldPos.x * 0.05,
-						                           (worldPos.y + fxT * 34.0) * 0.05)
+						float along = smoothstep(-14.0, 16.0, rise) * (1.0 - rise / height);
+						float puff = ieeNoise(vec2(worldPos.x * 0.045,
+						                           (worldPos.y + fxT * 40.0) * 0.045)
 						                      + vec2(float(i)));
-						fxHaze += across * along * (0.35 + 0.65 * puff) * 0.55 * strength;
+						fxHaze += across * along * (0.40 + 0.60 * puff) * 0.80 * strength;
 					}
 				}
 			}
 			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
 			{
-				float radius = 70.0 * strength;
+				float radius = 90.0 * strength;
 				float d = length(offs);
 				if (d < radius)
 				{
 					float fall = 1.0 - d / radius;
 					fall *= fall;
 					float breathe = 0.92 + 0.08 * sin(fxT * 2.1 + float(i) * 3.3);
-					fxGlow += vec3(1.0, 0.72, 0.38) * (fall * 0.35 * strength * breathe);
+					fxGlow += vec3(1.0, 0.74, 0.40) * (fall * 0.55 * strength * breathe);
 				}
 			}
 		}
@@ -489,10 +493,16 @@ void main()
 	if (fxHaze > 0.004 || fxGlow.r + fxGlow.g + fxGlow.b > 0.004)
 	{
 		vec3 lin = ieeSrgbToLinear(texColor.rgb);
-		// Multiplicative warm lift preserves the art's detail; the small
-		// additive term lets glow read on dark night maps.
-		lin = lin * (vec3(1.0) + fxGlow * 1.6) + fxGlow * 0.045;
-		lin = mix(lin, vec3(0.42, 0.42, 0.46) * (0.35 + 0.40 * lin), fxHaze);
+		float sceneLuma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+		// Multiplicative warm lift preserves the art's detail; the additive
+		// term is night-adaptive — dark scenes get real cast light, bright
+		// day scenes only a whisper.
+		float castLight = 0.05 + 0.50 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0));
+		lin = lin * (vec3(1.0) + fxGlow * 1.5) + fxGlow * castLight;
+		// Smoke veil: reads as moonlit smoke over dark roofs, shadowy over
+		// bright ground.
+		vec3 hazeTarget = vec3(0.42, 0.42, 0.46) * (0.42 + 0.5 * sceneLuma) + vec3(0.02);
+		lin = mix(lin, hazeTarget, fxHaze);
 		texColor.rgb = ieeLinearToSrgb(lin);
 	}
 
