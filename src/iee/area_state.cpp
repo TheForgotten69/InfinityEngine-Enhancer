@@ -102,11 +102,11 @@ void log_area_animation_summary(const game::AreaAnimationsInfo& info) {
   std::size_t unclassifiedListed = 0;
   for (const auto& animation : info.animations) {
     if (animation.kind != game::AreaAnimationKind::None) {
-      LOG_DEBUG("ARE animation {}: kind={}, resref={}, name=\"{}\", pos=({}, {}), shown={}, "
-                "lightSource={}",
+      LOG_DEBUG("ARE animation {}: kind={}, resref={}, name=\"{}\", pos=({}, {}), objPos=({}, "
+                "{}), shown={}, lightSource={}",
                 info.areaResrefView(), game::area_animation_kind_name(animation.kind),
                 animation.resrefView(), animation.nameView(), animation.x, animation.y,
-                animation.isShown(), animation.isLightSource());
+                animation.objX, animation.objY, animation.isShown(), animation.isLightSource());
       continue;
     }
     if (unclassifiedListed < kMaxUnclassifiedResrefsLogged && !animation.resrefView().empty() &&

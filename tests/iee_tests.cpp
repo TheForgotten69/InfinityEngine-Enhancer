@@ -1628,6 +1628,8 @@ void test_build_area_effect_points() {
     animation.kind = kind;
     animation.x = x;
     animation.y = 100;
+    animation.objX = x;
+    animation.objY = 100;
     animation.flags = shown ? kAreAnimationFlagIsShown : 0;
     for (std::size_t c = 0; resref[c] != '\0' && c < 8; ++c) animation.resref[c] = resref[c];
     info.animations.push_back(animation);
@@ -1649,9 +1651,9 @@ void test_build_area_effect_points() {
                   points[0].height == 27.0f && points[0].halfWidth == 7.0f,
               "Fire points come first with authored BAM geometry");
   expect_true(points.size() >= 2 && points[1].kind == 1.0f && points[1].reserved1 == 1.0f &&
-                  points[1].x == 25.0f && points[1].y == 102.0f &&
+                  points[1].x == 29.0f && points[1].y == 115.0f &&
                   points[1].height == 15.0f && points[1].halfWidth == 4.0f,
-              "Blue flames carry the palette id and the authored footprint at the anchor");
+              "Blue flames carry the palette id and the frame-box offset from the object pos");
   expect_true(points.size() >= 3 && points[2].kind == 1.0f && points[2].reserved1 == 2.0f,
               "Overlay fires become glow-only points");
   expect_true(points.size() >= 4 && points[3].kind == 4.0f,

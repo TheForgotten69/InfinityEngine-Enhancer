@@ -238,11 +238,11 @@ bool parse_are_animations(const std::byte* data, std::size_t size,
 }
 
 namespace {
-// Authored flame sizes, extracted from the game BAM frame tables. Placement
-// evidence (ALIGN markers land on the sconce bowls; frame-box-derived
-// offsets rendered flames below the bowls) says the ARE anchor is already
-// the flame's base point, so dx/dy stay minimal and only the authored
-// footprint varies per family.
+// Authored flame draw geometry from the game BAM frame tables. RenderBam
+// draws the current frame's top-left at (CGameObject::m_pos - frameCenter),
+// so relative to m_pos the flame's bottom-center sits at
+// (w/2 - cx, h - cy) — dx/dy below. height/halfWidth are the authored
+// footprint in world px.
 struct FlameGeometry {
   std::string_view resref;
   float dx;
@@ -251,17 +251,17 @@ struct FlameGeometry {
   float halfWidth;
 };
 constexpr FlameGeometry kFlameGeometry[] = {
-    {"FLAMBLU2", 0.0f, 2.0f, 15.0f, 4.0f},  {"FLMS", 0.0f, 2.0f, 5.0f, 1.5f},
-    {"FLMSW", 0.0f, 2.0f, 5.0f, 1.5f},      {"FLSM1W", 0.0f, 2.0f, 20.0f, 10.0f},
-    {"FLSM2W", 0.0f, 2.0f, 40.0f, 20.0f},   {"FLSM1RED", 0.0f, 2.0f, 20.0f, 10.0f},
-    {"FLM1RED1", 0.0f, 2.0f, 20.0f, 10.0f}, {"FLML", 0.0f, 2.0f, 21.0f, 5.0f},
-    {"FLMM", 0.0f, 2.0f, 15.0f, 4.0f},      {"YSFLBLU2", 0.0f, 2.0f, 15.0f, 4.0f},
-    {"FIM1YLN1", 0.0f, 2.0f, 25.0f, 12.0f}, {"FIM2YLN2", 0.0f, 2.0f, 50.0f, 25.0f},
-    {"FIRE", 0.0f, 2.0f, 48.0f, 6.0f},      {"FLAME2S", 0.0f, 2.0f, 12.0f, 6.0f},
-    {"FLAME2L", 0.0f, 2.0f, 29.0f, 6.0f},   {"FPIT1S", 0.0f, 2.0f, 24.0f, 14.0f},
-    {"FIRE_1", 0.0f, 2.0f, 50.0f, 17.0f},   {"FIRE_4", 0.0f, 2.0f, 27.0f, 7.0f},
+    {"FLAMBLU2", 4.0f, 15.0f, 15.0f, 4.0f}, {"FLMS", 0.0f, 3.0f, 5.0f, 1.5f},
+    {"FLMSW", 0.0f, 3.0f, 5.0f, 1.5f},      {"FLSM1W", 0.0f, 10.0f, 20.0f, 10.0f},
+    {"FLSM2W", 0.0f, 20.0f, 40.0f, 20.0f},  {"FLSM1RED", 9.0f, 19.0f, 20.0f, 10.0f},
+    {"FLM1RED1", 0.0f, 4.0f, 20.0f, 10.0f}, {"FLML", 1.0f, 11.0f, 21.0f, 5.0f},
+    {"FLMM", 1.0f, 8.0f, 15.0f, 4.0f},      {"YSFLBLU2", 0.0f, 0.0f, 15.0f, 4.0f},
+    {"FIM1YLN1", 0.0f, 5.0f, 25.0f, 12.0f}, {"FIM2YLN2", 0.0f, 8.0f, 50.0f, 25.0f},
+    {"FIRE", -6.0f, 30.0f, 48.0f, 6.0f},    {"FLAME2S", 0.0f, 3.0f, 12.0f, 6.0f},
+    {"FLAME2L", 0.0f, 10.0f, 29.0f, 6.0f},  {"FPIT1S", 0.0f, 15.0f, 24.0f, 14.0f},
+    {"FIRE_1", 1.0f, 25.0f, 50.0f, 17.0f},  {"FIRE_4", 0.0f, 15.0f, 27.0f, 7.0f},
 };
-constexpr FlameGeometry kDefaultFlameGeometry{"", 0.0f, 2.0f, 34.0f, 8.0f};
+constexpr FlameGeometry kDefaultFlameGeometry{"", 0.0f, 4.0f, 34.0f, 8.0f};
 
 const FlameGeometry& flame_geometry_for(std::string_view resref) noexcept {
   for (const auto& entry : kFlameGeometry) {
@@ -293,8 +293,10 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
   const auto makePoint = [](const AreaAnimationInfo& animation)
       -> std::optional<AreaEffectPoint> {
     AreaEffectPoint point{};
-    point.x = static_cast<float>(animation.x);
-    point.y = static_cast<float>(animation.y);
+    // The engine renders from the live object position, not the header
+    // coordinates; both are logged so a divergence stays visible.
+    point.x = static_cast<float>(animation.objX);
+    point.y = static_cast<float>(animation.objY);
     const float base = static_cast<float>(static_cast<int>(animation.kind));
     const auto resref = animation.resrefView();
     switch (animation.kind) {
@@ -356,6 +358,8 @@ AreaAnimationInfo make_area_animation_info(const ARE_Animation_st& record) noexc
   AreaAnimationInfo animation{};
   animation.x = record.nX;
   animation.y = record.nY;
+  animation.objX = record.nX;
+  animation.objY = record.nY;
   animation.height = record.nHeight;
   animation.schedule = record.nSchedule;
   animation.flags = record.nFlags;

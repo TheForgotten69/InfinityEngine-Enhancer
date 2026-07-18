@@ -97,7 +97,15 @@ bool collect_area_static_animations(const ObjectArrayGlobals& globals, const CGa
       if (!core::safe_read(objectBytes + offsetof(CGameStatic, m_header), record)) {
         continue;
       }
-      out.animations.push_back(make_area_animation_info(record));
+      auto info = make_area_animation_info(record);
+      // RenderBam draws from the live CGameObject position, not the header
+      // coordinates; prefer it when readable.
+      CPoint objectPos{};
+      if (core::safe_read(objectBytes + offsetof(CGameObject, m_pos), objectPos)) {
+        info.objX = objectPos.x;
+        info.objY = objectPos.y;
+      }
+      out.animations.push_back(info);
       if (out.animations.size() >= kMaxAreaAnimationRecords) {
         break;
       }

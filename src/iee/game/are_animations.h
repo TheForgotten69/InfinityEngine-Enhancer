@@ -34,6 +34,11 @@ enum class AreaAnimationKind : int {
 struct AreaAnimationInfo {
   std::uint16_t x{};
   std::uint16_t y{};
+  // Live CGameObject::m_pos — the position RenderBam actually draws from
+  // (can differ from the header x/y). Filled by the memory walk; the disk
+  // parser mirrors x/y.
+  std::int32_t objX{};
+  std::int32_t objY{};
   std::int16_t height{};
   std::uint32_t schedule{};
   std::uint32_t flags{};
