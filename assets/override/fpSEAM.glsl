@@ -330,10 +330,10 @@ void main()
 			{
 				// Authored geometry from the BAM frame table: p.w = height,
 				// pb.x = half-width, position already at the flame's
-				// bottom-center.
+				// bottom-center; pb.y = palette (0 warm / 1 blue / 2 glow-only).
 				float fh = max(p.w, 5.0);
 				float fw = max(pb.x, 1.5);
-				float palette = fract(kind) * 10.0;   // 0 warm / 1 blue / 2 glow-only
+				float palette = pb.y;
 				float blue = (palette > 0.5 && palette < 1.5) ? 1.0 : 0.0;
 				bool bodyless = palette > 1.5;
 
@@ -381,9 +381,12 @@ void main()
 				}
 
 				// --- cast light on the surroundings ---
+				// Elliptical footprint (isometric floor projection) with
+				// noise dapple so the pool reads as firelight, not a disc.
 				vec2 g = offs;
-				g.y += fh * 0.4;  // center the light on the flame body
-				float radius = 42.0 + 85.0 * strength;
+				g.y += fh * 0.35;
+				g.y *= 1.9;
+				float radius = 40.0 + 80.0 * strength;
 				float d = length(g);
 				if (d < radius)
 				{
@@ -392,9 +395,11 @@ void main()
 					float fi = float(i) * 7.31;
 					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
 					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
+					float dapple = 0.72 + 0.55 * texture2D(uIeeNoiseMap,
+					                   (worldPos + vec2(fxT * 5.0, -fxT * 3.0)) / 72.0).r;
 					vec3 glowColor = mix(vec3(1.0, 0.45, 0.15), vec3(0.30, 0.55, 1.0),
 					                     step(0.5, blue));
-					fxGlow += glowColor * (fall * (0.30 + 0.55 * strength) * flick);
+					fxGlow += glowColor * (fall * (0.20 + 0.38 * strength) * flick * dapple);
 				}
 			}
 			else if (kind < 2.5) // smoke: textured plume replacing the BAM puffs
@@ -561,8 +566,8 @@ void main()
 		float hasArt = smoothstep(0.0015, 0.012, sceneLuma);
 		// Night-adaptive cast light: dark scenes get real light, bright day
 		// scenes only a whisper.
-		float castLight = (0.05 + 0.45 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0))) * hasArt;
-		lin = lin * (vec3(1.0) + fxGlow * 1.5) + fxGlow * castLight;
+		float castLight = (0.04 + 0.30 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0))) * hasArt;
+		lin = lin * (vec3(1.0) + fxGlow * 1.2) + fxGlow * castLight;
 		// Smoke veil: moonlit smoke over dark roofs, shadowy over bright
 		// ground. Not art-gated — a per-texel luma gate mottles dark stone,
 		// and smoke drifting over the night sky reads naturally.

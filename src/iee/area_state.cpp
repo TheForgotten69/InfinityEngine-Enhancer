@@ -216,6 +216,10 @@ void refresh_area_animations(AppContext& ctx, const game::CGameArea* area,
       log_area_animation_summary(*snapshot);
       LOG_INFO("ARE effect points published: {} (pointEffects={})", effectPoints.size(),
                ctx.cfg.enablePointEffects);
+      for (const auto& point : effectPoints) {
+        LOG_DEBUG("ARE effect point: kind={}, palette={}, pos=({}, {}), height={}, halfWidth={}",
+                  point.kind, point.reserved1, point.x, point.y, point.height, point.halfWidth);
+      }
     }
   } catch (const std::exception& e) {
     LOG_ERROR("ARE animation refresh failed: {}", e.what());

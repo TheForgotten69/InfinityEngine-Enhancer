@@ -664,3 +664,20 @@ git push https://github.com/TheForgotten69/InfinityEngine-Enhancer.git feat/phas
   differences across mask-boundary cells. Water is otherwise still correct.
   Needs a dedicated alpha-consistency pass; do not fold it into unrelated
   point-effect work.
+- 2026-07-18 (owner, liquid-type sweep on 2.7.3): the non-water liquid modes
+  were exercised for the first time with these findings, all for the same
+  dedicated water pass:
+  - LAVA (BG1 AR0508/AR0514): no effect at all. Root cause identified: lava
+    base art is fully OPAQUE — the `waterMask = (1 - texColor.a)` alpha-hole
+    contour that gates the whole liquid path never engages. Lava needs a
+    cellMode-driven emissive treatment of opaque art instead of the
+    hole-mask path.
+  - SEWAGE (BG1 AR0224 family): acceptable in the main sewer areas; some
+    channels render washed-out pale grey/white — authored-tint sampling
+    likely failed (neutral 0.5 grey fallback) and the neutral grade reads
+    as paper. Verify tint-candidate coverage for sewage overlays.
+  - SWAMP/sea overlays (BG1 AR1200 docks etc.): harbor sea renders as flat
+    saturated cyan-blue "plastic" in daylight; also isolated black wedge
+    artifacts near authored shadow overlays. Never validated at the v20
+    baseline; needs tint/grade calibration per liquid mode, not just the
+    water defaults.

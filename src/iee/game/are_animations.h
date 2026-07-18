@@ -77,17 +77,17 @@ struct ARE_Animation_st;
 
 // One shader point effect, two vec4 uniform slots per point.
 // Slot A: base-center world position (anchor corrected by the authored BAM
-// draw box), encoded kind, and effect height in world px. The kind's
-// fractional digit is a palette id: .0 warm flame body, .1 blue flame body,
-// .2 glow-only (the engine keeps drawing the authored art).
-// Slot B: half-width in world px; the rest is reserved.
+// draw box), the integer kind, and effect height in world px.
+// Slot B: half-width in world px, then the palette id (fire only: 0 warm
+// body, 1 blue body, 2 glow-only — the engine keeps drawing the authored
+// art); the rest is reserved.
 struct AreaEffectPoint {
   float x{};
   float y{};
   float kind{};
   float height{};
   float halfWidth{};
-  float reserved1{};
+  float reserved1{};  // palette id for fire points
   float reserved2{};
   float reserved3{};
 };

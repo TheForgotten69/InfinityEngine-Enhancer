@@ -298,9 +298,10 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
     const auto resref = animation.resrefView();
     switch (animation.kind) {
       case AreaAnimationKind::Fire: {
+        point.kind = base;
         if (!should_replace_animation_draw(resref, animation.kind)) {
           // Overlay art keeps rendering; contribute warm cast light only.
-          point.kind = base + 0.2f;
+          point.reserved1 = 2.0f;  // palette id: glow only
           point.height = 40.0f;
           point.halfWidth = 10.0f;
           return point;
@@ -308,8 +309,8 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
         const auto& geometry = flame_geometry_for(resref);
         point.x += geometry.dx;
         point.y += geometry.dy;
-        point.kind =
-            base + (resref.find("BLU") != std::string_view::npos ? 0.1f : 0.0f);
+        point.reserved1 =
+            resref.find("BLU") != std::string_view::npos ? 1.0f : 0.0f;  // palette id
         point.height = geometry.height;
         point.halfWidth = geometry.halfWidth;
         return point;
