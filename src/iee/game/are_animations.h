@@ -39,6 +39,11 @@ struct AreaAnimationInfo {
   // parser mirrors x/y.
   std::int32_t objX{};
   std::int32_t objY{};
+  // Live CGameObject::m_posZ. RenderBam's screen Y is m_pos.y - m_posZ (the
+  // elevation subtraction), so a mounted flame (wall sconce) draws above its
+  // map position. Loaded from the ARE record's height field; the memory walk
+  // overrides it with the live value.
+  std::int32_t objZ{};
   // The engine's cached current BAM frame entry (CVidCell::m_pFrame) — the
   // exact geometry RenderBam draws with. Valid only when the memory walk
   // could read it (the object has rendered at least once).

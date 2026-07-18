@@ -105,6 +105,10 @@ bool collect_area_static_animations(const ObjectArrayGlobals& globals, const CGa
         info.objX = objectPos.x;
         info.objY = objectPos.y;
       }
+      std::int32_t objectPosZ = 0;
+      if (core::safe_read(objectBytes + offsetof(CGameObject, m_posZ), objectPosZ)) {
+        info.objZ = objectPosZ;
+      }
       // The engine caches the current frame entry it renders with
       // (CVidCell::m_pFrame); mirror its geometry so no per-resref table is
       // needed. Null until the object has rendered once — the render-thread

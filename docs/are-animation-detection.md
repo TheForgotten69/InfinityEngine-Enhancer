@@ -21,7 +21,7 @@ fire/smoke/light entries are packed into a 32-slot `uIeePoints[]` uniform
 array (`build_area_effect_points`, fire prioritized under capacity pressure,
 per-resref flame scale) and fed through the existing uniform bridge. The
 shader draws textured **replacements**, not just halos: shaped flame bodies
-eroded by rising FBM noise with a blackbody color ramp, heat shimmer, and
+eroded by rising FBM noise with a blackbody color ramp and
 night-adaptive cast light; noise-billowed smoke plumes that wander and
 dissipate with altitude; steady candle/glow halos. The tileable FBM octaves
 ship as `iee_effects_noise.rgba` (unit 6, generated in-repo — see
@@ -33,6 +33,11 @@ vanilla, and any resolution failure just keeps the engine draws. Gated by
 `[Shaders] EnablePointEffects` and the F10 master toggle. Effects that must
 composite over sprites (true bloom) remain future P4 work consuming the same
 points.
+
+Placement follows the engine's own draw rule: `CGameStatic::RenderBam`
+anchors at the live `CGameObject::m_pos` with the screen Y lifted by the
+`m_posZ` elevation (`y = m_pos.y - m_posZ`) — mounted flames (wall sconces)
+carry authored Z, so the packed point subtracts it the same way.
 
 Scope boundary: **water bodies are not ARE animations.** Rivers/lakes/sea are
 WED overlays and stay on the existing `wed_runtime`/`tile_liquid` path. ARE
@@ -94,7 +99,8 @@ and cross-checked against the binary's disassembly:
   engine's own loader.
 - `CGameStatic` derives from the 0x60-byte `CGameObject` base
   (`m_objectType` +0x8 — statics are type `0x30`/`'0'`; `m_pos` +0xC;
-  `m_pArea` +0x18) and **retains the raw authored record at +0x60**
+  `m_posZ` +0x14; `m_pArea` +0x18) and **retains the raw authored record at
+  +0x60**
   (`m_header`). Script actions (`StaticStart` show/hide, palette swaps)
   mutate it in place, so the walk sees live state.
 - Objects resolve through `CGameObjectArray`'s **static** globals:

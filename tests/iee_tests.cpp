@@ -1581,6 +1581,7 @@ void test_collect_area_static_animations() {
 
   statics[0].baseclass_0.m_objectType = kGameObjectTypeStatic;
   statics[0].baseclass_0.m_pArea = &areaA;
+  statics[0].baseclass_0.m_posZ = 25;
   statics[0].m_vidCell.m_pFrame = &liveFrame;
   statics[0].m_header.rrAnimation = {'F', 'L', 'A', 'M', 'B', 'I', 'G', 0};
   const char fireName[] = "FLAMBIG";
@@ -1616,6 +1617,8 @@ void test_collect_area_static_animations() {
   expect_true(!out.animations.empty() && out.animations[0].x == 320 &&
                   out.animations[0].isShown(),
               "Collected records should carry the live header fields");
+  expect_true(!out.animations.empty() && out.animations[0].objZ == 25,
+              "The walk mirrors the live m_posZ elevation");
   expect_true(!out.animations.empty() && out.animations[0].frameValid &&
                   out.animations[0].frameWidth == 12 && out.animations[0].frameHeight == 40 &&
                   out.animations[0].frameCenterX == 6 && out.animations[0].frameCenterY == 30,
@@ -1663,6 +1666,7 @@ void test_build_area_effect_points() {
     animation.kind = AreaAnimationKind::Fire;
     animation.objX = 100;
     animation.objY = 200;
+    animation.objZ = 30;  // mounted sconce: RenderBam draws at y - z
     animation.flags = kAreAnimationFlagIsShown;
     const char liveResref[] = "flamblu2";
     for (std::size_t c = 0; liveResref[c] != '\0'; ++c) animation.resref[c] = liveResref[c];
@@ -1674,9 +1678,9 @@ void test_build_area_effect_points() {
     live.animations.push_back(animation);
     const auto livePoints = build_area_effect_points(live);
     expect_true(livePoints.size() == 1 && livePoints[0].x == 100.0f &&
-                    livePoints[0].y == 200.0f && livePoints[0].height == 15.0f &&
+                    livePoints[0].y == 170.0f && livePoints[0].height == 15.0f &&
                     livePoints[0].halfWidth == 4.0f && livePoints[0].reserved1 == 1.0f,
-                "Live CVidCell frame geometry sizes the flame; the anchor is unshifted");
+                "Live frame geometry sizes the flame; the anchor subtracts the Z elevation");
   }
 
   const auto points = build_area_effect_points(info);

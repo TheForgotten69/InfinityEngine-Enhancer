@@ -294,9 +294,12 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
       -> std::optional<AreaEffectPoint> {
     AreaEffectPoint point{};
     // The engine renders from the live object position, not the header
-    // coordinates; both are logged so a divergence stays visible.
+    // coordinates; both are logged so a divergence stays visible. RenderBam's
+    // screen Y is m_pos.y - m_posZ (elevation): a wall-mounted sconce with
+    // authored Z draws that many pixels above its map position, so the same
+    // subtraction anchors the replacement flame on the art.
     point.x = static_cast<float>(animation.objX);
-    point.y = static_cast<float>(animation.objY);
+    point.y = static_cast<float>(animation.objY - animation.objZ);
     const float base = static_cast<float>(static_cast<int>(animation.kind));
     const auto resref = animation.resrefView();
     switch (animation.kind) {
@@ -369,6 +372,7 @@ AreaAnimationInfo make_area_animation_info(const ARE_Animation_st& record) noexc
   animation.y = record.nY;
   animation.objX = record.nX;
   animation.objY = record.nY;
+  animation.objZ = record.nHeight;
   animation.height = record.nHeight;
   animation.schedule = record.nSchedule;
   animation.flags = record.nFlags;
