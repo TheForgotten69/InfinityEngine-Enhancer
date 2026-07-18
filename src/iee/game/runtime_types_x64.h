@@ -415,11 +415,14 @@ namespace iee::game {
     // Runtime object created from each ARE animation record. The engine keeps
     // the raw authored 76-byte record (CAreaFileStaticObject in the PDB, our
     // ARE_Animation_st) embedded at +0x60; script state (e.g. the shown flag
-    // toggled by StaticStart) mutates it in place.
+    // toggled by StaticStart) mutates it in place. m_vidCell caches the
+    // current BAM frame entry (m_pFrame) that RenderBam draws with.
     struct CGameStatic {
         CGameObject baseclass_0{};
         ARE_Animation_st m_header{};
-        std::array<std::byte, 0x2BC> _tail{};
+        std::byte _pad0[4]{};
+        CVidCell m_vidCell{};
+        std::array<std::byte, 0x180> _tail{};
     };
 
     // CGameObjectArray's static entry table: object id in the low word,
@@ -538,6 +541,9 @@ namespace iee::game {
     static_assert(offsetof(CGameObject, m_pArea) == 0x18);
     static_assert(sizeof(CGameObject) == 0x60);
     static_assert(offsetof(CGameStatic, m_header) == 0x60);
+    static_assert(offsetof(CGameStatic, m_vidCell) == 0xB0);
+    static_assert(offsetof(CVidCell, m_pFrame) == 0x128);
+    static_assert(sizeof(CVidCell) == 0x138);
     static_assert(sizeof(CGameStatic) == 0x368);
     static_assert(sizeof(CGameObjectArrayEntry) == 0x10);
     static_assert(offsetof(CGameObjectArrayEntry, m_objectPtr) == 0x8);

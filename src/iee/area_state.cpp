@@ -103,10 +103,12 @@ void log_area_animation_summary(const game::AreaAnimationsInfo& info) {
   for (const auto& animation : info.animations) {
     if (animation.kind != game::AreaAnimationKind::None) {
       LOG_DEBUG("ARE animation {}: kind={}, resref={}, name=\"{}\", pos=({}, {}), objPos=({}, "
-                "{}), shown={}, lightSource={}",
+                "{}), frame=({}x{} c{},{} valid={}), shown={}, lightSource={}",
                 info.areaResrefView(), game::area_animation_kind_name(animation.kind),
                 animation.resrefView(), animation.nameView(), animation.x, animation.y,
-                animation.objX, animation.objY, animation.isShown(), animation.isLightSource());
+                animation.objX, animation.objY, animation.frameWidth, animation.frameHeight,
+                animation.frameCenterX, animation.frameCenterY, animation.frameValid,
+                animation.isShown(), animation.isLightSource());
       continue;
     }
     if (unclassifiedListed < kMaxUnclassifiedResrefsLogged && !animation.resrefView().empty() &&

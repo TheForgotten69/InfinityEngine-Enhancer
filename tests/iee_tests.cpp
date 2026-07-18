@@ -1573,8 +1573,15 @@ void test_collect_area_static_animations() {
   CGameArea areaB{};
   std::array<CGameStatic, 3> statics{};
 
+  frameTableEntry_st liveFrame{};
+  liveFrame.nWidth = 12;
+  liveFrame.nHeight = 40;
+  liveFrame.nCenterX = 6;
+  liveFrame.nCenterY = 30;
+
   statics[0].baseclass_0.m_objectType = kGameObjectTypeStatic;
   statics[0].baseclass_0.m_pArea = &areaA;
+  statics[0].m_vidCell.m_pFrame = &liveFrame;
   statics[0].m_header.rrAnimation = {'F', 'L', 'A', 'M', 'B', 'I', 'G', 0};
   const char fireName[] = "FLAMBIG";
   std::memcpy(statics[0].m_header.szName.data(), fireName, sizeof(fireName) - 1);
@@ -1609,6 +1616,10 @@ void test_collect_area_static_animations() {
   expect_true(!out.animations.empty() && out.animations[0].x == 320 &&
                   out.animations[0].isShown(),
               "Collected records should carry the live header fields");
+  expect_true(!out.animations.empty() && out.animations[0].frameValid &&
+                  out.animations[0].frameWidth == 12 && out.animations[0].frameHeight == 40 &&
+                  out.animations[0].frameCenterX == 6 && out.animations[0].frameCenterY == 30,
+              "The walk mirrors the engine's cached CVidCell frame geometry");
 
   AreaAnimationsInfo invalidOut{};
   expect_true(!collect_area_static_animations(ObjectArrayGlobals{}, &areaA, invalidOut),
@@ -1644,6 +1655,29 @@ void test_build_area_effect_points() {
   add(AreaAnimationKind::Light, "FLMS", 40, true);
   add(AreaAnimationKind::Wildlife, "FISH3S", 50, true);  // no effect kind: excluded
   add(AreaAnimationKind::Water, "SPLASH", 60, true);     // water path: excluded
+
+  // Engine-native geometry wins when the walk read the live frame entry.
+  {
+    AreaAnimationsInfo live{};
+    AreaAnimationInfo animation{};
+    animation.kind = AreaAnimationKind::Fire;
+    animation.objX = 100;
+    animation.objY = 200;
+    animation.flags = kAreAnimationFlagIsShown;
+    const char liveResref[] = "flamblu2";
+    for (std::size_t c = 0; liveResref[c] != '\0'; ++c) animation.resref[c] = liveResref[c];
+    animation.frameValid = true;
+    animation.frameWidth = 8;
+    animation.frameHeight = 15;
+    animation.frameCenterX = 0;
+    animation.frameCenterY = 0;
+    live.animations.push_back(animation);
+    const auto livePoints = build_area_effect_points(live);
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 104.0f &&
+                    livePoints[0].y == 215.0f && livePoints[0].height == 15.0f &&
+                    livePoints[0].halfWidth == 4.0f && livePoints[0].reserved1 == 1.0f,
+                "Live CVidCell frame geometry overrides the fallback table");
+  }
 
   const auto points = build_area_effect_points(info);
   expect_eq(points.size(), std::size_t{5}, "Shown fire/light + replaceable smoke become points");

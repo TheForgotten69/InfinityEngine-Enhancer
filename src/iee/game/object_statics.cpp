@@ -105,6 +105,23 @@ bool collect_area_static_animations(const ObjectArrayGlobals& globals, const CGa
         info.objX = objectPos.x;
         info.objY = objectPos.y;
       }
+      // The engine caches the current frame entry it renders with
+      // (CVidCell::m_pFrame); mirror its geometry so no per-resref table is
+      // needed. Null until the object has rendered once — the render-thread
+      // re-refresh after a transition sees it populated.
+      void* framePointer = nullptr;
+      frameTableEntry_st frame{};
+      if (core::safe_read(
+              objectBytes + offsetof(CGameStatic, m_vidCell) + offsetof(CVidCell, m_pFrame),
+              framePointer) &&
+          framePointer && core::safe_read(framePointer, frame) && frame.nWidth > 0 &&
+          frame.nHeight > 0) {
+        info.frameValid = true;
+        info.frameWidth = static_cast<std::int16_t>(frame.nWidth);
+        info.frameHeight = static_cast<std::int16_t>(frame.nHeight);
+        info.frameCenterX = frame.nCenterX;
+        info.frameCenterY = frame.nCenterY;
+      }
       out.animations.push_back(info);
       if (out.animations.size() >= kMaxAreaAnimationRecords) {
         break;

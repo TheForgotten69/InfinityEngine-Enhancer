@@ -39,6 +39,14 @@ struct AreaAnimationInfo {
   // parser mirrors x/y.
   std::int32_t objX{};
   std::int32_t objY{};
+  // The engine's cached current BAM frame entry (CVidCell::m_pFrame) — the
+  // exact geometry RenderBam draws with. Valid only when the memory walk
+  // could read it (the object has rendered at least once).
+  bool frameValid{};
+  std::int16_t frameWidth{};
+  std::int16_t frameHeight{};
+  std::int16_t frameCenterX{};
+  std::int16_t frameCenterY{};
   std::int16_t height{};
   std::uint32_t schedule{};
   std::uint32_t flags{};
