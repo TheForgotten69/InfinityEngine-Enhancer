@@ -1336,9 +1336,10 @@ void test_fpseam_override_asset_contract() {
         "uIeeDudvMap", "uIeeFoamMap", "uIeeNoiseMap"}) {
     expect_true(source.find(name) != std::string::npos, "fpSEAM override declares feed uniform");
   }
-  // The uniform-array capacity in the shader must match the bridge/packing cap.
-  expect_true(source.find("uIeePoints[32]") != std::string::npos,
-              "fpSEAM point array capacity matches kMaxAreaEffectPoints");
+  // The uniform-array capacity in the shader must match the bridge/packing
+  // cap (two vec4 slots per point).
+  expect_true(source.find("uIeePoints[64]") != std::string::npos,
+              "fpSEAM point array capacity matches kMaxAreaEffectPoints * 2");
   expect_true(source.find("#version") == std::string::npos,
               "no #version line (engine sources are ARB-era GLSL)");
   expect_true(
@@ -1622,35 +1623,55 @@ void test_build_area_effect_points() {
   using namespace iee::game;
 
   AreaAnimationsInfo info{};
-  const auto add = [&](AreaAnimationKind kind, std::uint16_t x, bool shown) {
+  const auto add = [&](AreaAnimationKind kind, const char* resref, std::uint16_t x, bool shown) {
     AreaAnimationInfo animation{};
     animation.kind = kind;
     animation.x = x;
     animation.y = 100;
     animation.flags = shown ? kAreAnimationFlagIsShown : 0;
+    for (std::size_t c = 0; resref[c] != '\0' && c < 8; ++c) animation.resref[c] = resref[c];
     info.animations.push_back(animation);
   };
 
-  add(AreaAnimationKind::Smoke, 10, true);
-  add(AreaAnimationKind::Fire, 20, true);
-  add(AreaAnimationKind::Fire, 30, false);      // hidden: excluded
-  add(AreaAnimationKind::Light, 40, true);
-  add(AreaAnimationKind::Wildlife, 50, true);   // no effect kind: excluded
-  add(AreaAnimationKind::Water, 60, true);      // handled by the water path: excluded
+  add(AreaAnimationKind::Smoke, "CHIMSMK", 10, true);
+  add(AreaAnimationKind::Smoke, "AM6004A", 15, true);   // authored plume art: no point
+  add(AreaAnimationKind::Fire, "FIRE_4", 20, true);
+  add(AreaAnimationKind::Fire, "FLAMBLU2", 25, true);   // blue palette + draw-box shift
+  add(AreaAnimationKind::Fire, "AM5204C", 28, true);    // hearth overlay: glow only
+  add(AreaAnimationKind::Fire, "FIRE_4", 30, false);    // hidden: excluded
+  add(AreaAnimationKind::Light, "FLMS", 40, true);
+  add(AreaAnimationKind::Wildlife, "FISH3S", 50, true);  // no effect kind: excluded
+  add(AreaAnimationKind::Water, "SPLASH", 60, true);     // water path: excluded
 
   const auto points = build_area_effect_points(info);
-  expect_eq(points.size(), std::size_t{3}, "Only shown fire/smoke/light become points");
-  expect_true(!points.empty() && points[0].kind == 1.0f && points[0].x == 20.0f,
-              "Fire points are packed first");
-  expect_true(points.size() >= 2 && points[1].kind == 4.0f && points[1].strength < 1.0f,
-              "Light points follow with a reduced strength");
-  expect_true(points.size() >= 3 && points[2].kind == 2.0f,
-              "Smoke points are packed last");
+  expect_eq(points.size(), std::size_t{5}, "Shown fire/light + replaceable smoke become points");
+  expect_true(!points.empty() && points[0].kind == 1.0f && points[0].x == 20.0f &&
+                  points[0].height == 27.0f && points[0].halfWidth == 7.0f,
+              "Fire points come first with authored BAM geometry");
+  expect_true(points.size() >= 2 && points[1].kind > 1.05f && points[1].kind < 1.15f &&
+                  points[1].x == 29.0f && points[1].y == 115.0f,
+              "Blue flames carry the palette id and the draw-box anchor shift");
+  expect_true(points.size() >= 3 && points[2].kind > 1.15f && points[2].kind < 1.25f,
+              "Overlay fires become glow-only points");
+  expect_true(points.size() >= 4 && points[3].kind == 4.0f,
+              "Light points follow fire");
+  expect_true(points.size() >= 5 && points[4].kind == 2.0f && points[4].x == 10.0f,
+              "Only standalone smoke BAMs become plume points");
 
   AreaAnimationsInfo overflow{};
   for (int i = 0; i < 80; ++i) {
     AreaAnimationInfo animation{};
     animation.kind = i < 40 ? AreaAnimationKind::Smoke : AreaAnimationKind::Fire;
+    animation.resref[0] = 'F';
+    animation.resref[1] = 'L';
+    animation.resref[2] = 'A';
+    animation.resref[3] = 'M';
+    if (i < 40) {
+      animation.resref[0] = 'S';
+      animation.resref[1] = 'M';
+      animation.resref[2] = 'O';
+      animation.resref[3] = 'K';
+    }
     animation.flags = kAreAnimationFlagIsShown;
     overflow.animations.push_back(animation);
   }

@@ -5,8 +5,10 @@
 
 namespace iee::probe::uniforms {
 
-// Matches the fpSEAM override's uIeePoints[] capacity.
+// Point capacity; each point occupies two vec4 uniform slots, so the
+// fpSEAM override declares uIeePoints[kMaxEffectPoints * 2].
 inline constexpr std::size_t kMaxEffectPoints = 32;
+inline constexpr std::size_t kEffectPointFloats = 8;
 
 struct Locations {
   static constexpr int kUnresolved = -2;

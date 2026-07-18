@@ -75,17 +75,34 @@ struct ARE_Animation_st;
 [[nodiscard]] bool parse_are_animations(const std::byte* data, std::size_t size,
                                         AreaAnimationsInfo& out) noexcept;
 
-// One shader point effect: world-pixel position, the AreaAnimationKind as a
-// float, and a per-kind strength scale. Matches the uIeePoints vec4 layout.
+// One shader point effect, two vec4 uniform slots per point.
+// Slot A: base-center world position (anchor corrected by the authored BAM
+// draw box), encoded kind, and effect height in world px. The kind's
+// fractional digit is a palette id: .0 warm flame body, .1 blue flame body,
+// .2 glow-only (the engine keeps drawing the authored art).
+// Slot B: half-width in world px; the rest is reserved.
 struct AreaEffectPoint {
   float x{};
   float y{};
   float kind{};
-  float strength{};
+  float height{};
+  float halfWidth{};
+  float reserved1{};
+  float reserved2{};
+  float reserved3{};
 };
+static_assert(sizeof(AreaEffectPoint) == 8 * sizeof(float));
 
-// The fpSEAM override's fixed uniform-array capacity.
+// The fpSEAM override's fixed capacity (points; the uniform array holds two
+// vec4 slots per point).
 inline constexpr std::size_t kMaxAreaEffectPoints = 32;
+
+// True when the animation's authored draw is a standalone flame/smoke BAM
+// that the shader replaces outright (the CGameStatic::Render hook suppresses
+// the engine draw). False for per-area overlay art (hearths, plume images)
+// that must keep rendering; fire overlays then contribute glow only.
+[[nodiscard]] bool should_replace_animation_draw(std::string_view resref,
+                                                 AreaAnimationKind kind) noexcept;
 
 // Selects the shown fire/smoke/light animations as shader points, fire first
 // so the capacity cap drops the least impactful kinds. Returns at most

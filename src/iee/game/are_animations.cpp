@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstring>
 #include <initializer_list>
+#include <optional>
 #include <string>
 
 #include "file_formats.h"
@@ -236,42 +237,101 @@ bool parse_are_animations(const std::byte* data, std::size_t size,
   return true;
 }
 
+namespace {
+// Authored flame draw geometry, extracted from the game BAM frame tables
+// (frame size w/h and center offsets cx/cy; the engine draws the frame's
+// top-left at anchor-(cx,cy)). dx/dy move the anchor to the drawn flame's
+// bottom-center; height/halfWidth are the authored footprint in world px.
+struct FlameGeometry {
+  std::string_view resref;
+  float dx;
+  float dy;
+  float height;
+  float halfWidth;
+};
+constexpr FlameGeometry kFlameGeometry[] = {
+    {"FLAMBLU2", 4.0f, 15.0f, 15.0f, 4.0f}, {"FLMS", 0.0f, 3.0f, 5.0f, 1.5f},
+    {"FLMSW", 0.0f, 3.0f, 5.0f, 1.5f},      {"FLSM1W", 0.0f, 10.0f, 20.0f, 10.0f},
+    {"FLSM2W", 0.0f, 20.0f, 40.0f, 20.0f},  {"FLSM1RED", 9.0f, 19.0f, 20.0f, 10.0f},
+    {"FLM1RED1", 0.0f, 4.0f, 20.0f, 10.0f}, {"FLML", 1.0f, 11.0f, 21.0f, 5.0f},
+    {"FLMM", 1.0f, 8.0f, 15.0f, 4.0f},      {"YSFLBLU2", 0.0f, 0.0f, 15.0f, 4.0f},
+    {"FIM1YLN1", 0.0f, 5.0f, 25.0f, 12.0f}, {"FIM2YLN2", 0.0f, 8.0f, 50.0f, 25.0f},
+    {"FIRE", -6.0f, 30.0f, 48.0f, 6.0f},    {"FLAME2S", 0.0f, 3.0f, 12.0f, 6.0f},
+    {"FLAME2L", 0.0f, 10.0f, 29.0f, 6.0f},  {"FPIT1S", 0.0f, 13.0f, 24.0f, 14.0f},
+    {"FIRE_1", 1.0f, 25.0f, 50.0f, 17.0f},  {"FIRE_4", 0.0f, 15.0f, 27.0f, 7.0f},
+};
+constexpr FlameGeometry kDefaultFlameGeometry{"", 0.0f, 4.0f, 34.0f, 8.0f};
+
+const FlameGeometry& flame_geometry_for(std::string_view resref) noexcept {
+  for (const auto& entry : kFlameGeometry) {
+    if (entry.resref == resref) return entry;
+  }
+  return kDefaultFlameGeometry;
+}
+}  // namespace
+
+bool should_replace_animation_draw(std::string_view resref, AreaAnimationKind kind) noexcept {
+  // Only standalone flame/smoke BAM families are replaced; per-area overlay
+  // art (AM*/AR* hearth and plume images, name-classified unknowns) keeps
+  // its engine draw.
+  const auto upper = upper_copy(resref);
+  if (kind == AreaAnimationKind::Fire) {
+    return starts_with_any(upper, {"FLAM", "FIRE", "FPIT", "FLM", "FLSM", "YSFL", "FIM", "TORCH",
+                                   "BRAZ"});
+  }
+  if (kind == AreaAnimationKind::Smoke) {
+    return starts_with_any(upper, {"SMOK", "CHIM"});
+  }
+  return false;
+}
+
 std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& info) {
   std::vector<AreaEffectPoint> points;
   points.reserve((std::min)(info.animations.size(), kMaxAreaEffectPoints));
 
-  // Flame strength is authored-height / 76px, calibrated against the real
-  // BAM frame dimensions (FIRE* torch flames ~12x45, FLAM* sconces ~10x30,
-  // YSFL*/small flames ~7x14, FLMS candle 2x5, fire pits the full body).
-  const auto strengthFor = [](const AreaAnimationInfo& animation) noexcept {
+  const auto makePoint = [](const AreaAnimationInfo& animation) noexcept
+      -> std::optional<AreaEffectPoint> {
+    AreaEffectPoint point{};
+    point.x = static_cast<float>(animation.x);
+    point.y = static_cast<float>(animation.y);
+    const float base = static_cast<float>(static_cast<int>(animation.kind));
+    const auto resref = animation.resrefView();
     switch (animation.kind) {
       case AreaAnimationKind::Fire: {
-        const auto resref = animation.resrefView();
-        if (resref.starts_with("FPIT")) return 1.0f;
-        if (resref.starts_with("FIRE")) return 0.62f;
-        if (resref.starts_with("FLAM")) return 0.44f;
-        if (resref.starts_with("FLM") || resref.starts_with("FLSM")) return 0.30f;
-        if (resref.starts_with("YSFL") || resref.starts_with("FIM")) return 0.26f;
-        return 0.5f;
+        if (!should_replace_animation_draw(resref, animation.kind)) {
+          // Overlay art keeps rendering; contribute warm cast light only.
+          point.kind = base + 0.2f;
+          point.height = 40.0f;
+          point.halfWidth = 10.0f;
+          return point;
+        }
+        const auto& geometry = flame_geometry_for(resref);
+        point.x += geometry.dx;
+        point.y += geometry.dy;
+        point.kind =
+            base + (resref.find("BLU") != std::string_view::npos ? 0.1f : 0.0f);
+        point.height = geometry.height;
+        point.halfWidth = geometry.halfWidth;
+        return point;
       }
-      case AreaAnimationKind::Smoke:
-        return 1.0f;
-      case AreaAnimationKind::Light:
-        return 0.6f;  // candles/glows: smaller, steadier halo
+      case AreaAnimationKind::Smoke: {
+        if (!should_replace_animation_draw(resref, animation.kind)) {
+          return std::nullopt;  // authored plume art stays; nothing to add
+        }
+        point.kind = base;
+        point.height = 170.0f;
+        point.halfWidth = 11.0f;
+        return point;
+      }
+      case AreaAnimationKind::Light: {
+        point.kind = base;
+        point.height = 54.0f;  // glow radius
+        point.halfWidth = 0.0f;
+        return point;
+      }
       default:
-        return 0.0f;
+        return std::nullopt;
     }
-  };
-
-  // Authored flame colors survive the replacement: the kind's fractional
-  // digit carries a palette id the shader decodes (0 = warm, 1 = blue).
-  const auto kindValueFor = [](const AreaAnimationInfo& animation) noexcept {
-    float value = static_cast<float>(static_cast<int>(animation.kind));
-    if (animation.kind == AreaAnimationKind::Fire &&
-        animation.resrefView().find("BLU") != std::string_view::npos) {
-      value += 0.1f;
-    }
-    return value;
   };
 
   // Fire carries the effect's visual identity; when an area exceeds the
@@ -282,9 +342,7 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
     for (const auto& animation : info.animations) {
       if (animation.kind != pass || !animation.isShown()) continue;
       if (points.size() >= kMaxAreaEffectPoints) return points;
-      points.push_back(AreaEffectPoint{static_cast<float>(animation.x),
-                                       static_cast<float>(animation.y), kindValueFor(animation),
-                                       strengthFor(animation)});
+      if (const auto point = makePoint(animation)) points.push_back(*point);
     }
   }
   return points;

@@ -23,7 +23,10 @@ uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform highp	vec3		uIeeWaterTint;     // authored water color (avg of the area's water overlay tile)
 uniform highp	float		uIeePointCount;    // 0..32 classified ambient-animation points
-uniform highp	vec4		uIeePoints[32];    // xy=world px, z=kind (1 fire/2 smoke/4 light), w=strength
+// Two vec4 slots per point i: [2i] = (baseX, baseY, kind, heightPx) where the
+// kind fraction is a palette id (.0 warm body / .1 blue body / .2 glow only);
+// [2i+1] = (halfWidthPx, reserved...).
+uniform highp	vec4		uIeePoints[64];
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: one liquid mode per 64px WED cell
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
@@ -281,7 +284,7 @@ void main()
 			for (int i = 0; i < 32; ++i)
 			{
 				if (float(i) >= uIeePointCount) { break; }
-				vec4 p = uIeePoints[i];
+				vec4 p = uIeePoints[2 * i];
 				float d = length(worldPos - p.xy);
 				float m = smoothstep(4.0, 1.5, abs(d - 40.0)) + smoothstep(6.0, 2.0, d);
 				if (m > ring)
@@ -317,21 +320,25 @@ void main()
 		for (int i = 0; i < 32; ++i)
 		{
 			if (float(i) >= uIeePointCount) { break; }
-			vec4 p = uIeePoints[i];
+			vec4 p = uIeePoints[2 * i];
+			vec4 pb = uIeePoints[2 * i + 1];
 			vec2 offs = worldPos - p.xy;
 			float kind = p.z;
-			float strength = p.w;
+			float strength = clamp(p.w / 76.0, 0.05, 1.4);
 
 			if (kind < 1.5) // fire: textured flame body + cast light + shimmer
 			{
-				// Sized from the authored BAM frames: strength = height / 76,
-				// width follows the authored ~1:3.5 aspect.
-				float fh = 76.0 * strength;         // flame height above the anchor
-				float fw = 3.5 + 0.16 * fh;         // half-width at the base
-				float blue = fract(kind) * 10.0;    // palette id: >0.5 = blue flame
+				// Authored geometry from the BAM frame table: p.w = height,
+				// pb.x = half-width, position already at the flame's
+				// bottom-center.
+				float fh = max(p.w, 5.0);
+				float fw = max(pb.x, 1.5);
+				float palette = fract(kind) * 10.0;   // 0 warm / 1 blue / 2 glow-only
+				float blue = (palette > 0.5 && palette < 1.5) ? 1.0 : 0.0;
+				bool bodyless = palette > 1.5;
 
 				// --- flame body (replaces the engine's BAM flame) ---
-				if (offs.y < 8.0 && offs.y > -fh * 1.3 && abs(offs.x) < fw * 2.6)
+				if (!bodyless && offs.y < 6.0 && offs.y > -fh * 1.3 && abs(offs.x) < fw * 2.6)
 				{
 					float v = clamp(-offs.y / fh, 0.0, 1.2);   // 0 base -> 1 tip
 					float widthAt = fw * (1.05 - 0.60 * min(v, 1.0));
@@ -392,7 +399,7 @@ void main()
 			}
 			else if (kind < 2.5) // smoke: textured plume replacing the BAM puffs
 			{
-				float height = 170.0 * strength;
+				float height = max(p.w, 20.0);
 				float rise = -offs.y; // px above the source
 				if (rise > -10.0 && rise < height)
 				{
@@ -402,7 +409,7 @@ void main()
 					float sway = (texture2D(uIeeNoiseMap,
 					                 vec2(seed / 64.0 + fxT * 0.045, prog * 1.7)).a - 0.5)
 					             * (8.0 + 34.0 * prog);
-					float widthPx = 11.0 + 26.0 * prog;
+					float widthPx = max(pb.x, 6.0) + 26.0 * prog;
 					float lateral = (offs.x - sway) / widthPx;
 					float across = exp(-lateral * lateral * 1.9);
 					// Two scrolling octaves shape the billows.
@@ -412,19 +419,19 @@ void main()
 					              vec2((offs.x - seed) / 48.0, (offs.y + fxT * 66.0) / 48.0)).r;
 					float density = clamp(dA * 0.80 + dB * 0.55 - 0.38, 0.0, 1.0);
 					float along = smoothstep(-10.0, 12.0, rise) * (1.0 - prog);
-					fxHaze += across * along * density * 0.62 * strength;
+					fxHaze += across * along * density * 0.62;
 				}
 			}
 			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
 			{
-				float radius = 90.0 * strength;
+				float radius = max(p.w, 10.0);
 				float d = length(offs);
 				if (d < radius)
 				{
 					float fall = 1.0 - d / radius;
 					fall *= fall;
 					float breathe = 0.92 + 0.08 * sin(fxT * 2.1 + float(i) * 3.3);
-					fxGlow += vec3(1.0, 0.74, 0.40) * (fall * 0.55 * strength * breathe);
+					fxGlow += vec3(1.0, 0.74, 0.40) * (fall * 0.40 * breathe);
 				}
 			}
 		}

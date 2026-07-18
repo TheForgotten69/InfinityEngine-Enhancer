@@ -292,8 +292,7 @@ static void detour_static_render(void* thisPtr, void* area, void* vidMode) {
           (header.nFlags &
            (game::kAreAnimationFlagUseWbm | game::kAreAnimationFlagUsePvrz)) == 0) {
         const auto info = game::make_area_animation_info(header);
-        if (info.kind == game::AreaAnimationKind::Fire ||
-            info.kind == game::AreaAnimationKind::Smoke) {
+        if (game::should_replace_animation_draw(info.resrefView(), info.kind)) {
           return;  // replaced by the shader's point effects
         }
       }

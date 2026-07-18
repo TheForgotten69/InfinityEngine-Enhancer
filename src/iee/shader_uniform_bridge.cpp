@@ -35,7 +35,7 @@ std::atomic<std::uint64_t> g_stateRevision{1};
 // render-thread feed). The array cannot be atomic; a mutex plus its own
 // revision keeps the feed's copy coherent and cheap when unchanged.
 std::mutex g_effectPointsMutex;
-std::array<float, kMaxEffectPoints * 4> g_effectPoints{};
+std::array<float, kMaxEffectPoints * kEffectPointFloats> g_effectPoints{};
 std::size_t g_effectPointCount{0};
 std::atomic<std::uint64_t> g_effectPointsRevision{1};
 std::atomic<std::uint64_t> g_performanceCalls{0};
@@ -157,16 +157,17 @@ void set_effect_points(const float* xyzw, std::size_t count) noexcept {
     const auto clamped = (std::min)(count, kMaxEffectPoints);
     std::lock_guard lock(g_effectPointsMutex);
     if (clamped == g_effectPointCount &&
-        (clamped == 0 ||
-         std::memcmp(g_effectPoints.data(), xyzw, clamped * 4 * sizeof(float)) == 0)) {
+        (clamped == 0 || std::memcmp(g_effectPoints.data(), xyzw,
+                                     clamped * kEffectPointFloats * sizeof(float)) == 0)) {
       return;
     }
     g_effectPointCount = clamped;
     if (clamped > 0 && xyzw) {
-      std::memcpy(g_effectPoints.data(), xyzw, clamped * 4 * sizeof(float));
+      std::memcpy(g_effectPoints.data(), xyzw, clamped * kEffectPointFloats * sizeof(float));
     }
-    std::fill(g_effectPoints.begin() + static_cast<std::ptrdiff_t>(clamped * 4),
-              g_effectPoints.end(), 0.0f);
+    std::fill(
+        g_effectPoints.begin() + static_cast<std::ptrdiff_t>(clamped * kEffectPointFloats),
+        g_effectPoints.end(), 0.0f);
     g_effectPointsRevision.fetch_add(1, std::memory_order_release);
     advance_state_revision();
   } catch (...) {
@@ -321,7 +322,7 @@ void feed(unsigned program, Locations& locations) {
   const auto pointsRevision = g_effectPointsRevision.load(std::memory_order_acquire);
   if (locations.lastPointsRevision != pointsRevision &&
       (locations.pointCount >= 0 || locations.points >= 0)) {
-    std::array<float, kMaxEffectPoints * 4> points{};
+    std::array<float, kMaxEffectPoints * kEffectPointFloats> points{};
     std::size_t pointCount = 0;
     {
       std::lock_guard lock(g_effectPointsMutex);
@@ -332,7 +333,7 @@ void feed(unsigned program, Locations& locations) {
       gl.glUniform1f(locations.pointCount, static_cast<float>(pointCount));
     }
     if (locations.points >= 0 && gl.glUniform4fv) {
-      gl.glUniform4fv(locations.points, static_cast<int>(kMaxEffectPoints), points.data());
+      gl.glUniform4fv(locations.points, static_cast<int>(kMaxEffectPoints * 2), points.data());
     }
     if (locations.lastPointsRevision == 0) {
       LOG_DEBUG(

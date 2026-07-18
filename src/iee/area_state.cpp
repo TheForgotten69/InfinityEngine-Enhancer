@@ -200,7 +200,7 @@ void refresh_area_animations(AppContext& ctx, const game::CGameArea* area,
         return;
       }
       ctx.areaAnimations.store(snapshot);
-      static_assert(sizeof(game::AreaEffectPoint) == 4 * sizeof(float));
+      static_assert(sizeof(game::AreaEffectPoint) == 8 * sizeof(float));
       probe::set_area_effect_points(
           effectPoints.empty() ? nullptr : &effectPoints.front().x, effectPoints.size());
     }
