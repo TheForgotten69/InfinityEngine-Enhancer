@@ -238,10 +238,11 @@ bool parse_are_animations(const std::byte* data, std::size_t size,
 }
 
 namespace {
-// Authored flame draw geometry, extracted from the game BAM frame tables
-// (frame size w/h and center offsets cx/cy; the engine draws the frame's
-// top-left at anchor-(cx,cy)). dx/dy move the anchor to the drawn flame's
-// bottom-center; height/halfWidth are the authored footprint in world px.
+// Authored flame sizes, extracted from the game BAM frame tables. Placement
+// evidence (ALIGN markers land on the sconce bowls; frame-box-derived
+// offsets rendered flames below the bowls) says the ARE anchor is already
+// the flame's base point, so dx/dy stay minimal and only the authored
+// footprint varies per family.
 struct FlameGeometry {
   std::string_view resref;
   float dx;
@@ -250,17 +251,17 @@ struct FlameGeometry {
   float halfWidth;
 };
 constexpr FlameGeometry kFlameGeometry[] = {
-    {"FLAMBLU2", 4.0f, 15.0f, 15.0f, 4.0f}, {"FLMS", 0.0f, 3.0f, 5.0f, 1.5f},
-    {"FLMSW", 0.0f, 3.0f, 5.0f, 1.5f},      {"FLSM1W", 0.0f, 10.0f, 20.0f, 10.0f},
-    {"FLSM2W", 0.0f, 20.0f, 40.0f, 20.0f},  {"FLSM1RED", 9.0f, 19.0f, 20.0f, 10.0f},
-    {"FLM1RED1", 0.0f, 4.0f, 20.0f, 10.0f}, {"FLML", 1.0f, 11.0f, 21.0f, 5.0f},
-    {"FLMM", 1.0f, 8.0f, 15.0f, 4.0f},      {"YSFLBLU2", 0.0f, 0.0f, 15.0f, 4.0f},
-    {"FIM1YLN1", 0.0f, 5.0f, 25.0f, 12.0f}, {"FIM2YLN2", 0.0f, 8.0f, 50.0f, 25.0f},
-    {"FIRE", -6.0f, 30.0f, 48.0f, 6.0f},    {"FLAME2S", 0.0f, 3.0f, 12.0f, 6.0f},
-    {"FLAME2L", 0.0f, 10.0f, 29.0f, 6.0f},  {"FPIT1S", 0.0f, 13.0f, 24.0f, 14.0f},
-    {"FIRE_1", 1.0f, 25.0f, 50.0f, 17.0f},  {"FIRE_4", 0.0f, 15.0f, 27.0f, 7.0f},
+    {"FLAMBLU2", 0.0f, 2.0f, 15.0f, 4.0f},  {"FLMS", 0.0f, 2.0f, 5.0f, 1.5f},
+    {"FLMSW", 0.0f, 2.0f, 5.0f, 1.5f},      {"FLSM1W", 0.0f, 2.0f, 20.0f, 10.0f},
+    {"FLSM2W", 0.0f, 2.0f, 40.0f, 20.0f},   {"FLSM1RED", 0.0f, 2.0f, 20.0f, 10.0f},
+    {"FLM1RED1", 0.0f, 2.0f, 20.0f, 10.0f}, {"FLML", 0.0f, 2.0f, 21.0f, 5.0f},
+    {"FLMM", 0.0f, 2.0f, 15.0f, 4.0f},      {"YSFLBLU2", 0.0f, 2.0f, 15.0f, 4.0f},
+    {"FIM1YLN1", 0.0f, 2.0f, 25.0f, 12.0f}, {"FIM2YLN2", 0.0f, 2.0f, 50.0f, 25.0f},
+    {"FIRE", 0.0f, 2.0f, 48.0f, 6.0f},      {"FLAME2S", 0.0f, 2.0f, 12.0f, 6.0f},
+    {"FLAME2L", 0.0f, 2.0f, 29.0f, 6.0f},   {"FPIT1S", 0.0f, 2.0f, 24.0f, 14.0f},
+    {"FIRE_1", 0.0f, 2.0f, 50.0f, 17.0f},   {"FIRE_4", 0.0f, 2.0f, 27.0f, 7.0f},
 };
-constexpr FlameGeometry kDefaultFlameGeometry{"", 0.0f, 4.0f, 34.0f, 8.0f};
+constexpr FlameGeometry kDefaultFlameGeometry{"", 0.0f, 2.0f, 34.0f, 8.0f};
 
 const FlameGeometry& flame_geometry_for(std::string_view resref) noexcept {
   for (const auto& entry : kFlameGeometry) {

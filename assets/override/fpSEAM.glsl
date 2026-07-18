@@ -304,15 +304,12 @@ void main()
 		return;
 	}
 
-	// Ambient point effects: computed before sampling so heat shimmer can
-	// ride the one seamSample call as a texture-coordinate offset. Base pass
-	// only; the WATER_ALPHA secondary pass and fades stay vanilla. Kept as
-	// flat locals (no struct/function) for maximum GLSL-frontend
-	// compatibility.
+	// Ambient point effects. Base pass only; the WATER_ALPHA secondary pass
+	// and fades stay vanilla. Kept as flat locals (no struct/function) for
+	// maximum GLSL-frontend compatibility.
 	vec3 fxGlow = vec3(0.0);
 	vec3 fxFlame = vec3(0.0);
 	float fxFlameA = 0.0;
-	float fxShimmer = 0.0;
 	float fxHaze = 0.0;
 	if (uIeeEnabled > 0.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
 	{
@@ -377,7 +374,6 @@ void main()
 							fxFlame = flame;
 						}
 					}
-					fxShimmer += column * 0.5 * strength;
 				}
 
 				// --- cast light on the surroundings ---
@@ -442,22 +438,14 @@ void main()
 				}
 			}
 		}
-		fxShimmer = clamp(fxShimmer, 0.0, 1.0);
 		fxHaze = clamp(fxHaze, 0.0, 0.62);
 	}
 
-	vec2 sampleTc = vTc;
-	if (fxShimmer > 0.01)
-	{
-		// Small wavering refraction above flames; uTcScale converts the
-		// world-pixel amplitude into atlas units, so the offset stays within
-		// the seam handling's tolerance.
-		vec2 wobble = vec2(sin(uIeeTime * 13.0 + worldPos.y * 0.35),
-		                   cos(uIeeTime * 11.0 + worldPos.x * 0.30));
-		sampleTc += wobble * fxShimmer * 1.4 * uTcScale;
-	}
-
-	vec4 texColor = seamSample(sampleTc);
+	// No heat-shimmer UV distortion here: offsetting the atlas coordinate
+	// can cross a tile boundary and sample unrelated atlas content (a
+	// vertical smear-seam in the art). Shimmer belongs to a future
+	// world-space pass, not the tile pass.
+	vec4 texColor = seamSample(vTc);
 
 	// Inside flagged cells the engine draws the
 	// base tile with TRANSPARENT pixels exactly where water composites
