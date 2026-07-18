@@ -240,19 +240,19 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
   std::vector<AreaEffectPoint> points;
   points.reserve((std::min)(info.animations.size(), kMaxAreaEffectPoints));
 
+  // Flame strength is authored-height / 76px, calibrated against the real
+  // BAM frame dimensions (FIRE* torch flames ~12x45, FLAM* sconces ~10x30,
+  // YSFL*/small flames ~7x14, FLMS candle 2x5, fire pits the full body).
   const auto strengthFor = [](const AreaAnimationInfo& animation) noexcept {
     switch (animation.kind) {
       case AreaAnimationKind::Fire: {
-        // Flame scale by authored family: wall sconces and small flames stay
-        // small, fire pits and campfires get the full body.
         const auto resref = animation.resrefView();
-        if (resref.starts_with("FLM") || resref.starts_with("FLSM") || resref.starts_with("FIM") ||
-            resref.starts_with("YSFL")) {
-          return 0.55f;
-        }
-        if (resref.starts_with("FLAM")) return 0.7f;
-        if (resref.starts_with("FPIT")) return 1.15f;
-        return 1.0f;
+        if (resref.starts_with("FPIT")) return 1.0f;
+        if (resref.starts_with("FIRE")) return 0.62f;
+        if (resref.starts_with("FLAM")) return 0.44f;
+        if (resref.starts_with("FLM") || resref.starts_with("FLSM")) return 0.30f;
+        if (resref.starts_with("YSFL") || resref.starts_with("FIM")) return 0.26f;
+        return 0.5f;
       }
       case AreaAnimationKind::Smoke:
         return 1.0f;
@@ -261,6 +261,17 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
       default:
         return 0.0f;
     }
+  };
+
+  // Authored flame colors survive the replacement: the kind's fractional
+  // digit carries a palette id the shader decodes (0 = warm, 1 = blue).
+  const auto kindValueFor = [](const AreaAnimationInfo& animation) noexcept {
+    float value = static_cast<float>(static_cast<int>(animation.kind));
+    if (animation.kind == AreaAnimationKind::Fire &&
+        animation.resrefView().find("BLU") != std::string_view::npos) {
+      value += 0.1f;
+    }
+    return value;
   };
 
   // Fire carries the effect's visual identity; when an area exceeds the
@@ -272,8 +283,7 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
       if (animation.kind != pass || !animation.isShown()) continue;
       if (points.size() >= kMaxAreaEffectPoints) return points;
       points.push_back(AreaEffectPoint{static_cast<float>(animation.x),
-                                       static_cast<float>(animation.y),
-                                       static_cast<float>(static_cast<int>(animation.kind)),
+                                       static_cast<float>(animation.y), kindValueFor(animation),
                                        strengthFor(animation)});
     }
   }

@@ -654,3 +654,13 @@ git push https://github.com/TheForgotten69/InfinityEngine-Enhancer.git feat/phas
 - The one acknowledged unknown is the world-position equation; Task 6 + runbook step 3 exist precisely to measure it, and fixes are uniform-side (no shader redesign).
 - Type consistency: `pack_area_liquid_texture` returns `AreaCellTexture` (Task 1) consumed in Task 2; `set_area_world_size`/`set_area_scroll_zoom` declared Task 3, called Tasks 2/4; `g_overrideEffectValue` conversion is self-contained in Task 6.
 ```
+
+## Follow-up backlog (post-baseline observations)
+
+- 2026-07-18 (owner, in-game 2.7.3, v20+ baseline): some water cells/bands
+  render noticeably MORE TRANSPARENT than the main strongly-opaque water
+  body — likely the WATER_ALPHA secondary-pass suppression interacting with
+  cells whose only water contribution came from that pass, or alpha
+  differences across mask-boundary cells. Water is otherwise still correct.
+  Needs a dedicated alpha-consistency pass; do not fold it into unrelated
+  point-effect work.

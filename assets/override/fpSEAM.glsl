@@ -324,35 +324,46 @@ void main()
 
 			if (kind < 1.5) // fire: textured flame body + cast light + shimmer
 			{
-				float fw = 21.0 * strength;   // half-width at the base
-				float fh = 76.0 * strength;   // flame height above the anchor
+				// Sized from the authored BAM frames: strength = height / 76,
+				// width follows the authored ~1:3.5 aspect.
+				float fh = 76.0 * strength;         // flame height above the anchor
+				float fw = 3.5 + 0.16 * fh;         // half-width at the base
+				float blue = fract(kind) * 10.0;    // palette id: >0.5 = blue flame
 
 				// --- flame body (replaces the engine's BAM flame) ---
-				if (offs.y < 16.0 && offs.y > -fh * 1.25 && abs(offs.x) < fw * 2.4)
+				if (offs.y < 8.0 && offs.y > -fh * 1.3 && abs(offs.x) < fw * 2.6)
 				{
 					float v = clamp(-offs.y / fh, 0.0, 1.2);   // 0 base -> 1 tip
-					float widthAt = fw * (1.05 - 0.62 * min(v, 1.0));
+					float widthAt = fw * (1.05 - 0.60 * min(v, 1.0));
 					float xr = offs.x / max(widthAt, 1.0);
 					float radial = 1.0 - clamp(xr * xr, 0.0, 1.0);
-					float base = smoothstep(14.0, 0.0, offs.y);
-					float column = radial * base * smoothstep(1.18, 0.55, v);
+					float base = smoothstep(8.0, -1.0, offs.y);
+					float column = radial * base * smoothstep(1.20, 0.50, v);
 					// Rising noise erodes the column: calm base, ragged tip.
+					// Sample scale follows the flame size so small flames keep
+					// visible structure.
+					float ns = max(fh, 14.0);
 					float seed = p.x * 0.61 + float(i) * 19.0;
 					float nA = texture2D(uIeeNoiseMap,
-					              vec2((seed + offs.x) / 46.0, (offs.y + fxT * 95.0) / 68.0)).r;
+					              vec2((seed + offs.x) / (ns * 0.62),
+					                   (offs.y + fxT * ns * 1.35) / (ns * 0.9))).r;
 					float nB = texture2D(uIeeNoiseMap,
-					              vec2((seed * 0.37 - offs.x) / 27.0, (offs.y + fxT * 150.0) / 39.0)).b;
-					float intensity = column * (1.25 - v * 0.55)
-					                - (nA * 0.72 + nB * 0.55) * (0.28 + 0.9 * v);
-					intensity = clamp(intensity * 2.1, 0.0, 1.0);
+					              vec2((seed * 0.37 - offs.x) / (ns * 0.36),
+					                   (offs.y + fxT * ns * 2.1) / (ns * 0.52))).b;
+					float intensity = column * (1.15 - v * 0.5)
+					                - (nA * 0.78 + nB * 0.60) * (0.36 + 0.95 * v);
+					intensity = clamp(intensity * 1.75, 0.0, 1.0);
 					if (intensity > 0.02)
 					{
-						// Blackbody-style ramp: deep red -> orange -> yellow -> near white.
-						vec3 flame = mix(vec3(0.45, 0.02, 0.0), vec3(1.0, 0.30, 0.02),
-						                 smoothstep(0.02, 0.34, intensity));
-						flame = mix(flame, vec3(1.0, 0.72, 0.18), smoothstep(0.34, 0.68, intensity));
-						flame = mix(flame, vec3(1.05, 0.98, 0.80), smoothstep(0.68, 0.94, intensity));
-						float a = smoothstep(0.04, 0.32, intensity);
+						// Ramp: deep -> mid -> bright -> hot core (kept small).
+						vec3 c0 = mix(vec3(0.42, 0.02, 0.0), vec3(0.01, 0.06, 0.42), blue);
+						vec3 c1 = mix(vec3(1.0, 0.28, 0.02), vec3(0.08, 0.38, 0.95), blue);
+						vec3 c2 = mix(vec3(1.0, 0.70, 0.16), vec3(0.45, 0.75, 1.0), blue);
+						vec3 c3 = mix(vec3(1.02, 0.95, 0.72), vec3(0.85, 0.95, 1.05), blue);
+						vec3 flame = mix(c0, c1, smoothstep(0.02, 0.38, intensity));
+						flame = mix(flame, c2, smoothstep(0.38, 0.74, intensity));
+						flame = mix(flame, c3, smoothstep(0.80, 0.97, intensity));
+						float a = smoothstep(0.03, 0.30, intensity);
 						if (a > fxFlameA)
 						{
 							fxFlameA = a;
@@ -364,8 +375,8 @@ void main()
 
 				// --- cast light on the surroundings ---
 				vec2 g = offs;
-				g.y += 26.0 * strength;  // center the light on the flame body
-				float radius = 120.0 * strength;
+				g.y += fh * 0.4;  // center the light on the flame body
+				float radius = 42.0 + 85.0 * strength;
 				float d = length(g);
 				if (d < radius)
 				{
@@ -374,32 +385,34 @@ void main()
 					float fi = float(i) * 7.31;
 					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
 					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
-					fxGlow += vec3(1.0, 0.45, 0.15) * (fall * 0.75 * strength * flick);
+					vec3 glowColor = mix(vec3(1.0, 0.45, 0.15), vec3(0.30, 0.55, 1.0),
+					                     step(0.5, blue));
+					fxGlow += glowColor * (fall * (0.30 + 0.55 * strength) * flick);
 				}
 			}
 			else if (kind < 2.5) // smoke: textured plume replacing the BAM puffs
 			{
-				float height = 220.0 * strength;
+				float height = 170.0 * strength;
 				float rise = -offs.y; // px above the source
-				if (rise > -12.0 && rise < height)
+				if (rise > -10.0 && rise < height)
 				{
 					float prog = rise / height;
 					float seed = p.x * 0.37 + float(i) * 11.0;
 					// Slow lateral wander that grows with altitude.
 					float sway = (texture2D(uIeeNoiseMap,
 					                 vec2(seed / 64.0 + fxT * 0.045, prog * 1.7)).a - 0.5)
-					             * (12.0 + 80.0 * prog);
-					float widthPx = 15.0 + 62.0 * prog;
+					             * (8.0 + 34.0 * prog);
+					float widthPx = 11.0 + 26.0 * prog;
 					float lateral = (offs.x - sway) / widthPx;
-					float across = exp(-lateral * lateral * 1.7);
+					float across = exp(-lateral * lateral * 1.9);
 					// Two scrolling octaves shape the billows.
 					float dA = texture2D(uIeeNoiseMap,
-					              vec2((offs.x + seed) / 110.0, (offs.y + fxT * 46.0) / 110.0)).g;
+					              vec2((offs.x + seed) / 96.0, (offs.y + fxT * 42.0) / 96.0)).g;
 					float dB = texture2D(uIeeNoiseMap,
-					              vec2((offs.x - seed) / 56.0, (offs.y + fxT * 72.0) / 56.0)).r;
-					float density = clamp(dA * 0.80 + dB * 0.55 - 0.30, 0.0, 1.0);
-					float along = smoothstep(-12.0, 14.0, rise) * (1.0 - prog);
-					fxHaze += across * along * density * 1.05 * strength;
+					              vec2((offs.x - seed) / 48.0, (offs.y + fxT * 66.0) / 48.0)).r;
+					float density = clamp(dA * 0.80 + dB * 0.55 - 0.38, 0.0, 1.0);
+					float along = smoothstep(-10.0, 12.0, rise) * (1.0 - prog);
+					fxHaze += across * along * density * 0.62 * strength;
 				}
 			}
 			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
@@ -416,7 +429,7 @@ void main()
 			}
 		}
 		fxShimmer = clamp(fxShimmer, 0.0, 1.0);
-		fxHaze = clamp(fxHaze, 0.0, 0.9);
+		fxHaze = clamp(fxHaze, 0.0, 0.62);
 	}
 
 	vec2 sampleTc = vTc;
@@ -544,9 +557,10 @@ void main()
 		float castLight = (0.05 + 0.45 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0))) * hasArt;
 		lin = lin * (vec3(1.0) + fxGlow * 1.5) + fxGlow * castLight;
 		// Smoke veil: moonlit smoke over dark roofs, shadowy over bright
-		// ground; never over the void.
+		// ground. Not art-gated — a per-texel luma gate mottles dark stone,
+		// and smoke drifting over the night sky reads naturally.
 		vec3 hazeTarget = vec3(0.40, 0.40, 0.45) * (0.40 + 0.55 * sceneLuma) + vec3(0.02);
-		lin = mix(lin, hazeTarget, fxHaze * hasArt);
+		lin = mix(lin, hazeTarget, fxHaze);
 		// Flame body composites over everything with its own self-glow;
 		// flames are visible against the void (a fire at a cave mouth), so it
 		// is deliberately not art-gated.
