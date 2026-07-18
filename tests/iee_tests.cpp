@@ -1636,7 +1636,7 @@ void test_build_area_effect_points() {
   add(AreaAnimationKind::Smoke, "CHIMSMK", 10, true);
   add(AreaAnimationKind::Smoke, "AM6004A", 15, true);   // authored plume art: no point
   add(AreaAnimationKind::Fire, "FIRE_4", 20, true);
-  add(AreaAnimationKind::Fire, "FLAMBLU2", 25, true);   // blue palette + draw-box shift
+  add(AreaAnimationKind::Fire, "flamblu2", 25, true);   // live lowercase resref: blue + shift
   add(AreaAnimationKind::Fire, "AM5204C", 28, true);    // hearth overlay: glow only
   add(AreaAnimationKind::Fire, "FIRE_4", 30, false);    // hidden: excluded
   add(AreaAnimationKind::Light, "FLMS", 40, true);

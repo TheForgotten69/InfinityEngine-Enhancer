@@ -289,7 +289,7 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
   std::vector<AreaEffectPoint> points;
   points.reserve((std::min)(info.animations.size(), kMaxAreaEffectPoints));
 
-  const auto makePoint = [](const AreaAnimationInfo& animation) noexcept
+  const auto makePoint = [](const AreaAnimationInfo& animation)
       -> std::optional<AreaEffectPoint> {
     AreaEffectPoint point{};
     point.x = static_cast<float>(animation.x);
@@ -306,11 +306,13 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
           point.halfWidth = 10.0f;
           return point;
         }
-        const auto& geometry = flame_geometry_for(resref);
+        // Live resrefs keep their authored casing (e.g. "flamblu2"); the
+        // geometry table and palette match on the uppercased form.
+        const auto upper = upper_copy(resref);
+        const auto& geometry = flame_geometry_for(upper);
         point.x += geometry.dx;
         point.y += geometry.dy;
-        point.reserved1 =
-            resref.find("BLU") != std::string_view::npos ? 1.0f : 0.0f;  // palette id
+        point.reserved1 = upper.find("BLU") != std::string::npos ? 1.0f : 0.0f;  // palette id
         point.height = geometry.height;
         point.halfWidth = geometry.halfWidth;
         return point;

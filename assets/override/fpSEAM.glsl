@@ -384,7 +384,9 @@ void main()
 				// Elliptical footprint (isometric floor projection) with
 				// noise dapple so the pool reads as firelight, not a disc.
 				vec2 g = offs;
-				g.y += fh * 0.35;
+				// Glow-only overlays (hearths) anchor at the art's floor
+				// edge; center their light well up onto the coals.
+				g.y += fh * (bodyless ? 0.85 : 0.35);
 				g.y *= 1.9;
 				float radius = 40.0 + 80.0 * strength;
 				float d = length(g);
