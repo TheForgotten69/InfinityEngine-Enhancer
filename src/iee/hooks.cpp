@@ -23,6 +23,7 @@ namespace iee::hooks {
 using LoadAreaFn = void* (*)(void*, void*, unsigned char, unsigned char, unsigned char);
 using RenderTextureFn = void (*)(void*, int, void*, int, int, unsigned long);
 using DrawColorToneFn = void (*)(int);
+using StaticRenderFn = void (*)(void*, void*, void*);
 
 // Hook management - initialize MinHook
 // Intentionally explicit lifetime: a static smart-pointer destructor would
@@ -31,6 +32,7 @@ static core::HookInit* g_hookInit = nullptr;
 static core::Hook<LoadAreaFn> g_loadAreaHook;
 static core::Hook<RenderTextureFn> g_renderTextureHook;
 static core::Hook<DrawColorToneFn> g_drawColorToneHook;
+static core::Hook<StaticRenderFn> g_staticRenderHook;
 
 static AppContext* g_ctx = nullptr;
 
@@ -275,6 +277,33 @@ static void detour_draw_color_tone(int mode) {
   g_drawColorToneHook.original()(mode);
 }
 
+// CGameStatic::Render hook: while the fpSEAM point effects are active, the
+// authored fire/smoke BAM draws are replaced by our textured effects, so the
+// engine's own little flame/puff loops are skipped. Everything else (lights,
+// wildlife, WBM/PVRZ setpieces, unclassified overlays) renders vanilla.
+static void detour_static_render(void* thisPtr, void* area, void* vidMode) {
+  try {
+    if (g_ctx && g_ctx->cfg.enablePointEffects && g_ctx->cfg.enableWaterEffect &&
+        probe::override_effect_enabled() && thisPtr) {
+      game::ARE_Animation_st header{};
+      const auto* headerAddress =
+          reinterpret_cast<const std::byte*>(thisPtr) + offsetof(game::CGameStatic, m_header);
+      if (core::safe_read(headerAddress, header) &&
+          (header.nFlags &
+           (game::kAreAnimationFlagUseWbm | game::kAreAnimationFlagUsePvrz)) == 0) {
+        const auto info = game::make_area_animation_info(header);
+        if (info.kind == game::AreaAnimationKind::Fire ||
+            info.kind == game::AreaAnimationKind::Smoke) {
+          return;  // replaced by the shader's point effects
+        }
+      }
+    }
+  } catch (...) {
+    // Suppression is cosmetic; any doubt falls through to the engine draw.
+  }
+  g_staticRenderHook.original()(thisPtr, area, vidMode);
+}
+
 // RenderTexture hook - thin dispatch into the tile upscale feature
 static void detour_render_texture(void* thisPtr, int texId, void* unused, int x, int y,
                                   unsigned long flags) {
@@ -350,6 +379,20 @@ bool install_all(AppContext& ctx) {
           "transform cannot be published safely. Tile upscaling remains enabled.");
     }
 
+    if (ctx.addrs.StaticRender) {
+      try {
+        g_staticRenderHook.create(reinterpret_cast<void*>(ctx.addrs.StaticRender),
+                                  reinterpret_cast<void*>(&detour_static_render));
+        g_staticRenderHook.enable();
+        LOG_INFO("CGameStatic::Render hook installed (fire/smoke BAM replacement)");
+      } catch (const std::exception& e) {
+        LOG_WARN("CGameStatic::Render hook failed ({}); authored fire/smoke draws stay vanilla",
+                 e.what());
+      } catch (...) {
+        LOG_WARN("CGameStatic::Render hook failed; authored fire/smoke draws stay vanilla");
+      }
+    }
+
     g_loadAreaHook.enable();
     LOG_INFO("LoadArea hook enabled");
 
@@ -364,6 +407,7 @@ bool install_all(AppContext& ctx) {
     return true;
   } catch (const std::exception& e) {
     LOG_ERROR("Exception during hook installation: {}", e.what());
+    (void)g_staticRenderHook.remove();
     (void)g_drawColorToneHook.remove();
     (void)g_renderTextureHook.remove();
     (void)g_loadAreaHook.remove();
@@ -373,6 +417,7 @@ bool install_all(AppContext& ctx) {
     return false;
   } catch (...) {
     LOG_ERROR("Unknown exception during hook installation");
+    (void)g_staticRenderHook.remove();
     (void)g_drawColorToneHook.remove();
     (void)g_renderTextureHook.remove();
     (void)g_loadAreaHook.remove();
@@ -389,6 +434,7 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_staticRenderHook.remove();
   (void)g_drawColorToneHook.remove();
   (void)g_renderTextureHook.remove();
   (void)g_loadAreaHook.remove();
@@ -408,6 +454,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_staticRenderHook.disable();
   (void)g_drawColorToneHook.disable();
   (void)g_renderTextureHook.disable();
   (void)g_loadAreaHook.disable();

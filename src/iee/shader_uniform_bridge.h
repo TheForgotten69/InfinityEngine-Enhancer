@@ -24,6 +24,7 @@ struct Locations {
   int normalMap{kUnresolved};
   int dudvMap{kUnresolved};
   int foamMap{kUnresolved};
+  int noiseMap{kUnresolved};
 
   bool samplersInitialized{};
   bool viewInitialized{};

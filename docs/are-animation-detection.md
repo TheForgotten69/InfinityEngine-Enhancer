@@ -18,10 +18,18 @@ them, and publishes an immutable snapshot (`AppContext::areaAnimations`).
 
 The first consumer is the fpSEAM point-effects pass: the snapshot's shown
 fire/smoke/light entries are packed into a 32-slot `uIeePoints[]` uniform
-array (`build_area_effect_points`, fire prioritized under capacity pressure)
-and fed through the existing uniform bridge. The shader renders warm
-flickering fire glow with heat shimmer above flames, drifting chimney-smoke
-haze columns, and steady candle/glow halos — background layer only, gated by
+array (`build_area_effect_points`, fire prioritized under capacity pressure,
+per-resref flame scale) and fed through the existing uniform bridge. The
+shader draws textured **replacements**, not just halos: shaped flame bodies
+eroded by rising FBM noise with a blackbody color ramp, heat shimmer, and
+night-adaptive cast light; noise-billowed smoke plumes that wander and
+dissipate with altitude; steady candle/glow halos. The tileable FBM octaves
+ship as `iee_effects_noise.rgba` (unit 6, generated in-repo — see
+`assets/game-textures/`). While the effect is active, a `CGameStatic::Render`
+hook (manifest pattern, offline-verified on both builds: RVA `0x1F2570` /
+`0x1F27D0`) suppresses the engine's authored fire/smoke BAM draws so the
+replacements own the pixels; WBM/PVRZ setpieces and every other kind stay
+vanilla, and any resolution failure just keeps the engine draws. Gated by
 `[Shaders] EnablePointEffects` and the F10 master toggle. Effects that must
 composite over sprites (true bloom) remain future P4 work consuming the same
 points.

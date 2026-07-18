@@ -36,6 +36,10 @@ struct PatternSet {
   // globals for the ARE-animation memory path. Empty (or a non-unique match
   // at runtime) disables that path — the disk reader remains the fallback.
   std::string_view objectArrayGetShare{};
+  // Optional: CGameStatic::Render. Hooked to suppress the engine's authored
+  // fire/smoke BAM draws while the fpSEAM point effects replace them. Empty
+  // or non-unique keeps the engine draws (effects stay additive).
+  std::string_view staticRender{};
 };
 
 struct ReferenceRvas {
@@ -43,6 +47,7 @@ struct ReferenceRvas {
   std::uintptr_t renderTexture{};
   // Diagnostic only; 0 means "not yet observed on this build".
   std::uintptr_t objectArrayGetShare{};
+  std::uintptr_t staticRender{};
 };
 
 struct RuntimeOffsets {

@@ -28,6 +28,7 @@ uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: one liquid mode per 64px WE
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
 uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
+uniform lowp	sampler2D	uIeeNoiseMap;      // unit 6: tiling FBM octaves (R/G smooth, B high-freq, A blobs)
 
 varying highp	vec2		vTc;
 varying highp	vec2		vRef;
@@ -306,6 +307,8 @@ void main()
 	// flat locals (no struct/function) for maximum GLSL-frontend
 	// compatibility.
 	vec3 fxGlow = vec3(0.0);
+	vec3 fxFlame = vec3(0.0);
+	float fxFlameA = 0.0;
 	float fxShimmer = 0.0;
 	float fxHaze = 0.0;
 	if (uIeeEnabled > 0.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
@@ -319,46 +322,84 @@ void main()
 			float kind = p.z;
 			float strength = p.w;
 
-			if (kind < 1.5) // fire: warm flickering glow + heat shimmer above
+			if (kind < 1.5) // fire: textured flame body + cast light + shimmer
 			{
-				// The ARE anchor sits below the visible flame (BAM frames draw
-				// upward from it); bias the glow center up onto the fire.
-				offs.y += 24.0 * strength;
-				float radius = 140.0 * strength;
-				float d = length(offs);
+				float fw = 21.0 * strength;   // half-width at the base
+				float fh = 76.0 * strength;   // flame height above the anchor
+
+				// --- flame body (replaces the engine's BAM flame) ---
+				if (offs.y < 16.0 && offs.y > -fh * 1.25 && abs(offs.x) < fw * 2.4)
+				{
+					float v = clamp(-offs.y / fh, 0.0, 1.2);   // 0 base -> 1 tip
+					float widthAt = fw * (1.05 - 0.62 * min(v, 1.0));
+					float xr = offs.x / max(widthAt, 1.0);
+					float radial = 1.0 - clamp(xr * xr, 0.0, 1.0);
+					float base = smoothstep(14.0, 0.0, offs.y);
+					float column = radial * base * smoothstep(1.18, 0.55, v);
+					// Rising noise erodes the column: calm base, ragged tip.
+					float seed = p.x * 0.61 + float(i) * 19.0;
+					float nA = texture2D(uIeeNoiseMap,
+					              vec2((seed + offs.x) / 46.0, (offs.y + fxT * 95.0) / 68.0)).r;
+					float nB = texture2D(uIeeNoiseMap,
+					              vec2((seed * 0.37 - offs.x) / 27.0, (offs.y + fxT * 150.0) / 39.0)).b;
+					float intensity = column * (1.25 - v * 0.55)
+					                - (nA * 0.72 + nB * 0.55) * (0.28 + 0.9 * v);
+					intensity = clamp(intensity * 2.1, 0.0, 1.0);
+					if (intensity > 0.02)
+					{
+						// Blackbody-style ramp: deep red -> orange -> yellow -> near white.
+						vec3 flame = mix(vec3(0.45, 0.02, 0.0), vec3(1.0, 0.30, 0.02),
+						                 smoothstep(0.02, 0.34, intensity));
+						flame = mix(flame, vec3(1.0, 0.72, 0.18), smoothstep(0.34, 0.68, intensity));
+						flame = mix(flame, vec3(1.05, 0.98, 0.80), smoothstep(0.68, 0.94, intensity));
+						float a = smoothstep(0.04, 0.32, intensity);
+						if (a > fxFlameA)
+						{
+							fxFlameA = a;
+							fxFlame = flame;
+						}
+					}
+					fxShimmer += column * 0.5 * strength;
+				}
+
+				// --- cast light on the surroundings ---
+				vec2 g = offs;
+				g.y += 26.0 * strength;  // center the light on the flame body
+				float radius = 120.0 * strength;
+				float d = length(g);
 				if (d < radius)
 				{
 					float fall = 1.0 - d / radius;
-					// Fuller mid-falloff with a hot core.
-					fall = fall * fall * (0.55 + 0.45 * fall) + 0.6 * smoothstep(0.75, 1.0, fall);
-					// Two-rate flicker, unsynchronized between points.
+					fall *= fall;
 					float fi = float(i) * 7.31;
-					float flick = 0.78 + 0.16 * sin(fxT * 9.7 + fi)
-					                   + 0.08 * sin(fxT * 23.0 + fi * 1.7);
-					fxGlow += vec3(1.0, 0.45, 0.15) * (fall * 0.85 * strength * flick);
-					// Shimmer only above the flame (world y grows downward).
-					float above = clamp(-offs.y / (radius * 0.9), 0.0, 1.0);
-					fxShimmer += fall * above * strength;
+					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
+					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
+					fxGlow += vec3(1.0, 0.45, 0.15) * (fall * 0.75 * strength * flick);
 				}
 			}
-			else if (kind < 2.5) // smoke: drifting haze column rising from the point
+			else if (kind < 2.5) // smoke: textured plume replacing the BAM puffs
 			{
-				float height = 200.0 * strength;
+				float height = 220.0 * strength;
 				float rise = -offs.y; // px above the source
-				if (rise > -14.0 && rise < height)
+				if (rise > -12.0 && rise < height)
 				{
-					float sway = sin(fxT * 0.9 + rise * 0.04 + float(i)) * (7.0 + rise * 0.18);
-					float lateral = abs(offs.x - sway);
-					float widthPx = 18.0 + rise * 0.35;
-					if (lateral < widthPx * 2.0)
-					{
-						float across = exp(-(lateral * lateral) / (widthPx * widthPx));
-						float along = smoothstep(-14.0, 16.0, rise) * (1.0 - rise / height);
-						float puff = ieeNoise(vec2(worldPos.x * 0.045,
-						                           (worldPos.y + fxT * 40.0) * 0.045)
-						                      + vec2(float(i)));
-						fxHaze += across * along * (0.40 + 0.60 * puff) * 0.80 * strength;
-					}
+					float prog = rise / height;
+					float seed = p.x * 0.37 + float(i) * 11.0;
+					// Slow lateral wander that grows with altitude.
+					float sway = (texture2D(uIeeNoiseMap,
+					                 vec2(seed / 64.0 + fxT * 0.045, prog * 1.7)).a - 0.5)
+					             * (12.0 + 80.0 * prog);
+					float widthPx = 15.0 + 62.0 * prog;
+					float lateral = (offs.x - sway) / widthPx;
+					float across = exp(-lateral * lateral * 1.7);
+					// Two scrolling octaves shape the billows.
+					float dA = texture2D(uIeeNoiseMap,
+					              vec2((offs.x + seed) / 110.0, (offs.y + fxT * 46.0) / 110.0)).g;
+					float dB = texture2D(uIeeNoiseMap,
+					              vec2((offs.x - seed) / 56.0, (offs.y + fxT * 72.0) / 56.0)).r;
+					float density = clamp(dA * 0.80 + dB * 0.55 - 0.30, 0.0, 1.0);
+					float along = smoothstep(-12.0, 14.0, rise) * (1.0 - prog);
+					fxHaze += across * along * density * 1.05 * strength;
 				}
 			}
 			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
@@ -375,7 +416,7 @@ void main()
 			}
 		}
 		fxShimmer = clamp(fxShimmer, 0.0, 1.0);
-		fxHaze = clamp(fxHaze, 0.0, 0.85);
+		fxHaze = clamp(fxHaze, 0.0, 0.9);
 	}
 
 	vec2 sampleTc = vTc;
@@ -490,20 +531,29 @@ void main()
 
 	// Firelight, candle glow, and smoke haze over the (possibly water-graded)
 	// background art, in linear light so the warm lift does not band.
-	if (fxHaze > 0.004 || fxGlow.r + fxGlow.g + fxGlow.b > 0.004)
+	if (fxHaze > 0.004 || fxFlameA > 0.004 || fxGlow.r + fxGlow.g + fxGlow.b > 0.004)
 	{
 		vec3 lin = ieeSrgbToLinear(texColor.rgb);
 		float sceneLuma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
-		// Multiplicative warm lift preserves the art's detail; the additive
-		// term is night-adaptive — dark scenes get real cast light, bright
-		// day scenes only a whisper.
-		float castLight = 0.05 + 0.50 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0));
+		// True black means void/unexplored: no art exists there, so cast
+		// light must not paint it (the additive term is luma-gated; the
+		// multiplicative term is naturally zero on black).
+		float hasArt = smoothstep(0.0015, 0.012, sceneLuma);
+		// Night-adaptive cast light: dark scenes get real light, bright day
+		// scenes only a whisper.
+		float castLight = (0.05 + 0.45 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0))) * hasArt;
 		lin = lin * (vec3(1.0) + fxGlow * 1.5) + fxGlow * castLight;
-		// Smoke veil: reads as moonlit smoke over dark roofs, shadowy over
-		// bright ground.
-		vec3 hazeTarget = vec3(0.42, 0.42, 0.46) * (0.42 + 0.5 * sceneLuma) + vec3(0.02);
-		lin = mix(lin, hazeTarget, fxHaze);
+		// Smoke veil: moonlit smoke over dark roofs, shadowy over bright
+		// ground; never over the void.
+		vec3 hazeTarget = vec3(0.40, 0.40, 0.45) * (0.40 + 0.55 * sceneLuma) + vec3(0.02);
+		lin = mix(lin, hazeTarget, fxHaze * hasArt);
+		// Flame body composites over everything with its own self-glow;
+		// flames are visible against the void (a fire at a cave mouth), so it
+		// is deliberately not art-gated.
+		lin = mix(lin, fxFlame, fxFlameA);
+		lin += fxFlame * fxFlameA * 0.35;
 		texColor.rgb = ieeLinearToSrgb(lin);
+		texColor.a = max(texColor.a, fxFlameA);
 	}
 
 	texColor = texColor * vColor;

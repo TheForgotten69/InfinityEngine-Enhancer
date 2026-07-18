@@ -1333,7 +1333,7 @@ void test_fpseam_override_asset_contract() {
   for (const std::string_view name :
        {"uIeeEnabled", "uIeeTime", "uIeeScroll", "uIeeZoom", "uIeeViewport", "uIeeWorldSizeInv",
         "uIeeWaterTint", "uIeePointCount", "uIeePoints", "uIeeAreaMask", "uIeeNormalMap",
-        "uIeeDudvMap", "uIeeFoamMap"}) {
+        "uIeeDudvMap", "uIeeFoamMap", "uIeeNoiseMap"}) {
     expect_true(source.find(name) != std::string::npos, "fpSEAM override declares feed uniform");
   }
   // The uniform-array capacity in the shader must match the bridge/packing cap.

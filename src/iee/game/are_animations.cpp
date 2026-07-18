@@ -240,10 +240,20 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
   std::vector<AreaEffectPoint> points;
   points.reserve((std::min)(info.animations.size(), kMaxAreaEffectPoints));
 
-  const auto strengthFor = [](AreaAnimationKind kind) noexcept {
-    switch (kind) {
-      case AreaAnimationKind::Fire:
+  const auto strengthFor = [](const AreaAnimationInfo& animation) noexcept {
+    switch (animation.kind) {
+      case AreaAnimationKind::Fire: {
+        // Flame scale by authored family: wall sconces and small flames stay
+        // small, fire pits and campfires get the full body.
+        const auto resref = animation.resrefView();
+        if (resref.starts_with("FLM") || resref.starts_with("FLSM") || resref.starts_with("FIM") ||
+            resref.starts_with("YSFL")) {
+          return 0.55f;
+        }
+        if (resref.starts_with("FLAM")) return 0.7f;
+        if (resref.starts_with("FPIT")) return 1.15f;
         return 1.0f;
+      }
       case AreaAnimationKind::Smoke:
         return 1.0f;
       case AreaAnimationKind::Light:
@@ -264,7 +274,7 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
       points.push_back(AreaEffectPoint{static_cast<float>(animation.x),
                                        static_cast<float>(animation.y),
                                        static_cast<float>(static_cast<int>(animation.kind)),
-                                       strengthFor(animation.kind)});
+                                       strengthFor(animation)});
     }
   }
   return points;

@@ -230,6 +230,7 @@ void feed(unsigned program, Locations& locations) {
   locations.normalMap = resolve_location(gl, program, locations.normalMap, "uIeeNormalMap");
   locations.dudvMap = resolve_location(gl, program, locations.dudvMap, "uIeeDudvMap");
   locations.foamMap = resolve_location(gl, program, locations.foamMap, "uIeeFoamMap");
+  locations.noiseMap = resolve_location(gl, program, locations.noiseMap, "uIeeNoiseMap");
 
   g_feedCount.fetch_add(1, std::memory_order_relaxed);
   const auto stateRevision = g_stateRevision.load(std::memory_order_acquire);
@@ -242,11 +243,12 @@ void feed(unsigned program, Locations& locations) {
   bool boundTextures = false;
   if (effectValue >= 0.5f) {
     boundTextures = locations.areaMask >= 0 || locations.normalMap >= 0 || locations.dudvMap >= 0 ||
-                    locations.foamMap >= 0;
+                    locations.foamMap >= 0 || locations.noiseMap >= 0;
     if (locations.areaMask >= 0 && !area::bind_area_texture()) {
       effectValue = 0.0f;
     }
-    if ((locations.normalMap >= 0 || locations.dudvMap >= 0 || locations.foamMap >= 0) &&
+    if ((locations.normalMap >= 0 || locations.dudvMap >= 0 || locations.foamMap >= 0 ||
+         locations.noiseMap >= 0) &&
         !water::ensure_water_textures_bound()) {
       effectValue = 0.0f;
     }
@@ -351,6 +353,8 @@ void feed(unsigned program, Locations& locations) {
       gl.glUniform1i(locations.dudvMap, static_cast<int>(game::texture_units::WaterDudv));
     if (locations.foamMap >= 0)
       gl.glUniform1i(locations.foamMap, static_cast<int>(game::texture_units::WaterFoam));
+    if (locations.noiseMap >= 0)
+      gl.glUniform1i(locations.noiseMap, static_cast<int>(game::texture_units::EffectsNoise));
     locations.samplersInitialized = true;
   }
   locations.lastAppliedRevision = stateRevision;
