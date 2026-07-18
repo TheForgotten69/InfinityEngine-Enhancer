@@ -1673,10 +1673,10 @@ void test_build_area_effect_points() {
     animation.frameCenterY = 0;
     live.animations.push_back(animation);
     const auto livePoints = build_area_effect_points(live);
-    expect_true(livePoints.size() == 1 && livePoints[0].x == 104.0f &&
-                    livePoints[0].y == 215.0f && livePoints[0].height == 15.0f &&
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 100.0f &&
+                    livePoints[0].y == 200.0f && livePoints[0].height == 15.0f &&
                     livePoints[0].halfWidth == 4.0f && livePoints[0].reserved1 == 1.0f,
-                "Live CVidCell frame geometry overrides the fallback table");
+                "Live CVidCell frame geometry sizes the flame; the anchor is unshifted");
   }
 
   const auto points = build_area_effect_points(info);
@@ -1685,9 +1685,9 @@ void test_build_area_effect_points() {
                   points[0].height == 27.0f && points[0].halfWidth == 7.0f,
               "Fire points come first with authored BAM geometry");
   expect_true(points.size() >= 2 && points[1].kind == 1.0f && points[1].reserved1 == 1.0f &&
-                  points[1].x == 29.0f && points[1].y == 115.0f &&
+                  points[1].x == 25.0f && points[1].y == 100.0f &&
                   points[1].height == 15.0f && points[1].halfWidth == 4.0f,
-              "Blue flames carry the palette id and the frame-box offset from the object pos");
+              "Blue flames carry the palette id and the authored footprint at the unshifted anchor");
   expect_true(points.size() >= 3 && points[2].kind == 1.0f && points[2].reserved1 == 2.0f,
               "Overlay fires become glow-only points");
   expect_true(points.size() >= 4 && points[3].kind == 4.0f,

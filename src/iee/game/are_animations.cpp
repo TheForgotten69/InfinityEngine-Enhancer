@@ -309,29 +309,24 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
           point.halfWidth = 10.0f;
           return point;
         }
-        // Live resrefs keep their authored casing (e.g. "flamblu2"); the
-        // geometry table and palette match on the uppercased form.
+        // The ARE object position is already the flame's base point on screen
+        // (ALIGN markers at raw objPos land exactly on the sconce bowls) — so
+        // no positional offset is applied; the flame body grows upward from
+        // the anchor. Only the authored SIZE varies per family. Live frame
+        // geometry (when present) gives size directly; otherwise the table.
+        // Note: while the effect suppresses the engine draw, CVidCell::m_pFrame
+        // stays null, so the table is the normal path for replaced flames.
         const auto upper = upper_copy(resref);
         point.reserved1 = upper.find("BLU") != std::string::npos ? 1.0f : 0.0f;  // palette id
         if (animation.frameValid) {
-          // Engine-native geometry: RenderBam draws the frame's top-left at
-          // (m_pos - center); the flame's bottom-center follows.
-          point.x += static_cast<float>(animation.frameWidth) / 2.0f -
-                     static_cast<float>(animation.frameCenterX);
-          point.y += static_cast<float>(animation.frameHeight) -
-                     static_cast<float>(animation.frameCenterY);
           point.height = static_cast<float>(animation.frameHeight);
           point.halfWidth =
               (std::max)(static_cast<float>(animation.frameWidth) / 2.0f, 1.5f);
-          return point;
+        } else {
+          const auto& geometry = flame_geometry_for(upper);
+          point.height = geometry.height;
+          point.halfWidth = geometry.halfWidth;
         }
-        // Fallback for the first refresh before the object rendered once
-        // (CVidCell::m_pFrame still null) and for the disk parser.
-        const auto& geometry = flame_geometry_for(upper);
-        point.x += geometry.dx;
-        point.y += geometry.dy;
-        point.height = geometry.height;
-        point.halfWidth = geometry.halfWidth;
         return point;
       }
       case AreaAnimationKind::Smoke: {
