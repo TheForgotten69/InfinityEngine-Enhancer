@@ -654,3 +654,30 @@ git push https://github.com/TheForgotten69/InfinityEngine-Enhancer.git feat/phas
 - The one acknowledged unknown is the world-position equation; Task 6 + runbook step 3 exist precisely to measure it, and fixes are uniform-side (no shader redesign).
 - Type consistency: `pack_area_liquid_texture` returns `AreaCellTexture` (Task 1) consumed in Task 2; `set_area_world_size`/`set_area_scroll_zoom` declared Task 3, called Tasks 2/4; `g_overrideEffectValue` conversion is self-contained in Task 6.
 ```
+
+## Follow-up backlog (post-baseline observations)
+
+- 2026-07-18 (owner, in-game 2.7.3, v20+ baseline): some water cells/bands
+  render noticeably MORE TRANSPARENT than the main strongly-opaque water
+  body — likely the WATER_ALPHA secondary-pass suppression interacting with
+  cells whose only water contribution came from that pass, or alpha
+  differences across mask-boundary cells. Water is otherwise still correct.
+  Needs a dedicated alpha-consistency pass; do not fold it into unrelated
+  point-effect work.
+- 2026-07-18 (owner, liquid-type sweep on 2.7.3): the non-water liquid modes
+  were exercised for the first time with these findings, all for the same
+  dedicated water pass:
+  - LAVA (BG1 AR0508/AR0514): no effect at all. Root cause identified: lava
+    base art is fully OPAQUE — the `waterMask = (1 - texColor.a)` alpha-hole
+    contour that gates the whole liquid path never engages. Lava needs a
+    cellMode-driven emissive treatment of opaque art instead of the
+    hole-mask path.
+  - SEWAGE (BG1 AR0224 family): acceptable in the main sewer areas; some
+    channels render washed-out pale grey/white — authored-tint sampling
+    likely failed (neutral 0.5 grey fallback) and the neutral grade reads
+    as paper. Verify tint-candidate coverage for sewage overlays.
+  - SWAMP/sea overlays (BG1 AR1200 docks etc.): harbor sea renders as flat
+    saturated cyan-blue "plastic" in daylight; also isolated black wedge
+    artifacts near authored shadow overlays. Never validated at the v20
+    baseline; needs tint/grade calibration per liquid mode, not just the
+    water defaults.

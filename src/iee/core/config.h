@@ -11,6 +11,9 @@ struct EngineConfig {
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;
   bool enableWaterEffect = true;
+  bool enablePointEffects = true;
+
+  bool enableAreaAnimationScan = true;
 
   bool enableVerboseLogging = false;
   bool enablePerformanceLogging = false;

@@ -22,10 +22,16 @@ uniform highp	vec2		uIeeZoom;          // physical px per world px, per axis
 uniform highp	vec2		uIeeViewport;      // physical px (w, h)
 uniform highp	vec2		uIeeWorldSizeInv;  // 1 / world px
 uniform highp	vec3		uIeeWaterTint;     // authored water color (avg of the area's water overlay tile)
+uniform highp	float		uIeePointCount;    // 0..32 classified ambient-animation points
+// Two vec4 slots per point i: [2i] = (baseX, baseY, kind, heightPx) where the
+// kind fraction is a palette id (.0 warm body / .1 blue body / .2 glow only);
+// [2i+1] = (halfWidthPx, reserved...).
+uniform highp	vec4		uIeePoints[64];
 uniform lowp	sampler2D	uIeeAreaMask;      // unit 2: one liquid mode per 64px WED cell
 uniform lowp	sampler2D	uIeeNormalMap;     // unit 3: tiling water normal map
 uniform lowp	sampler2D	uIeeDudvMap;       // unit 4: tiling DuDv distortion map
 uniform lowp	sampler2D	uIeeFoamMap;       // unit 5: tiling foam mask
+uniform lowp	sampler2D	uIeeNoiseMap;      // unit 6: tiling FBM octaves (R/G smooth, B high-freq, A blobs)
 
 varying highp	vec2		vTc;
 varying highp	vec2		vRef;
@@ -266,9 +272,179 @@ void main()
 			vec4 base = art * vColor;
 			gl_FragColor = vec4(base.rgb, base.a);
 		}
+
+		// Point-placement markers: a filled dot plus a 40px ring at every fed
+		// effect point — orange = fire, grey = smoke, yellow = light. Absent
+		// rings in ALIGN mode mean the point feed (not the effect math) is
+		// broken.
+		if (uIeePointCount > 0.5 && vColor.a > 0.9)
+		{
+			float ring = 0.0;
+			vec3 ringColor = vec3(0.0);
+			for (int i = 0; i < 32; ++i)
+			{
+				if (float(i) >= uIeePointCount) { break; }
+				vec4 p = uIeePoints[2 * i];
+				float d = length(worldPos - p.xy);
+				float m = smoothstep(4.0, 1.5, abs(d - 40.0)) + smoothstep(6.0, 2.0, d);
+				if (m > ring)
+				{
+					ring = m;
+					if (p.z < 1.5)      { ringColor = vec3(1.0, 0.45, 0.05); }
+					else if (p.z < 2.5) { ringColor = vec3(0.75, 0.75, 0.85); }
+					else                { ringColor = vec3(1.0, 0.95, 0.20); }
+				}
+			}
+			if (ring > 0.02)
+			{
+				gl_FragColor = vec4(mix(gl_FragColor.rgb, ringColor, clamp(ring, 0.0, 1.0)),
+				                    gl_FragColor.a);
+			}
+		}
 		return;
 	}
 
+	// Ambient point effects. Base pass only; the WATER_ALPHA secondary pass
+	// and fades stay vanilla. Kept as flat locals (no struct/function) for
+	// maximum GLSL-frontend compatibility.
+	vec3 fxGlow = vec3(0.0);
+	vec3 fxFlame = vec3(0.0);
+	float fxFlameA = 0.0;
+	float fxHaze = 0.0;
+	if (uIeeEnabled > 0.5 && vColor.a > 0.9 && uIeePointCount > 0.5)
+	{
+		float fxT = uIeeTime;
+		for (int i = 0; i < 32; ++i)
+		{
+			if (float(i) >= uIeePointCount) { break; }
+			vec4 p = uIeePoints[2 * i];
+			vec4 pb = uIeePoints[2 * i + 1];
+			vec2 offs = worldPos - p.xy;
+			float kind = p.z;
+			float strength = clamp(p.w / 76.0, 0.05, 1.4);
+
+			if (kind < 1.5) // fire: textured flame body + cast light + shimmer
+			{
+				// Authored geometry from the BAM frame table: p.w = height,
+				// pb.x = half-width, position already at the flame's
+				// bottom-center; pb.y = palette (0 warm / 1 blue / 2 glow-only).
+				float fh = max(p.w, 5.0);
+				float fw = max(pb.x, 1.5);
+				float palette = pb.y;
+				float blue = (palette > 0.5 && palette < 1.5) ? 1.0 : 0.0;
+				bool bodyless = palette > 1.5;
+
+				// --- flame body (replaces the engine's BAM flame) ---
+				if (!bodyless && offs.y < 6.0 && offs.y > -fh * 1.3 && abs(offs.x) < fw * 2.6)
+				{
+					float v = clamp(-offs.y / fh, 0.0, 1.2);   // 0 base -> 1 tip
+					float widthAt = fw * (1.05 - 0.60 * min(v, 1.0));
+					float xr = offs.x / max(widthAt, 1.0);
+					float radial = 1.0 - clamp(xr * xr, 0.0, 1.0);
+					float base = smoothstep(8.0, -1.0, offs.y);
+					float column = radial * base * smoothstep(1.20, 0.50, v);
+					// Rising noise erodes the column: calm base, ragged tip.
+					// Sample scale follows the flame size so small flames keep
+					// visible structure.
+					float ns = max(fh, 14.0);
+					float seed = p.x * 0.61 + float(i) * 19.0;
+					float nA = texture2D(uIeeNoiseMap,
+					              vec2((seed + offs.x) / (ns * 0.62),
+					                   (offs.y + fxT * ns * 1.35) / (ns * 0.9))).r;
+					float nB = texture2D(uIeeNoiseMap,
+					              vec2((seed * 0.37 - offs.x) / (ns * 0.36),
+					                   (offs.y + fxT * ns * 2.1) / (ns * 0.52))).b;
+					float intensity = column * (1.15 - v * 0.5)
+					                - (nA * 0.78 + nB * 0.60) * (0.36 + 0.95 * v);
+					intensity = clamp(intensity * 1.75, 0.0, 1.0);
+					if (intensity > 0.02)
+					{
+						// Ramp: deep -> mid -> bright -> hot core (kept small).
+						vec3 c0 = mix(vec3(0.42, 0.02, 0.0), vec3(0.01, 0.06, 0.42), blue);
+						vec3 c1 = mix(vec3(1.0, 0.28, 0.02), vec3(0.08, 0.38, 0.95), blue);
+						vec3 c2 = mix(vec3(1.0, 0.70, 0.16), vec3(0.45, 0.75, 1.0), blue);
+						vec3 c3 = mix(vec3(1.02, 0.95, 0.72), vec3(0.85, 0.95, 1.05), blue);
+						vec3 flame = mix(c0, c1, smoothstep(0.02, 0.38, intensity));
+						flame = mix(flame, c2, smoothstep(0.38, 0.74, intensity));
+						flame = mix(flame, c3, smoothstep(0.80, 0.97, intensity));
+						float a = smoothstep(0.03, 0.30, intensity);
+						if (a > fxFlameA)
+						{
+							fxFlameA = a;
+							fxFlame = flame;
+						}
+					}
+				}
+
+				// --- cast light on the surroundings ---
+				// Elliptical footprint (isometric floor projection) with
+				// noise dapple so the pool reads as firelight, not a disc.
+				vec2 g = offs;
+				// Glow-only overlays (hearths) anchor at the art's floor
+				// edge; center their light well up onto the coals.
+				g.y += fh * (bodyless ? 0.85 : 0.35);
+				g.y *= 1.9;
+				float radius = 40.0 + 80.0 * strength;
+				float d = length(g);
+				if (d < radius)
+				{
+					float fall = 1.0 - d / radius;
+					fall *= fall;
+					float fi = float(i) * 7.31;
+					float flick = 0.80 + 0.14 * sin(fxT * 9.7 + fi)
+					                   + 0.06 * sin(fxT * 23.0 + fi * 1.7);
+					float dapple = 0.72 + 0.55 * texture2D(uIeeNoiseMap,
+					                   (worldPos + vec2(fxT * 5.0, -fxT * 3.0)) / 72.0).r;
+					vec3 glowColor = mix(vec3(1.0, 0.45, 0.15), vec3(0.30, 0.55, 1.0),
+					                     step(0.5, blue));
+					fxGlow += glowColor * (fall * (0.20 + 0.38 * strength) * flick * dapple);
+				}
+			}
+			else if (kind < 2.5) // smoke: textured plume replacing the BAM puffs
+			{
+				float height = max(p.w, 20.0);
+				float rise = -offs.y; // px above the source
+				if (rise > -10.0 && rise < height)
+				{
+					float prog = rise / height;
+					float seed = p.x * 0.37 + float(i) * 11.0;
+					// Slow lateral wander that grows with altitude.
+					float sway = (texture2D(uIeeNoiseMap,
+					                 vec2(seed / 64.0 + fxT * 0.045, prog * 1.7)).a - 0.5)
+					             * (8.0 + 34.0 * prog);
+					float widthPx = max(pb.x, 6.0) + 26.0 * prog;
+					float lateral = (offs.x - sway) / widthPx;
+					float across = exp(-lateral * lateral * 1.9);
+					// Two scrolling octaves shape the billows.
+					float dA = texture2D(uIeeNoiseMap,
+					              vec2((offs.x + seed) / 96.0, (offs.y + fxT * 42.0) / 96.0)).g;
+					float dB = texture2D(uIeeNoiseMap,
+					              vec2((offs.x - seed) / 48.0, (offs.y + fxT * 66.0) / 48.0)).r;
+					float density = clamp(dA * 0.80 + dB * 0.55 - 0.38, 0.0, 1.0);
+					float along = smoothstep(-10.0, 12.0, rise) * (1.0 - prog);
+					fxHaze += across * along * density * 0.62;
+				}
+			}
+			else if (kind > 3.5 && kind < 4.5) // light: steady soft glow
+			{
+				float radius = max(p.w, 10.0);
+				float d = length(offs);
+				if (d < radius)
+				{
+					float fall = 1.0 - d / radius;
+					fall *= fall;
+					float breathe = 0.92 + 0.08 * sin(fxT * 2.1 + float(i) * 3.3);
+					fxGlow += vec3(1.0, 0.74, 0.40) * (fall * 0.40 * breathe);
+				}
+			}
+		}
+		fxHaze = clamp(fxHaze, 0.0, 0.62);
+	}
+
+	// No heat-shimmer UV distortion here: offsetting the atlas coordinate
+	// can cross a tile boundary and sample unrelated atlas content (a
+	// vertical smear-seam in the art). Shimmer belongs to a future
+	// world-space pass, not the tile pass.
 	vec4 texColor = seamSample(vTc);
 
 	// Inside flagged cells the engine draws the
@@ -366,6 +542,34 @@ void main()
 		// engine's generic animated tile drawn underneath the cell.
 		texColor.rgb = ieeLinearToSrgb(mix(artLinear, water, waterMask));
 		texColor.a = max(texColor.a, waterMask);
+	}
+
+	// Firelight, candle glow, and smoke haze over the (possibly water-graded)
+	// background art, in linear light so the warm lift does not band.
+	if (fxHaze > 0.004 || fxFlameA > 0.004 || fxGlow.r + fxGlow.g + fxGlow.b > 0.004)
+	{
+		vec3 lin = ieeSrgbToLinear(texColor.rgb);
+		float sceneLuma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+		// True black means void/unexplored: no art exists there, so cast
+		// light must not paint it (the additive term is luma-gated; the
+		// multiplicative term is naturally zero on black).
+		float hasArt = smoothstep(0.0015, 0.012, sceneLuma);
+		// Night-adaptive cast light: dark scenes get real light, bright day
+		// scenes only a whisper.
+		float castLight = (0.04 + 0.30 * (1.0 - clamp(sceneLuma * 4.0, 0.0, 1.0))) * hasArt;
+		lin = lin * (vec3(1.0) + fxGlow * 1.2) + fxGlow * castLight;
+		// Smoke veil: moonlit smoke over dark roofs, shadowy over bright
+		// ground. Not art-gated — a per-texel luma gate mottles dark stone,
+		// and smoke drifting over the night sky reads naturally.
+		vec3 hazeTarget = vec3(0.40, 0.40, 0.45) * (0.40 + 0.55 * sceneLuma) + vec3(0.02);
+		lin = mix(lin, hazeTarget, fxHaze);
+		// Flame body composites over everything with its own self-glow;
+		// flames are visible against the void (a fire at a cave mouth), so it
+		// is deliberately not art-gated.
+		lin = mix(lin, fxFlame, fxFlameA);
+		lin += fxFlame * fxFlameA * 0.35;
+		texColor.rgb = ieeLinearToSrgb(lin);
+		texColor.a = max(texColor.a, fxFlameA);
 	}
 
 	texColor = texColor * vColor;

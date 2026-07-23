@@ -92,10 +92,12 @@ add_library(iee_common STATIC
     src/iee/core/config.cpp
     src/iee/core/logger.cpp
     src/iee/core/pattern_scanner.cpp
+    src/iee/game/are_animations.cpp
     src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp
     src/iee/game/dds_texture.cpp
     src/iee/game/game_addrs.cpp
+    src/iee/game/object_statics.cpp
     src/iee/game/resref_runtime.cpp
     src/iee/game/shader_override.cpp
     src/iee/game/tile_liquid.cpp

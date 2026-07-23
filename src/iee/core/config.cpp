@@ -97,6 +97,12 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
     return;
   }
 
+  // [Detection]
+  if (iequals(section, "detection")) {
+    if (iequals(key, "AreaAnimationScan")) assign_bool(cfg.enableAreaAnimationScan);
+    return;
+  }
+
   // [Shaders]
   if (iequals(section, "shaders")) {
     if (iequals(key, "DumpEngineShaders"))
@@ -105,6 +111,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.enableDebugHotkeys);
     else if (iequals(key, "EnableWaterEffect"))
       assign_bool(cfg.enableWaterEffect);
+    else if (iequals(key, "EnablePointEffects"))
+      assign_bool(cfg.enablePointEffects);
     return;
   }
 }
@@ -182,10 +190,14 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   f << "MaxAnisotropy = " << cfg.maxAnisotropy << "\n";
   f << "LODBias = " << cfg.lodBias << "\n";
 
+  write_section(f, "Detection");
+  write_bool(f, "AreaAnimationScan", cfg.enableAreaAnimationScan);
+
   write_section(f, "Shaders");
   write_bool(f, "DumpEngineShaders", cfg.dumpEngineShaders);
   write_bool(f, "EnableDebugHotkeys", cfg.enableDebugHotkeys);
   write_bool(f, "EnableWaterEffect", cfg.enableWaterEffect);
+  write_bool(f, "EnablePointEffects", cfg.enablePointEffects);
 
   return true;
 }

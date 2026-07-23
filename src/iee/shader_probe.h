@@ -33,6 +33,10 @@ void set_area_world_size(float widthPx, float heightPx) noexcept;
 // liquid overlay tiles, linear 0..1). Neutral 0.5 grey = unknown.
 void set_area_water_tint(float r, float g, float b) noexcept;
 
+// Classified ambient-animation point effects of the current area:
+// `count` vec4 records (world x, world y, kind, strength). nullptr/0 clears.
+void set_area_effect_points(const float* xyzw, std::size_t count) noexcept;
+
 // Published once per world frame from DrawColorTone(Seam); consumed by the
 // uniform feed.
 // viewWorldW/H = rViewPort size (world px visible); the feed derives the

@@ -46,10 +46,13 @@ struct Entry {
   unsigned unit;
 };
 
-constexpr std::array<Entry, 3> kEntries{{
+constexpr std::array<Entry, 4> kEntries{{
     {"iee_water_normal", game::texture_units::WaterNormal},
     {"iee_water_dudv", game::texture_units::WaterDudv},
     {"iee_water_foam", game::texture_units::WaterFoam},
+    // Tileable FBM octaves for the fire/smoke point effects (R/G smooth FBM,
+    // B high frequency, A low-frequency blobs).
+    {"iee_effects_noise", game::texture_units::EffectsNoise},
 }};
 
 std::mutex g_textureMutex;
@@ -242,7 +245,7 @@ bool upload_all_to_current_context() {
   if (context == g_uploadBlockedContext) return false;
 
   core::GlStateGuard guard({game::texture_units::WaterNormal, game::texture_units::WaterDudv,
-                            game::texture_units::WaterFoam});
+                            game::texture_units::WaterFoam, game::texture_units::EffectsNoise});
   // Do not attribute an error left by preceding engine work to the first DDS
   // upload and then suppress retries for the lifetime of this GL context.
   game::gl::discard_errors();

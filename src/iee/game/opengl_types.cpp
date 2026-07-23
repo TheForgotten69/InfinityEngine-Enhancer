@@ -150,6 +150,8 @@ bool OpenGLFunctions::initialize() noexcept {
   glUniform1i = reinterpret_cast<PFN_glUniform1i>(get_ext_proc_address(opengl32, "glUniform1i"));
   glUniform2f = reinterpret_cast<PFN_glUniform2f>(get_ext_proc_address(opengl32, "glUniform2f"));
   glUniform3f = reinterpret_cast<PFN_glUniform3f>(get_ext_proc_address(opengl32, "glUniform3f"));
+  glUniform4fv =
+      reinterpret_cast<PFN_glUniform4fv>(get_ext_proc_address(opengl32, "glUniform4fv"));
   glActiveTexture =
       reinterpret_cast<PFN_glActiveTexture>(get_ext_proc_address(opengl32, "glActiveTexture"));
   glCompressedTexImage2D = reinterpret_cast<PFN_glCompressedTexImage2D>(

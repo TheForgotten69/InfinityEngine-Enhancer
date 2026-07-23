@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace iee::game {
@@ -115,6 +116,80 @@ namespace iee::game {
         std::uint32_t dwFlags{};
     };
 
+    // ARE V1.0 (BGEE). Only the fields this project consumes are modeled:
+    // the fixed header prefix that carries the animation section pointers and
+    // the 76-byte ambient-animation record (layout verified against
+    // NearInfinity's org.infinity.resource.are.{AreResource,Animation}).
+    struct ARE_Header_st {
+        std::uint32_t nFileType{};      // "AREA"
+        std::uint32_t nFileVersion{};   // "V1.0"
+        std::array<std::uint8_t, 8> rrWed{};
+        std::uint32_t nLastSaved{};
+        std::uint32_t nAreaFlags{};
+        std::array<std::uint8_t, 48> edges{};        // 4 x (resref + edge flags)
+        std::uint16_t nLocationFlags{};              // +0x48
+        std::uint16_t nRainProbability{};
+        std::uint16_t nSnowProbability{};
+        std::uint16_t nFogProbability{};
+        std::uint16_t nLightningProbability{};
+        std::uint8_t nOverlayTransparency{};         // EE; classic wind speed low byte
+        std::uint8_t ___u0{};
+        std::uint32_t nActorsOffset{};               // +0x54
+        std::uint16_t nActors{};
+        std::uint16_t nTriggers{};
+        std::uint32_t nTriggersOffset{};
+        std::uint32_t nSpawnPointsOffset{};
+        std::uint32_t nSpawnPoints{};
+        std::uint32_t nEntrancesOffset{};
+        std::uint32_t nEntrances{};
+        std::uint32_t nContainersOffset{};
+        std::uint16_t nContainers{};
+        std::uint16_t nItems{};
+        std::uint32_t nItemsOffset{};
+        std::uint32_t nVerticesOffset{};
+        std::uint16_t nVertices{};
+        std::uint16_t nAmbients{};
+        std::uint32_t nAmbientsOffset{};
+        std::uint32_t nVariablesOffset{};
+        std::uint16_t nVariables{};
+        std::uint16_t nObjectFlags{};
+        std::uint32_t nObjectFlagsOffset{};
+        std::array<std::uint8_t, 8> rrAreaScript{};
+        std::uint32_t nExploredBitmapSize{};
+        std::uint32_t nExploredBitmapOffset{};
+        std::uint32_t nDoors{};
+        std::uint32_t nDoorsOffset{};
+        std::uint32_t nAnimations{};                 // +0xAC
+        std::uint32_t nAnimationsOffset{};           // +0xB0
+    };
+
+    struct ARE_Animation_st {
+        std::array<std::uint8_t, 32> szName{};
+        std::uint16_t nX{};
+        std::uint16_t nY{};
+        std::uint32_t nSchedule{};                   // hour-of-day bitmask
+        std::array<std::uint8_t, 8> rrAnimation{};   // BAM; EE also WBM/PVRZ
+        std::uint16_t nAnimationIndex{};
+        std::uint16_t nFrameIndex{};
+        std::uint32_t nFlags{};
+        std::int16_t nHeight{};
+        std::uint16_t nTranslucency{};
+        std::uint16_t nStartRange{};
+        std::uint8_t nLoopProbability{};
+        std::uint8_t nStartDelay{};
+        std::array<std::uint8_t, 8> rrPalette{};
+        std::uint16_t nMovieWidth{};                 // EE
+        std::uint16_t nMovieHeight{};                // EE
+    };
+
+    // ARE_Animation_st.nFlags bits (NearInfinity FLAGS_ARRAY, EE variant).
+    inline constexpr std::uint32_t kAreAnimationFlagIsShown = 1u << 0;
+    inline constexpr std::uint32_t kAreAnimationFlagNoShadow = 1u << 1;
+    inline constexpr std::uint32_t kAreAnimationFlagNotLightSource = 1u << 2;
+    inline constexpr std::uint32_t kAreAnimationFlagDrawAsBackground = 1u << 8;
+    inline constexpr std::uint32_t kAreAnimationFlagUseWbm = 1u << 13;
+    inline constexpr std::uint32_t kAreAnimationFlagUsePvrz = 1u << 15;
+
     struct bamHeader_st {
         std::uint32_t nFileType{};
         std::uint32_t nFileVersion{};
@@ -171,6 +246,12 @@ namespace iee::game {
     static_assert(sizeof(WED_TileData_st) == 0xA);
     static_assert(sizeof(WED_TiledObject_st) == 0x1A);
     static_assert(sizeof(WED_WedHeader_st) == 0x2C);
+    static_assert(sizeof(ARE_Header_st) == 0xB4);
+    static_assert(offsetof(ARE_Header_st, nAnimations) == 0xAC);
+    static_assert(offsetof(ARE_Header_st, nAnimationsOffset) == 0xB0);
+    static_assert(sizeof(ARE_Animation_st) == 0x4C);
+    static_assert(offsetof(ARE_Animation_st, rrAnimation) == 0x28);
+    static_assert(offsetof(ARE_Animation_st, nFlags) == 0x34);
     static_assert(sizeof(bamHeader_st) == 0x18);
     static_assert(sizeof(BAMHEADERV2) == 0x20);
     static_assert(sizeof(frame) == 0x18);

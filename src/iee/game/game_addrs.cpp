@@ -62,6 +62,24 @@ namespace iee::game {
         recover("RenderTexture", out.RenderTexture, renderTextureMatches,
                 manifest.referenceRvas.renderTexture, manifest.patterns.renderTexture);
 
+        // Optional target: point-effect BAM replacement. Failure only keeps
+        // the engine's authored draws; never blocks initialization.
+        if (!manifest.patterns.staticRender.empty()) {
+            std::size_t staticRenderMatches = 0;
+            out.StaticRender = reinterpret_cast<std::uintptr_t>(core::find_unique_in_module(
+                nullptr, manifest.patterns.staticRender, &staticRenderMatches));
+            recover("StaticRender", out.StaticRender, staticRenderMatches,
+                    manifest.referenceRvas.staticRender, manifest.patterns.staticRender);
+            if (out.StaticRender) {
+                LOG_INFO("CGameStatic::Render resolved at RVA 0x{:X} (reference 0x{:X})",
+                         out.StaticRender - moduleBase, manifest.referenceRvas.staticRender);
+            } else {
+                LOG_WARN("CGameStatic::Render pattern matched {} times; authored fire/smoke "
+                         "draws will not be replaced",
+                         staticRenderMatches);
+            }
+        }
+
         const bool success = out.LoadArea && out.RenderTexture;
 
         if (success) {
