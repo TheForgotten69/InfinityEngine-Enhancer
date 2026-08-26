@@ -618,10 +618,20 @@ void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
   }
 }
 
+// _ReturnAddress() is an MSVC intrinsic; mingw-w64 declares it in intrin.h
+// for source compatibility but never defines it, so cross builds hit an
+// unresolved symbol at link time. GCC/Clang expose the same value via the
+// __builtin_return_address() builtin instead.
+#if defined(_MSC_VER) && !defined(__clang__)
+static inline void* caller_return_address() noexcept { return _ReturnAddress(); }
+#else
+static inline void* caller_return_address() noexcept { return __builtin_return_address(0); }
+#endif
+
 static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
   bool forwarded = false;
   try {
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    const auto caller = reinterpret_cast<std::uintptr_t>(caller_return_address());
     forwarded = true;
     g_glUseProgramHook.original()(program);
     use_program(program, caller, false);
@@ -633,7 +643,7 @@ static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
 static void APIENTRY detour_glUseProgramObjectARB(unsigned program) noexcept {
   bool forwarded = false;
   try {
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    const auto caller = reinterpret_cast<std::uintptr_t>(caller_return_address());
     forwarded = true;
     g_glUseProgramObjectARBHook.original()(program);
     use_program(program, caller, true);

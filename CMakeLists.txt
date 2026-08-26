@@ -191,17 +191,26 @@ if(IEE_BUILD_WINDOWS_DLL)
 
     set(IEE_RELEASE_BUNDLE_DIR "${CMAKE_BINARY_DIR}/release-bundle")
     set(IEE_SYMBOLS_DIR "${CMAKE_BINARY_DIR}/symbols")
-    add_custom_target(release_bundle
+    set(IEE_BUNDLE_COMMANDS
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_RELEASE_BUNDLE_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_RELEASE_BUNDLE_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:InfinityEngine-Enhancer>" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.dll"
-        COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_PDB_FILE:InfinityEngine-Enhancer>" "${IEE_SYMBOLS_DIR}/InfinityEngine-Enhancer.pdb"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/override" "${IEE_RELEASE_BUNDLE_DIR}/override"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/override/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-textures" "${IEE_RELEASE_BUNDLE_DIR}/iee-textures"
+    )
+    if(MSVC)
+        # TARGET_PDB_FILE only resolves for linkers that emit a PDB. mingw-w64
+        # cross builds have no equivalent, so keep symbol export MSVC-only.
+        list(APPEND IEE_BUNDLE_COMMANDS
+            COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_SYMBOLS_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_SYMBOLS_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_PDB_FILE:InfinityEngine-Enhancer>" "${IEE_SYMBOLS_DIR}/InfinityEngine-Enhancer.pdb"
+        )
+    endif()
+    add_custom_target(release_bundle
+        ${IEE_BUNDLE_COMMANDS}
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )

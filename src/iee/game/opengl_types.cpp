@@ -53,7 +53,7 @@ bool check_error(const char* operation) noexcept {
 // GetProcAddress on the opengl32.dll module handle instead.
 static void* get_gl1_proc_address(HMODULE opengl32, const char* name) noexcept {
   if (!opengl32) return nullptr;
-  return GetProcAddress(opengl32, name);
+  return reinterpret_cast<void*>(GetProcAddress(opengl32, name));
 }
 
 // Load an extension entry point.  Try wglGetProcAddress first (correct path
@@ -75,7 +75,7 @@ static void* get_ext_proc_address(HMODULE opengl32, const char* name) noexcept {
       return proc;
     }
   }
-  return GetProcAddress(opengl32, name);
+  return reinterpret_cast<void*>(GetProcAddress(opengl32, name));
 }
 
 HGLRC current_context() noexcept {
