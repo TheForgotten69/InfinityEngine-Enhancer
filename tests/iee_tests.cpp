@@ -1677,21 +1677,22 @@ void test_build_area_effect_points() {
     animation.frameCenterY = 0;
     live.animations.push_back(animation);
     const auto livePoints = build_area_effect_points(live);
-    expect_true(livePoints.size() == 1 && livePoints[0].x == 100.0f &&
-                    livePoints[0].y == 170.0f && livePoints[0].height == 15.0f &&
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 104.0f &&
+                    livePoints[0].y == 185.0f && livePoints[0].height == 15.0f &&
                     livePoints[0].halfWidth == 4.0f && livePoints[0].reserved1 == 1.0f,
-                "Live frame geometry sizes the flame; the anchor subtracts the Z elevation");
+                "Live frame geometry moves the object origin to the flame bottom-center");
   }
 
   const auto points = build_area_effect_points(info);
   expect_eq(points.size(), std::size_t{5}, "Shown fire/light + replaceable smoke become points");
   expect_true(!points.empty() && points[0].kind == 1.0f && points[0].x == 20.0f &&
-                  points[0].height == 27.0f && points[0].halfWidth == 7.0f,
+                  points[0].y == 115.0f && points[0].height == 27.0f &&
+                  points[0].halfWidth == 7.0f,
               "Fire points come first with authored BAM geometry");
   expect_true(points.size() >= 2 && points[1].kind == 1.0f && points[1].reserved1 == 1.0f &&
-                  points[1].x == 25.0f && points[1].y == 100.0f &&
+                  points[1].x == 29.0f && points[1].y == 115.0f &&
                   points[1].height == 15.0f && points[1].halfWidth == 4.0f,
-              "Blue flames carry the palette id and the authored footprint at the unshifted anchor");
+              "Blue flames carry their palette, footprint, and authored bottom-center offset");
   expect_true(points.size() >= 3 && points[2].kind == 1.0f && points[2].reserved1 == 2.0f,
               "Overlay fires become glow-only points");
   expect_true(points.size() >= 4 && points[3].kind == 4.0f,
