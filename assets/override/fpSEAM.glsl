@@ -335,14 +335,18 @@ void main()
 				bool bodyless = palette > 1.5;
 
 				// --- flame body (replaces the engine's BAM flame) ---
-				if (!bodyless && offs.y < 6.0 && offs.y > -fh * 1.3 && abs(offs.x) < fw * 2.6)
+				// Keep the luminous core inside the authored BAM envelope: p.xy is
+				// the proven bottom attachment point, so no body pixels belong below
+				// it and the tip should not exceed the authored frame height.
+				if (!bodyless && offs.y <= 0.0 && offs.y > -fh && abs(offs.x) < fw * 2.6)
 				{
-					float v = clamp(-offs.y / fh, 0.0, 1.2);   // 0 base -> 1 tip
+					float v = clamp(-offs.y / fh, 0.0, 1.0);   // 0 base -> 1 tip
 					float widthAt = fw * (1.05 - 0.60 * min(v, 1.0));
 					float xr = offs.x / max(widthAt, 1.0);
 					float radial = 1.0 - clamp(xr * xr, 0.0, 1.0);
-					float base = smoothstep(8.0, -1.0, offs.y);
-					float column = radial * base * smoothstep(1.20, 0.50, v);
+					float base = 1.0 - smoothstep(-2.0, 0.0, offs.y);
+					float tip = 1.0 - smoothstep(0.65, 1.0, v);
+					float column = radial * base * tip;
 					// Rising noise erodes the column: calm base, ragged tip.
 					// Sample scale follows the flame size so small flames keep
 					// visible structure.
