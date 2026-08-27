@@ -71,6 +71,9 @@ void reset() noexcept;
 void set_time(float secondsSinceStart) noexcept;
 void set_effect_enabled(bool enabled) noexcept;
 [[nodiscard]] bool effect_enabled() noexcept;
+// True only for the normal effect-rendering state. ALIGN keeps the shader
+// diagnostics active but must leave authored BAMs visible for comparison.
+[[nodiscard]] bool effect_replacement_enabled() noexcept;
 [[nodiscard]] float cycle_debug_effect() noexcept;
 void set_world_size(float widthPx, float heightPx) noexcept;
 void set_water_tint(float r, float g, float b) noexcept;

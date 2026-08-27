@@ -123,6 +123,11 @@ void set_effect_enabled(bool enabled) noexcept {
 
 bool effect_enabled() noexcept { return g_effectValue.load(std::memory_order_relaxed) >= 0.5f; }
 
+bool effect_replacement_enabled() noexcept {
+  const float value = g_effectValue.load(std::memory_order_relaxed);
+  return value >= 0.5f && value < 1.5f;
+}
+
 float cycle_debug_effect() noexcept {
   const float current = g_effectValue.load(std::memory_order_relaxed);
   const float next = current < 0.5f ? 1.0f : (current < 1.5f ? 2.0f : 0.0f);

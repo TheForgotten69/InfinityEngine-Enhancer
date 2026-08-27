@@ -25,6 +25,9 @@ void on_frame_tick(float secondsSinceStart) noexcept;
 // Hotkey cycle target: uIeeEnabled value 0=off / 1=effect on / 2=alignment debug.
 void set_override_effect_enabled(bool enabled) noexcept;
 [[nodiscard]] bool override_effect_enabled() noexcept;
+// Normal ON state only; false in ALIGN so authored BAMs remain visible under
+// placement markers.
+[[nodiscard]] bool override_effect_replacement_enabled() noexcept;
 
 // Published by area_state at area load; consumed by the uniform feed.
 void set_area_world_size(float widthPx, float heightPx) noexcept;

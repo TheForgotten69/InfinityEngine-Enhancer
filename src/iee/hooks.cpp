@@ -284,7 +284,7 @@ static void detour_draw_color_tone(int mode) {
 static void detour_static_render(void* thisPtr, void* area, void* vidMode) {
   try {
     if (g_ctx && g_ctx->cfg.enablePointEffects && g_ctx->cfg.enableWaterEffect &&
-        probe::override_effect_enabled() && thisPtr) {
+        probe::override_effect_replacement_enabled() && thisPtr) {
       game::ARE_Animation_st header{};
       const auto* headerAddress =
           reinterpret_cast<const std::byte*>(thisPtr) + offsetof(game::CGameStatic, m_header);

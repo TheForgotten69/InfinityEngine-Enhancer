@@ -1090,6 +1090,10 @@ void set_override_effect_enabled(bool enabled) noexcept { uniforms::set_effect_e
 
 bool override_effect_enabled() noexcept { return uniforms::effect_enabled(); }
 
+bool override_effect_replacement_enabled() noexcept {
+  return uniforms::effect_replacement_enabled();
+}
+
 void set_area_world_size(float widthPx, float heightPx) noexcept {
   uniforms::set_world_size(widthPx, heightPx);
 }
