@@ -101,8 +101,12 @@ namespace iee::game {
             out.SpriteRenderHealthBar =
                 resolveOptional("CGameSprite::RenderHealthBar", patterns.spriteRenderHealthBar,
                                 rvas.spriteRenderHealthBar);
-            out.ProjectileBamRender = resolveOptional(
-                "CProjectileBAM::Render", patterns.projectileBamRender, rvas.projectileBamRender);
+            for (std::size_t index = 0; index < manifest.smoothedObjectRenders.size(); ++index) {
+                const auto &target = manifest.smoothedObjectRenders[index];
+                if (!target.name) continue;
+                out.SmoothedObjectRenders[index] =
+                    resolveOptional(target.name, target.pattern, target.referenceRva);
+            }
             if (out.SpriteRender && out.SpriteRenderMarkers && out.SpriteRenderHealthBar) {
                 LOG_INFO("Sprite render targets resolved at RVA 0x{:X} / 0x{:X} / 0x{:X}",
                          out.SpriteRender - moduleBase, out.SpriteRenderMarkers - moduleBase,

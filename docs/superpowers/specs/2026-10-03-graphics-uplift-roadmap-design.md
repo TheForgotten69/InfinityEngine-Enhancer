@@ -131,11 +131,16 @@ each sprite's draw position between ticks inside a `CGameSprite::Render` hook
 - In-game result 2026-10-03 (owner): works, visibly smoother. The field log
   shows sprite renders and `LoadArea` on the same thread, so the position
   swap cannot race the logic tick.
-- `CProjectileBAM::Render` (`0x233F20`) uses the same swap with its own
-  tracker and a larger snap limit; the tracker also starts over for a key not
-  sampled for 0.5 s (off screen, or a new object at a reused address).
-- Known limits: positions are whole world pixels; other projectile classes
-  and spell effects still step at the logic rate; anything else that reads `m_pos` during
+- Moving non-creature objects use the same swap through a manifest table
+  (`BuildManifest::smoothedObjectRenders`), with their own tracker and a
+  larger snap limit: `CProjectileBAM`, `CProjectileScorcher`,
+  `CProjectileNewScorcher`, `CProjectileSkyStrike`, `CGameFireball3d`,
+  `CGameTemporal`, `CGameChunk`, `CVEFVidCell`. Each was confirmed to draw
+  from `CGameObject::m_pos`; `CProjectileSkyStrikeBAM` does not and is left
+  out. The tracker also starts over for a key not sampled for 0.5 s.
+- Known limits: positions are whole world pixels; animation frames
+  themselves are not interpolated (item F); anything else that reads `m_pos`
+  during
   render (floating text, action icons drawn outside the three hooks) is not
   smoothed.
 

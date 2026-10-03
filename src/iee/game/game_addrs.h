@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 
 namespace iee {
@@ -19,7 +20,9 @@ namespace iee::game {
         std::uintptr_t SpriteRender = 0;
         std::uintptr_t SpriteRenderMarkers = 0;
         std::uintptr_t SpriteRenderHealthBar = 0;
-        std::uintptr_t ProjectileBamRender = 0;
+        // Optional, each independent; 0 where unresolved. Indexed like
+        // BuildManifest::smoothedObjectRenders.
+        std::array<std::uintptr_t, 8> SmoothedObjectRenders{};
         bool initialized = false;
     };
 

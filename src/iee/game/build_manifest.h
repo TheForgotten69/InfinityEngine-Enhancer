@@ -46,9 +46,6 @@ struct PatternSet {
   std::string_view spriteRender{};
   std::string_view spriteRenderMarkers{};
   std::string_view spriteRenderHealthBar{};
-  // Optional: CProjectileBAM::Render (arrows, bolts, missiles). Smoothed with
-  // the same position swap; independent of the sprite set.
-  std::string_view projectileBamRender{};
 };
 
 struct ReferenceRvas {
@@ -60,7 +57,6 @@ struct ReferenceRvas {
   std::uintptr_t spriteRender{};
   std::uintptr_t spriteRenderMarkers{};
   std::uintptr_t spriteRenderHealthBar{};
-  std::uintptr_t projectileBamRender{};
 };
 
 struct RuntimeOffsets {
@@ -88,6 +84,16 @@ struct ExecutableVersion {
   }
 };
 
+// One per-object render (virtual Render(CGameArea*, CVidMode*) of a
+// CGameObject subclass) that draws from CGameObject::m_pos and can therefore
+// be movement-smoothed with the position swap. Each resolves independently.
+struct ObjectRenderTarget {
+  const char* name{};
+  std::string_view pattern{};
+  std::uintptr_t referenceRva{};
+};
+inline constexpr std::size_t kMaxSmoothedObjectRenders = 8;
+
 struct BuildManifest {
   std::string_view buildId{};
   std::array<std::string_view, 2> supportedProductNames{};
@@ -96,6 +102,9 @@ struct BuildManifest {
   ReferenceRvas referenceRvas{};
   RuntimeOffsets offsets{};
   std::array<BranchInstructionDesc, 11> renderTextureCallsites{};
+  // Moving non-creature objects (projectiles, spell effect cells, debris).
+  // Unused slots stay empty.
+  std::array<ObjectRenderTarget, kMaxSmoothedObjectRenders> smoothedObjectRenders{};
 
   [[nodiscard]] constexpr bool validate() const noexcept {
     if (buildId.empty() || supportedProductNames[0].empty() || executableVersion.major == 0 ||

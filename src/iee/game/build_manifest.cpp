@@ -191,10 +191,8 @@ constexpr BuildManifest kKnownBuilds[] = {
             "48 8B 05 ? ? ? ? 48 33 C4 48 89 45 20 45 33 E4",
             "40 55 53 56 57 41 56 48 8B EC 48 83 EC 60 48 8B 41 18 4C 8B F2 48 8B F1",
             "4C 8B DC 55 57 49 8D AB 48 FF FF FF 48 81 EC A8 01 00 00",
-            // CProjectileBAM::Render (PDB-named, offline-verified unique).
-            "4C 8B DC 55 41 54 41 56 49 8D 6B A1 48 81 EC C0 00 00 00",
         },
-        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x233F20},
+        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -208,6 +206,24 @@ constexpr BuildManifest kKnownBuilds[] = {
             {"DrawVertex", 0xDB, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
             {"DrawEnd", 0x17A, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
             {"DrawPopState", 0x1AD, BranchInstructionKind::JmpRel32, 0xE9, 1, 5, true},
+        }},
+        // PDB-named on the Steam 2.7.3.0 binary; each pattern offline-verified
+        // unique, each function confirmed to draw from CGameObject::m_pos.
+        {{
+            {"CProjectileBAM::Render", "4C 8B DC 55 41 54 41 56 49 8D 6B A1 48 81 EC C0 00 00 00",
+             0x233F20},
+            {"CProjectileScorcher::Render",
+             "4C 8B DC 55 57 49 8D 6B A1 48 81 EC C8 00 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 45 27",
+             0x234A20},
+            {"CProjectileNewScorcher::Render", "4C 8B DC 55 53 49 8D 6B A1 48 81 EC C8 00 00 00",
+             0x234520},
+            {"CProjectileSkyStrike::Render", "4C 8B DC 55 41 56 49 8D 6B A1 48 81 EC C8 00 00 00",
+             0x234F50},
+            {"CGameFireball3d::Render",
+             "48 89 5C 24 18 48 89 74 24 20 55 57 41 54 41 55 41 56 48 8D 6C 24 C9", 0x1EAF90},
+            {"CGameTemporal::Render", "4C 8B DC 55 56 57 41 57 49 8D 6B A1 48 81 EC", 0x36CD80},
+            {"CGameChunk::Render", "4C 8B DC 55 56 57 41 55 41 57 49 8D 6B A1", 0x36B7A0},
+            {"CVEFVidCell::Render", "4C 8B DC 55 56 41 57 49 8D 6B A1 48 81 EC D0", 0x254B00},
         }},
     },
 };
@@ -231,9 +247,14 @@ static_assert(validate_pattern_format(kKnownBuilds[1].patterns.objectArrayGetSha
               "2.7.3 GetShare pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.spriteRender) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderMarkers) &&
-                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar) &&
-                  validate_pattern_format(kKnownBuilds[1].patterns.projectileBamRender),
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar),
               "2.7.3 sprite render pattern format is invalid");
+static_assert([] {
+  for (const auto& target : kKnownBuilds[1].smoothedObjectRenders) {
+    if (target.name && !validate_pattern_format(target.pattern)) return false;
+  }
+  return true;
+}(), "2.7.3 smoothed object render pattern format is invalid");
 static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace
 

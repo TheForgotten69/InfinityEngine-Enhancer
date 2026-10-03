@@ -3,10 +3,12 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <utility>
 
 #include "app_context.h"
 #include "area_state.h"
@@ -42,7 +44,7 @@ using SpriteRenderFn = void (*)(void*, void*, void*);
 static core::Hook<SpriteRenderFn> g_spriteRenderHook;
 static core::Hook<SpriteRenderFn> g_spriteMarkersHook;
 static core::Hook<SpriteRenderFn> g_spriteHealthBarHook;
-static core::Hook<SpriteRenderFn> g_projectileBamHook;
+static std::array<core::Hook<SpriteRenderFn>, game::kMaxSmoothedObjectRenders> g_objectRenderHooks;
 
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
@@ -299,8 +301,8 @@ static void detour_draw_color_tone(int mode) {
 // logic position is restored afterwards. All of it runs on the engine's main
 // thread; LoadArea only raises the reset flag.
 static game::SpriteMotionTracker g_spriteMotion;
-// Projectiles cover far more ground per tick than creatures.
-static game::SpriteMotionTracker g_projectileMotion{192};
+// Projectiles and effects cover far more ground per tick than creatures.
+static game::SpriteMotionTracker g_objectMotion{192};
 static int g_spritePositionSwapDepth = 0;
 
 // One timestamp per presented frame, so a sprite, its selection circle and
@@ -346,7 +348,7 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
     }
     if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) {
       g_spriteMotion.clear();
-      g_projectileMotion.clear();
+      g_objectMotion.clear();
     }
     if (core::safe_read(position, logic)) {
       const auto shown =
@@ -380,9 +382,18 @@ static void detour_sprite_health_bar(void* sprite, void* a, void* b) {
   call_with_smoothed_position(g_spriteHealthBarHook, g_spriteMotion, sprite, a, b);
 }
 
-static void detour_projectile_bam_render(void* projectile, void* a, void* b) {
-  call_with_smoothed_position(g_projectileBamHook, g_projectileMotion, projectile, a, b);
+// One detour per manifest slot, so each knows which original to call.
+template <std::size_t Slot>
+static void detour_object_render(void* object, void* a, void* b) {
+  call_with_smoothed_position(g_objectRenderHooks[Slot], g_objectMotion, object, a, b);
 }
+template <std::size_t... Slots>
+static constexpr std::array<SpriteRenderFn, sizeof...(Slots)> object_render_detours(
+    std::index_sequence<Slots...>) {
+  return {&detour_object_render<Slots>...};
+}
+static constexpr auto kObjectRenderDetours =
+    object_render_detours(std::make_index_sequence<game::kMaxSmoothedObjectRenders>{});
 
 // CGameStatic::Render hook: while the fpSEAM point effects are active, the
 // authored fire/smoke BAM draws are replaced by our textured effects, so the
@@ -524,16 +535,24 @@ bool install_all(AppContext& ctx) {
       }
     }
 
-    if (ctx.cfg.smoothSpriteMovement && ctx.addrs.ProjectileBamRender) {
-      try {
-        g_projectileBamHook.create(reinterpret_cast<void*>(ctx.addrs.ProjectileBamRender),
-                                   reinterpret_cast<void*>(&detour_projectile_bam_render));
-        g_projectileBamHook.enable();
-        LOG_INFO("Projectile movement smoothing hook installed");
-      } catch (...) {
-        (void)g_projectileBamHook.remove();
-        LOG_WARN("Projectile movement smoothing hook failed; projectiles move at the logic rate");
+    if (ctx.cfg.smoothSpriteMovement) {
+      std::size_t installed = 0;
+      for (std::size_t slot = 0; slot < g_objectRenderHooks.size(); ++slot) {
+        const auto target = ctx.addrs.SmoothedObjectRenders[slot];
+        if (!target) continue;
+        try {
+          g_objectRenderHooks[slot].create(reinterpret_cast<void*>(target),
+                                           reinterpret_cast<void*>(kObjectRenderDetours[slot]));
+          g_objectRenderHooks[slot].enable();
+          ++installed;
+        } catch (...) {
+          (void)g_objectRenderHooks[slot].remove();
+          LOG_WARN("Object movement smoothing hook {} failed; that object type moves at the "
+                   "logic rate",
+                   ctx.manifest->smoothedObjectRenders[slot].name);
+        }
       }
+      LOG_INFO("Object movement smoothing hooks installed: {}", installed);
     }
 
     g_loadAreaHook.enable();
@@ -577,7 +596,7 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
-  (void)g_projectileBamHook.remove();
+  for (auto& hook : g_objectRenderHooks) (void)hook.remove();
   (void)g_spriteHealthBarHook.remove();
   (void)g_spriteMarkersHook.remove();
   (void)g_spriteRenderHook.remove();
@@ -601,7 +620,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
-  (void)g_projectileBamHook.disable();
+  for (auto& hook : g_objectRenderHooks) (void)hook.disable();
   (void)g_spriteHealthBarHook.disable();
   (void)g_spriteMarkersHook.disable();
   (void)g_spriteRenderHook.disable();
