@@ -1733,7 +1733,8 @@ void test_build_area_effect_points() {
     const char smokeResref[] = "CHIMSMK";
     for (std::size_t c = 0; smokeResref[c] != '\0'; ++c) smoke.resref[c] = smokeResref[c];
     smoke.envelope = {true, -20, -90, 10, -10};
-    live.animations = {smoke};
+    live.animations.clear();
+    live.animations.push_back(smoke);
     livePoints = build_area_effect_points(live);
     expect_true(livePoints.size() == 1 && livePoints[0].x == 295.0f &&
                     livePoints[0].y == 390.0f && livePoints[0].height == 80.0f &&
