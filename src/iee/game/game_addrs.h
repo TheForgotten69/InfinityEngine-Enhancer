@@ -20,6 +20,10 @@ namespace iee::game {
         std::uintptr_t SpriteRender = 0;
         std::uintptr_t SpriteRenderMarkers = 0;
         std::uintptr_t SpriteRenderHealthBar = 0;
+        // Optional, all-or-nothing: draw-time animation interpolation.
+        std::uintptr_t VidCellGetFrame = 0;
+        std::uintptr_t VidCellGetCurrentCenterPoint = 0;
+        std::uintptr_t VidCellGetCurrentFrameSize = 0;
         // Optional, each independent; 0 where unresolved. Indexed like
         // BuildManifest::smoothedObjectRenders.
         std::array<std::uintptr_t, 8> SmoothedObjectRenders{};

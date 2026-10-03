@@ -191,8 +191,14 @@ constexpr BuildManifest kKnownBuilds[] = {
             "48 8B 05 ? ? ? ? 48 33 C4 48 89 45 20 45 33 E4",
             "40 55 53 56 57 41 56 48 8B EC 48 83 EC 60 48 8B 41 18 4C 8B F2 48 8B F1",
             "4C 8B DC 55 57 49 8D AB 48 FF FF FF 48 81 EC A8 01 00 00",
+            // CVidCell::GetFrame, then the shared GetCurrentCenterPoint /
+            // GetCurrentFrameSize body (PDB-named, offline-verified).
+            "40 53 48 83 EC 20 48 8B D9 48 8B 89 08 01 00 00 48 85 C9 0F",
+            "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B F9 33 DB 48 8B 89 08 01 00 00 "
+            "48 8B F2 48 85 C9 75 15 48 89 1A 33 C0",
         },
-        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820},
+        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x4118A0, 0x411660,
+         0x411780},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -247,7 +253,9 @@ static_assert(validate_pattern_format(kKnownBuilds[1].patterns.objectArrayGetSha
               "2.7.3 GetShare pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.spriteRender) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderMarkers) &&
-                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar),
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.vidCellGetFrame) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.vidCellFrameAccessor),
               "2.7.3 sprite render pattern format is invalid");
 static_assert([] {
   for (const auto& target : kKnownBuilds[1].smoothedObjectRenders) {

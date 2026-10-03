@@ -92,6 +92,7 @@ add_library(iee_common STATIC
     src/iee/core/config.cpp
     src/iee/core/logger.cpp
     src/iee/core/pattern_scanner.cpp
+    src/iee/game/animation_interp.cpp
     src/iee/game/are_animations.cpp
     src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp

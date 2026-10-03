@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
+#include <stdexcept>
 #include <utility>
 
 #include "app_context.h"
@@ -19,6 +21,7 @@
 #include "iee/features/tile_render.h"
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
+#include "iee/game/animation_interp.h"
 #include "iee/game/renderer.h"
 #include "iee/game/runtime_types_x64.h"
 #include "iee/game/sprite_motion.h"
@@ -45,6 +48,12 @@ static core::Hook<SpriteRenderFn> g_spriteRenderHook;
 static core::Hook<SpriteRenderFn> g_spriteMarkersHook;
 static core::Hook<SpriteRenderFn> g_spriteHealthBarHook;
 static std::array<core::Hook<SpriteRenderFn>, game::kMaxSmoothedObjectRenders> g_objectRenderHooks;
+// CVidCell::GetFrame(), GetCurrentCenterPoint(CPoint&), GetCurrentFrameSize(CSize&):
+// one pass-through signature, the unused argument is harmless on x64.
+using VidCellAccessorFn = int (*)(void*, void*);
+static core::Hook<VidCellAccessorFn> g_vidCellGetFrameHook;
+static core::Hook<VidCellAccessorFn> g_vidCellCenterPointHook;
+static core::Hook<VidCellAccessorFn> g_vidCellFrameSizeHook;
 
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
@@ -303,6 +312,9 @@ static void detour_draw_color_tone(int mode) {
 static game::SpriteMotionTracker g_spriteMotion;
 // Projectiles and effects cover far more ground per tick than creatures.
 static game::SpriteMotionTracker g_objectMotion{192};
+// Draw-time animation interpolation state (see detour_sprite_render).
+static game::AnimationInterpolator g_animationInterp;
+static bool g_animationInterpActive = false;
 static int g_spritePositionSwapDepth = 0;
 
 // One timestamp per presented frame, so a sprite, its selection circle and
@@ -330,7 +342,7 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
                                         void* a, void* b) {
   const auto original = hook.original();
   // Nested sprite renders already see the smoothed position.
-  if (!sprite || !g_ctx || g_spritePositionSwapDepth > 0) {
+  if (!sprite || !g_ctx || g_spritePositionSwapDepth > 0 || !g_ctx->cfg.smoothSpriteMovement) {
     original(sprite, a, b);
     return;
   }
@@ -349,6 +361,7 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
     if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) {
       g_spriteMotion.clear();
       g_objectMotion.clear();
+      g_animationInterp.reset_timing();
     }
     if (core::safe_read(position, logic)) {
       const auto shown =
@@ -372,8 +385,31 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
   if (swapped && position->x == shownX && position->y == shownY) *position = logic;
 }
 
+// Animation interpolation. While a creature is being drawn, every CVidCell the
+// engine resolves a frame for is pointed at its expanded BAM and the in-between
+// frame for this instant (see game::AnimationInterpolator); the logic's
+// resource and frame are restored when the draw returns. Main thread only.
+
 static void detour_sprite_render(void* sprite, void* a, void* b) {
+  if (!g_animationInterpActive) {
+    call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
+    return;
+  }
+  g_animationInterp.begin_scope();
   call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
+  g_animationInterp.end_scope();
+}
+static int detour_vid_cell_get_frame(void* cell, void* unused) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellGetFrameHook.original()(cell, unused);
+}
+static int detour_vid_cell_center_point(void* cell, void* out) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellCenterPointHook.original()(cell, out);
+}
+static int detour_vid_cell_frame_size(void* cell, void* out) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellFrameSizeHook.original()(cell, out);
 }
 static void detour_sprite_markers(void* sprite, void* a, void* b) {
   call_with_smoothed_position(g_spriteMarkersHook, g_spriteMotion, sprite, a, b);
@@ -514,7 +550,8 @@ bool install_all(AppContext& ctx) {
       }
     }
 
-    if (ctx.cfg.smoothSpriteMovement && ctx.addrs.SpriteRender && ctx.addrs.SpriteRenderMarkers &&
+    if ((ctx.cfg.smoothSpriteMovement || ctx.cfg.interpolateAnimations) &&
+        ctx.addrs.SpriteRender && ctx.addrs.SpriteRenderMarkers &&
         ctx.addrs.SpriteRenderHealthBar) {
       try {
         g_spriteRenderHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRender),
@@ -526,7 +563,40 @@ bool install_all(AppContext& ctx) {
         g_spriteRenderHook.enable();
         g_spriteMarkersHook.enable();
         g_spriteHealthBarHook.enable();
-        LOG_INFO("Sprite movement smoothing hooks installed");
+        LOG_INFO("Sprite render hooks installed (movement smoothing={})",
+                 ctx.cfg.smoothSpriteMovement);
+        if (ctx.cfg.interpolateAnimations && ctx.addrs.VidCellGetFrame &&
+            ctx.addrs.VidCellGetCurrentCenterPoint && ctx.addrs.VidCellGetCurrentFrameSize) {
+          try {
+            wchar_t executablePath[MAX_PATH]{};
+            const auto length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            if (length == 0 || length >= MAX_PATH) throw std::runtime_error("no game path");
+            const auto directory =
+                std::filesystem::path(executablePath).parent_path() / "iee-interp";
+            g_animationInterp.set_directory(directory);
+            g_vidCellGetFrameHook.create(reinterpret_cast<void*>(ctx.addrs.VidCellGetFrame),
+                                         reinterpret_cast<void*>(&detour_vid_cell_get_frame));
+            g_vidCellCenterPointHook.create(
+                reinterpret_cast<void*>(ctx.addrs.VidCellGetCurrentCenterPoint),
+                reinterpret_cast<void*>(&detour_vid_cell_center_point));
+            g_vidCellFrameSizeHook.create(
+                reinterpret_cast<void*>(ctx.addrs.VidCellGetCurrentFrameSize),
+                reinterpret_cast<void*>(&detour_vid_cell_frame_size));
+            g_vidCellGetFrameHook.enable();
+            g_vidCellCenterPointHook.enable();
+            g_vidCellFrameSizeHook.enable();
+            g_animationInterpActive = true;
+            LOG_INFO("Animation interpolation hooks installed (expanded BAMs from {})",
+                     directory.string());
+          } catch (...) {
+            g_animationInterpActive = false;
+            (void)g_vidCellFrameSizeHook.remove();
+            (void)g_vidCellCenterPointHook.remove();
+            (void)g_vidCellGetFrameHook.remove();
+            LOG_WARN("Animation interpolation hooks failed; animations play their original "
+                     "frames");
+          }
+        }
       } catch (...) {
         (void)g_spriteHealthBarHook.remove();
         (void)g_spriteMarkersHook.remove();
@@ -596,6 +666,10 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  g_animationInterpActive = false;
+  (void)g_vidCellFrameSizeHook.remove();
+  (void)g_vidCellCenterPointHook.remove();
+  (void)g_vidCellGetFrameHook.remove();
   for (auto& hook : g_objectRenderHooks) (void)hook.remove();
   (void)g_spriteHealthBarHook.remove();
   (void)g_spriteMarkersHook.remove();
@@ -620,6 +694,9 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_vidCellFrameSizeHook.disable();
+  (void)g_vidCellCenterPointHook.disable();
+  (void)g_vidCellGetFrameHook.disable();
   for (auto& hook : g_objectRenderHooks) (void)hook.disable();
   (void)g_spriteHealthBarHook.disable();
   (void)g_spriteMarkersHook.disable();

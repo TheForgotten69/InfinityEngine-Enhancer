@@ -96,6 +96,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_float(cfg.lodBias);
     else if (iequals(key, "SmoothSpriteMovement"))
       assign_bool(cfg.smoothSpriteMovement);
+    else if (iequals(key, "InterpolateAnimations"))
+      assign_bool(cfg.interpolateAnimations);
     return;
   }
 
@@ -192,6 +194,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   f << "MaxAnisotropy = " << cfg.maxAnisotropy << "\n";
   f << "LODBias = " << cfg.lodBias << "\n";
   write_bool(f, "SmoothSpriteMovement", cfg.smoothSpriteMovement);
+  write_bool(f, "InterpolateAnimations", cfg.interpolateAnimations);
 
   write_section(f, "Detection");
   write_bool(f, "AreaAnimationScan", cfg.enableAreaAnimationScan);

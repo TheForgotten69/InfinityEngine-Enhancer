@@ -81,7 +81,7 @@ namespace iee::game {
 
         // Optional targets: sprite movement smoothing. Resolved only when
         // requested, and only as a complete set.
-        if (cfg.smoothSpriteMovement) {
+        if (cfg.smoothSpriteMovement || cfg.interpolateAnimations) {
             const auto resolveOptional = [&](const char *name, std::string_view pattern,
                                              std::uintptr_t referenceRva) -> std::uintptr_t {
                 if (pattern.empty()) return 0;
@@ -101,7 +101,32 @@ namespace iee::game {
             out.SpriteRenderHealthBar =
                 resolveOptional("CGameSprite::RenderHealthBar", patterns.spriteRenderHealthBar,
                                 rvas.spriteRenderHealthBar);
-            for (std::size_t index = 0; index < manifest.smoothedObjectRenders.size(); ++index) {
+            if (cfg.interpolateAnimations) {
+                // The twin accessors cannot be told apart by signature, so each
+                // is confirmed in full at its reference RVA on this
+                // identity-checked build.
+                const auto confirmTwin = [&](std::uintptr_t rva) -> std::uintptr_t {
+                    if (!rva || patterns.vidCellFrameAccessor.empty()) return 0;
+                    return reinterpret_cast<std::uintptr_t>(
+                        core::confirm_pattern_with_patched_prologue(
+                            nullptr, rva, patterns.vidCellFrameAccessor, 0));
+                };
+                out.VidCellGetFrame = resolveOptional("CVidCell::GetFrame",
+                                                      patterns.vidCellGetFrame,
+                                                      rvas.vidCellGetFrame);
+                out.VidCellGetCurrentCenterPoint = confirmTwin(rvas.vidCellGetCurrentCenterPoint);
+                out.VidCellGetCurrentFrameSize = confirmTwin(rvas.vidCellGetCurrentFrameSize);
+                if (!(out.VidCellGetFrame && out.VidCellGetCurrentCenterPoint &&
+                      out.VidCellGetCurrentFrameSize)) {
+                    out.VidCellGetFrame = out.VidCellGetCurrentCenterPoint =
+                        out.VidCellGetCurrentFrameSize = 0;
+                    LOG_WARN("Animation interpolation disabled: this build has no complete set "
+                             "of CVidCell frame targets");
+                }
+            }
+            for (std::size_t index = 0;
+                 cfg.smoothSpriteMovement && index < manifest.smoothedObjectRenders.size();
+                 ++index) {
                 const auto &target = manifest.smoothedObjectRenders[index];
                 if (!target.name) continue;
                 out.SmoothedObjectRenders[index] =

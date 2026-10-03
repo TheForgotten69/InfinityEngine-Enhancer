@@ -19,6 +19,7 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
+#include "iee/game/animation_interp.h"
 #include "iee/game/are_animations.h"
 #include "iee/game/sprite_motion.h"
 #include "iee/game/area_texture.h"
@@ -1733,6 +1734,158 @@ void test_sprite_motion_tracker() {
   expect_eq(tracker.size(), std::size_t{1}, "Sprites not drawn for a while are forgotten");
 }
 
+// Builds an uncompressed BAM V1 image: `frames` raw 1x1 frames and the given
+// cycles (lists of frame indices).
+std::vector<std::byte> make_raw_bam(std::uint16_t frames,
+                                    const std::vector<std::vector<std::uint16_t>>& cycles) {
+  using namespace iee::game;
+  std::vector<std::uint16_t> lookup;
+  for (const auto& cycle : cycles) lookup.insert(lookup.end(), cycle.begin(), cycle.end());
+  bamHeader_st header{};
+  header.nFileType = 0x204D4142;
+  header.nFileVersion = 0x20203156;
+  header.nFrames = frames;
+  header.nSequences = static_cast<std::uint8_t>(cycles.size());
+  header.nTableOffset = sizeof(bamHeader_st);
+  header.nPaletteOffset = static_cast<std::uint32_t>(
+      header.nTableOffset + frames * sizeof(frameTableEntry_st) +
+      cycles.size() * sizeof(sequenceTableEntry_st));
+  header.nFrameListOffset = header.nPaletteOffset + 1024;
+  const auto dataOffset =
+      static_cast<std::uint32_t>(header.nFrameListOffset + lookup.size() * sizeof(std::uint16_t));
+  std::vector<std::byte> image(dataOffset + frames);
+  std::memcpy(image.data(), &header, sizeof(header));
+  for (std::uint16_t index = 0; index < frames; ++index) {
+    frameTableEntry_st frame{1, 1, 0, 0, (dataOffset + index) | 0x80000000u};
+    std::memcpy(image.data() + header.nTableOffset + index * sizeof(frame), &frame, sizeof(frame));
+  }
+  std::uint16_t start = 0;
+  for (std::size_t index = 0; index < cycles.size(); ++index) {
+    sequenceTableEntry_st sequence{static_cast<std::int16_t>(cycles[index].size()), start};
+    start = static_cast<std::uint16_t>(start + cycles[index].size());
+    std::memcpy(image.data() + header.nTableOffset + frames * sizeof(frameTableEntry_st) +
+                    index * sizeof(sequence),
+                &sequence, sizeof(sequence));
+  }
+  if (!lookup.empty()) {
+    std::memcpy(image.data() + header.nFrameListOffset, lookup.data(),
+                lookup.size() * sizeof(std::uint16_t));
+  }
+  return image;
+}
+
+void test_animation_interpolation() {
+  using namespace iee::game;
+
+  // --- expanded BAM validation
+  auto good = make_raw_bam(5, {{0, 3, 1, 4, 2, 2}});
+  ExpandedBamView view{};
+  expect_true(parse_expanded_bam(good, view) && view.header->nFrames == 5 &&
+                  view.sequences[0].nFrames == 6 && view.frameList[1] == 3,
+              "A well-formed raw BAM V1 yields its table pointers");
+  auto bad = good;
+  bad.resize(bad.size() - 1);
+  expect_true(!parse_expanded_bam(bad, view), "A frame whose pixels overrun the image is rejected");
+  bad = make_raw_bam(5, {{0, 3, 1, 9, 2, 2}});
+  expect_true(!parse_expanded_bam(bad, view), "A lookup entry beyond the frame table is rejected");
+  bad = good;
+  frameTableEntry_st rle{};
+  std::memcpy(&rle, bad.data() + sizeof(bamHeader_st), sizeof(rle));
+  rle.___u4 &= 0x7FFFFFFFu;
+  std::memcpy(bad.data() + sizeof(bamHeader_st), &rle, sizeof(rle));
+  expect_true(!parse_expanded_bam(bad, view), "An RLE frame cannot be bounded and is rejected");
+  bad = good;
+  bad[0] = std::byte{'X'};
+  expect_true(!parse_expanded_bam(bad, view), "A wrong signature is rejected");
+
+  // --- frame choice
+  AnimationFrameTracker tracker;
+  int key = 0;
+  const double step = AnimationFrameTracker::kDefaultInterval;
+  expect_eq(tracker.sample(&key, 0, 0, 3, 10.0), std::uint16_t{0}, "First sighting: original frame");
+  expect_eq(tracker.sample(&key, 0, 1, 3, 10.0 + step), std::uint16_t{1},
+            "Right after a step the in-between leading to the new frame is shown");
+  expect_eq(tracker.sample(&key, 0, 1, 3, 10.0 + step + step * 0.6), std::uint16_t{2},
+            "Past half the interval the new frame itself is shown");
+  expect_eq(tracker.sample(&key, 0, 2, 3, 10.0 + step + step), std::uint16_t{3}, "Next step: next in-between");
+  expect_eq(tracker.sample(&key, 0, 0, 3, 10.0 + step + step * 2), std::uint16_t{5},
+            "A looping cycle wraps through the closing in-between");
+  expect_eq(tracker.sample(&key, 0, 2, 3, 10.0 + step + step * 3), std::uint16_t{4},
+            "A non-consecutive jump shows the original frame");
+  expect_eq(tracker.sample(&key, 1, 1, 3, 10.0 + step + step * 4), std::uint16_t{2},
+            "A sequence change starts over");
+
+  // --- draw-time swap
+  const auto directory = std::filesystem::temp_directory_path() / "iee_interp_test";
+  std::filesystem::create_directories(directory);
+  {
+    std::ofstream file(directory / "TESTBAM.bam", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(good.data()), static_cast<std::streamsize>(good.size()));
+  }
+  auto originalImage = make_raw_bam(3, {{0, 1, 2}});
+  ExpandedBamView originalView{};
+  expect_true(parse_expanded_bam(originalImage, originalView), "Fixture BAM parses");
+  CResCell original{};
+  const char resref[] = "testbam";
+  original.baseclass_0.resref = resref;
+  original.baseclass_0.pData = originalImage.data();
+  original.baseclass_0.bLoaded = true;
+  original.m_pBamHeader = originalView.header;
+  original.m_pFrames = originalView.frames;
+  original.m_pSequences = originalView.sequences;
+  original.m_pFrameList = originalView.frameList;
+  CVidCell cell{};
+  cell.pRes = &original;
+  cell.m_nCurrentFrame = 1;
+  int stale = 0;
+  cell.m_pFrame = &stale;
+
+  AnimationInterpolator interp;
+  interp.set_directory(directory);
+  interp.touch(&cell, 1.0);
+  expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 1,
+              "Outside a draw scope nothing is swapped");
+  interp.begin_scope();
+  interp.touch(&cell, 1.0);
+  expect_true(cell.pRes != &original && cell.pRes->m_pFrames != original.m_pFrames &&
+                  cell.pRes->baseclass_0.bLoaded && cell.m_nCurrentFrame == 2 &&
+                  cell.m_pFrame == nullptr,
+              "Inside a scope the cell points at the expanded BAM and the mapped frame");
+  const auto* swapped = cell.pRes;
+  interp.touch(&cell, 1.0);
+  expect_true(cell.pRes == swapped && cell.m_nCurrentFrame == 2, "A second touch is a no-op");
+  interp.end_scope();
+  expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 1 && cell.m_pFrame == nullptr,
+              "Closing the scope restores the logic resource and frame");
+  expect_eq(interp.loaded_count(), std::size_t{1}, "The expanded file is read once");
+
+  cell.m_nCurrentFrame = 2;
+  interp.begin_scope();
+  interp.touch(&cell, 1.01);
+  expect_eq(cell.m_nCurrentFrame, std::int16_t{3}, "A logic step draws the in-between first");
+  interp.end_scope();
+
+  cell.m_nCurrentFrame = 7;  // outside the logic cycle
+  interp.begin_scope();
+  interp.touch(&cell, 1.02);
+  expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 7,
+              "A frame outside the logic cycle is left to the engine");
+  interp.end_scope();
+
+  CResCell other{};
+  const char missing[] = "NOFILE";
+  other = original;
+  other.baseclass_0.resref = missing;
+  CVidCell otherCell{};
+  otherCell.pRes = &other;
+  interp.begin_scope();
+  interp.touch(&otherCell, 1.0);
+  expect_true(otherCell.pRes == &other, "A BAM without an expanded file draws unchanged");
+  interp.end_scope();
+  std::error_code cleanup;
+  std::filesystem::remove_all(directory, cleanup);
+}
+
 void test_build_area_effect_points() {
   using namespace iee::game;
 
@@ -1908,6 +2061,7 @@ int main() {
   test_decode_object_array_globals();
   test_collect_area_static_animations();
   test_sprite_motion_tracker();
+  test_animation_interpolation();
   test_build_area_effect_points();
   test_config_detection_section();
 

@@ -46,6 +46,13 @@ struct PatternSet {
   std::string_view spriteRender{};
   std::string_view spriteRenderMarkers{};
   std::string_view spriteRenderHealthBar{};
+  // Optional: CVidCell frame resolution, hooked for draw-time animation
+  // interpolation. GetFrame has its own signature. GetCurrentCenterPoint and
+  // GetCurrentFrameSize are byte-identical for their first 150+ bytes, so
+  // they share one pattern that is confirmed at each reference RVA instead of
+  // being searched for.
+  std::string_view vidCellGetFrame{};
+  std::string_view vidCellFrameAccessor{};
 };
 
 struct ReferenceRvas {
@@ -57,6 +64,9 @@ struct ReferenceRvas {
   std::uintptr_t spriteRender{};
   std::uintptr_t spriteRenderMarkers{};
   std::uintptr_t spriteRenderHealthBar{};
+  std::uintptr_t vidCellGetFrame{};
+  std::uintptr_t vidCellGetCurrentCenterPoint{};
+  std::uintptr_t vidCellGetCurrentFrameSize{};
 };
 
 struct RuntimeOffsets {
