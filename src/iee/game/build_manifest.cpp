@@ -185,8 +185,14 @@ constexpr BuildManifest kKnownBuilds[] = {
             // CGameStatic::Render (offline-verified unique at 0x1F27D0).
             "40 55 56 57 48 83 EC 50 48 8B 05 ? ? ? ? 48 33 C4 48 89 44 24 30 "
             "48 8B 05 ? ? ? ? 49 8B F0 48 8B EA 48 8B F9",
+            // CGameSprite::Render / RenderMarkers / RenderHealthBar. PDB-named
+            // on the Steam 2.7.3.0 binary; each offline-verified unique.
+            "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 A0 48 81 EC 60 01 00 00 "
+            "48 8B 05 ? ? ? ? 48 33 C4 48 89 45 20 45 33 E4",
+            "40 55 53 56 57 41 56 48 8B EC 48 83 EC 60 48 8B 41 18 4C 8B F2 48 8B F1",
+            "4C 8B DC 55 57 49 8D AB 48 FF FF FF 48 81 EC A8 01 00 00",
         },
-        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0},
+        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -221,6 +227,10 @@ static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderTexture),
               "2.7.3 RenderTexture pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.objectArrayGetShare),
               "2.7.3 GetShare pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.spriteRender) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderMarkers) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar),
+              "2.7.3 sprite render pattern format is invalid");
 static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace
 

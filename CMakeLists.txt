@@ -100,6 +100,7 @@ add_library(iee_common STATIC
     src/iee/game/object_statics.cpp
     src/iee/game/resref_runtime.cpp
     src/iee/game/shader_override.cpp
+    src/iee/game/sprite_motion.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
     src/iee/game/tis_palette.cpp

@@ -7,6 +7,7 @@ struct EngineConfig {
   bool enableAnisotropicFiltering = false;
   float maxAnisotropy = 8.0f;
   float lodBias = -0.25f;
+  bool smoothSpriteMovement = false;
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;

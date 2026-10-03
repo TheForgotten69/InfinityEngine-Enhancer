@@ -20,6 +20,7 @@
 #include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
 #include "iee/game/are_animations.h"
+#include "iee/game/sprite_motion.h"
 #include "iee/game/area_texture.h"
 #include "iee/game/object_statics.h"
 #include "iee/game/build_manifest.h"
@@ -1674,6 +1675,53 @@ void test_collect_area_static_animations() {
               "A negative max index must fail closed");
 }
 
+void test_sprite_motion_tracker() {
+  using namespace iee::game;
+  const double tick = SpriteMotionTracker::kDefaultInterval;
+  int a = 0;
+  int b = 0;
+  SpriteMotionTracker tracker;
+
+  expect_true(tracker.sample(&a, {100, 200}, 10.0) == MotionPoint{100, 200},
+              "A first sighting is drawn where the engine has it");
+  expect_true(tracker.sample(&a, {100, 200}, 10.5) == MotionPoint{100, 200},
+              "A stationary sprite is never moved");
+
+  // First step after standing still: slides over the default tick.
+  expect_true(tracker.sample(&a, {110, 200}, 11.0) == MotionPoint{100, 200},
+              "A new logic position starts from what was on screen");
+  expect_true(tracker.sample(&a, {110, 200}, 11.0 + tick / 2) == MotionPoint{105, 200},
+              "Half a tick later the sprite is half way");
+  expect_true(tracker.sample(&a, {110, 200}, 11.0 + tick / 2) == MotionPoint{105, 200},
+              "Sampling twice in one frame is stable");
+  expect_true(tracker.sample(&a, {110, 200}, 11.0 + tick * 3) == MotionPoint{110, 200},
+              "It settles on the logic position and stays there");
+
+  // Steady walk at a slower logic rate: the observed interval is adopted.
+  const double slow = 1.0 / 20.0;
+  (void)tracker.sample(&a, {120, 200}, 12.0);
+  (void)tracker.sample(&a, {130, 200}, 12.0 + slow);
+  expect_true(tracker.sample(&a, {130, 200}, 12.0 + slow * 1.5) == MotionPoint{125, 200},
+              "The slide spans the interval between the last two moves");
+
+  // A tick that arrives early continues from the on-screen position.
+  (void)tracker.sample(&b, {0, 0}, 20.0);
+  (void)tracker.sample(&b, {10, 0}, 21.0);
+  expect_true(tracker.sample(&b, {20, 0}, 21.0 + tick / 2) == MotionPoint{5, 0},
+              "An early move never jumps backwards or forwards");
+
+  expect_true(tracker.sample(&b, {500, 500}, 22.0) == MotionPoint{500, 500},
+              "A teleport-sized move is shown immediately");
+
+  tracker.clear();
+  expect_eq(tracker.size(), std::size_t{0}, "clear() forgets every sprite");
+  for (std::size_t i = 0; i <= SpriteMotionTracker::kPruneThreshold; ++i) {
+    (void)tracker.sample(reinterpret_cast<const void*>(i + 1), {0, 0}, 30.0);
+  }
+  (void)tracker.sample(&a, {0, 0}, 30.0 + SpriteMotionTracker::kStaleSeconds + 1.0);
+  expect_eq(tracker.size(), std::size_t{1}, "Sprites not drawn for a while are forgotten");
+}
+
 void test_build_area_effect_points() {
   using namespace iee::game;
 
@@ -1848,6 +1896,7 @@ int main() {
   test_parse_are_animations();
   test_decode_object_array_globals();
   test_collect_area_static_animations();
+  test_sprite_motion_tracker();
   test_build_area_effect_points();
   test_config_detection_section();
 

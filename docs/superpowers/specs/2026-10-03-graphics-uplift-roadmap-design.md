@@ -119,12 +119,19 @@ Sprites move in 30 Hz steps while the camera scrolls at display rate. Lerp
 each sprite's draw position between ticks inside a `CGameSprite::Render` hook
 (swap position in, call original, restore).
 
-- Timing: the hook measures tick boundaries itself (for example from
-  `CGameSprite::AIUpdate` `0x3447F0` or `CInfGame::SynchronousUpdate`
-  `0x292010`).
-- **Gate:** confirm the previous-tick position source. `m_posOld` exists but
-  its use in `Render` looks like a motion trail; do not assume semantics.
-- Risk: selection circles, health bars and markers must move with the sprite.
+- Implemented 2026-10-03 behind `[Rendering] SmoothSpriteMovement` (default
+  off, 2.7.3 only); in-game validation pending.
+- No engine "previous position" is used: `SpriteMotionTracker` observes each
+  sprite's `m_pos` at render time, treats a change as a logic tick, and slides
+  from the last shown position over the interval between the last two
+  changes (30 Hz assumed until observed). No tick hook is needed.
+- `CGameSprite::RenderMarkers` (`0x36F170`) and `RenderHealthBar`
+  (`0x36E820`) are wrapped with the same swap and share one per-frame
+  timestamp, so circles and bars stay glued to the sprite.
+- Known limits: positions are whole world pixels; projectiles and effects
+  still step at the logic rate; anything else that reads `m_pos` during
+  render (floating text, action icons drawn outside the three hooks) is not
+  smoothed.
 
 ### B. `fpSprite` replacement
 

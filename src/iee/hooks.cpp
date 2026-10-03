@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 
@@ -17,6 +18,8 @@
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
 #include "iee/game/renderer.h"
+#include "iee/game/runtime_types_x64.h"
+#include "iee/game/sprite_motion.h"
 #include "iee/shader_probe.h"
 
 namespace iee::hooks {
@@ -33,8 +36,16 @@ static core::Hook<LoadAreaFn> g_loadAreaHook;
 static core::Hook<RenderTextureFn> g_renderTextureHook;
 static core::Hook<DrawColorToneFn> g_drawColorToneHook;
 static core::Hook<StaticRenderFn> g_staticRenderHook;
+// CGameSprite::Render(area, vidMode) and the (vidMode) overlay renders share
+// one pass-through signature; the unused third argument is harmless on x64.
+using SpriteRenderFn = void (*)(void*, void*, void*);
+static core::Hook<SpriteRenderFn> g_spriteRenderHook;
+static core::Hook<SpriteRenderFn> g_spriteMarkersHook;
+static core::Hook<SpriteRenderFn> g_spriteHealthBarHook;
 
 static AppContext* g_ctx = nullptr;
+// Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
+static std::atomic<bool> g_spriteMotionReset{false};
 
 namespace {
 void record_render_performance(bool enabled, bool handled, long long elapsedTicks) noexcept {
@@ -237,6 +248,7 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
     area::reset_gpu_area_state();
     ctx.reset_area_state();
     features::request_tile_render_state_reset();
+    g_spriteMotionReset.store(true, std::memory_order_release);
     game::request_texture_configuration_cache_reset();
   } catch (const std::exception& e) {
     LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path: {}", e.what());
@@ -276,6 +288,77 @@ static void detour_draw_color_tone(int mode) {
     // Rendering must never depend on IEE diagnostics or uniform state.
   }
   g_drawColorToneHook.original()(mode);
+}
+
+// Sprite movement smoothing. The engine moves creatures on its logic tick
+// (30 Hz) while EEex's uncapped renderer draws many frames per tick, so every
+// render that reads the sprite position is wrapped: the smoothed position is
+// written into CGameObject::m_pos for the duration of the engine call and the
+// logic position is restored afterwards. All of it runs on the engine's main
+// thread; LoadArea only raises the reset flag.
+static game::SpriteMotionTracker g_spriteMotion;
+static int g_spritePositionSwapDepth = 0;
+
+// One timestamp per presented frame, so a sprite, its selection circle and
+// its health bar are all placed at the same smoothed position.
+static double sprite_motion_frame_seconds() noexcept {
+  static unsigned long long lastFrame = ~0ull;
+  static double seconds = 0.0;
+  const auto frameNumber = frame::frame_count();
+  if (frameNumber != lastFrame || frameNumber == 0) {
+    lastFrame = frameNumber;
+    static const double frequency = [] {
+      LARGE_INTEGER value{};
+      QueryPerformanceFrequency(&value);
+      return static_cast<double>(value.QuadPart);
+    }();
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    seconds = static_cast<double>(counter.QuadPart) / frequency;
+  }
+  return seconds;
+}
+
+static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* sprite, void* a,
+                                        void* b) {
+  const auto original = hook.original();
+  // Nested sprite renders already see the smoothed position.
+  if (!sprite || !g_ctx || g_spritePositionSwapDepth > 0) {
+    original(sprite, a, b);
+    return;
+  }
+  auto* position = reinterpret_cast<game::CPoint*>(static_cast<std::byte*>(sprite) +
+                                                   offsetof(game::CGameObject, m_pos));
+  game::CPoint logic{};
+  bool swapped = false;
+  try {
+    if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) g_spriteMotion.clear();
+    if (core::safe_read(position, logic)) {
+      const auto shown =
+          g_spriteMotion.sample(sprite, {logic.x, logic.y}, sprite_motion_frame_seconds());
+      if (shown.x != logic.x || shown.y != logic.y) {
+        position->x = shown.x;
+        position->y = shown.y;
+        swapped = true;
+      }
+    }
+  } catch (...) {
+    // Smoothing is cosmetic; any doubt draws at the logic position.
+  }
+  ++g_spritePositionSwapDepth;
+  original(sprite, a, b);
+  --g_spritePositionSwapDepth;
+  if (swapped) *position = logic;
+}
+
+static void detour_sprite_render(void* sprite, void* a, void* b) {
+  call_with_smoothed_position(g_spriteRenderHook, sprite, a, b);
+}
+static void detour_sprite_markers(void* sprite, void* a, void* b) {
+  call_with_smoothed_position(g_spriteMarkersHook, sprite, a, b);
+}
+static void detour_sprite_health_bar(void* sprite, void* a, void* b) {
+  call_with_smoothed_position(g_spriteHealthBarHook, sprite, a, b);
 }
 
 // CGameStatic::Render hook: while the fpSEAM point effects are active, the
@@ -397,6 +480,27 @@ bool install_all(AppContext& ctx) {
       }
     }
 
+    if (ctx.cfg.smoothSpriteMovement && ctx.addrs.SpriteRender && ctx.addrs.SpriteRenderMarkers &&
+        ctx.addrs.SpriteRenderHealthBar) {
+      try {
+        g_spriteRenderHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRender),
+                                  reinterpret_cast<void*>(&detour_sprite_render));
+        g_spriteMarkersHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRenderMarkers),
+                                   reinterpret_cast<void*>(&detour_sprite_markers));
+        g_spriteHealthBarHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRenderHealthBar),
+                                     reinterpret_cast<void*>(&detour_sprite_health_bar));
+        g_spriteRenderHook.enable();
+        g_spriteMarkersHook.enable();
+        g_spriteHealthBarHook.enable();
+        LOG_INFO("Sprite movement smoothing hooks installed");
+      } catch (...) {
+        (void)g_spriteHealthBarHook.remove();
+        (void)g_spriteMarkersHook.remove();
+        (void)g_spriteRenderHook.remove();
+        LOG_WARN("Sprite movement smoothing hooks failed; creatures move at the logic rate");
+      }
+    }
+
     g_loadAreaHook.enable();
     LOG_INFO("LoadArea hook enabled");
 
@@ -438,6 +542,9 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_spriteHealthBarHook.remove();
+  (void)g_spriteMarkersHook.remove();
+  (void)g_spriteRenderHook.remove();
   (void)g_staticRenderHook.remove();
   (void)g_drawColorToneHook.remove();
   (void)g_renderTextureHook.remove();
@@ -458,6 +565,9 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_spriteHealthBarHook.disable();
+  (void)g_spriteMarkersHook.disable();
+  (void)g_spriteRenderHook.disable();
   (void)g_staticRenderHook.disable();
   (void)g_drawColorToneHook.disable();
   (void)g_renderTextureHook.disable();

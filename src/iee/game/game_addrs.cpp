@@ -13,7 +13,6 @@
 
 namespace iee::game {
     bool resolve_addresses(GameAddresses &out, const core::EngineConfig &cfg, const BuildManifest &manifest) {
-        (void) cfg;
         out = {};
         auto moduleInfo = core::get_module_span(nullptr);
         if (!moduleInfo || !moduleInfo->base || !moduleInfo->size) {
@@ -77,6 +76,39 @@ namespace iee::game {
                 LOG_WARN("CGameStatic::Render pattern matched {} times; authored fire/smoke "
                          "draws will not be replaced",
                          staticRenderMatches);
+            }
+        }
+
+        // Optional targets: sprite movement smoothing. Resolved only when
+        // requested, and only as a complete set.
+        if (cfg.smoothSpriteMovement) {
+            const auto resolveOptional = [&](const char *name, std::string_view pattern,
+                                             std::uintptr_t referenceRva) -> std::uintptr_t {
+                if (pattern.empty()) return 0;
+                std::size_t matches = 0;
+                auto target = reinterpret_cast<std::uintptr_t>(
+                    core::find_unique_in_module(nullptr, pattern, &matches));
+                recover(name, target, matches, referenceRva, pattern);
+                if (!target) LOG_WARN("{} pattern matched {} times", name, matches);
+                return target;
+            };
+            const auto &patterns = manifest.patterns;
+            const auto &rvas = manifest.referenceRvas;
+            out.SpriteRender =
+                resolveOptional("CGameSprite::Render", patterns.spriteRender, rvas.spriteRender);
+            out.SpriteRenderMarkers = resolveOptional(
+                "CGameSprite::RenderMarkers", patterns.spriteRenderMarkers, rvas.spriteRenderMarkers);
+            out.SpriteRenderHealthBar =
+                resolveOptional("CGameSprite::RenderHealthBar", patterns.spriteRenderHealthBar,
+                                rvas.spriteRenderHealthBar);
+            if (out.SpriteRender && out.SpriteRenderMarkers && out.SpriteRenderHealthBar) {
+                LOG_INFO("Sprite render targets resolved at RVA 0x{:X} / 0x{:X} / 0x{:X}",
+                         out.SpriteRender - moduleBase, out.SpriteRenderMarkers - moduleBase,
+                         out.SpriteRenderHealthBar - moduleBase);
+            } else {
+                out.SpriteRender = out.SpriteRenderMarkers = out.SpriteRenderHealthBar = 0;
+                LOG_WARN("Sprite movement smoothing disabled: this build has no complete set of "
+                         "sprite render targets");
             }
         }
 

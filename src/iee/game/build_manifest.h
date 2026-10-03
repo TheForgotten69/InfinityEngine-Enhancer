@@ -40,6 +40,12 @@ struct PatternSet {
   // fire/smoke BAM draws while the fpSEAM point effects replace them. Empty
   // or non-unique keeps the engine draws (effects stay additive).
   std::string_view staticRender{};
+  // Optional: CGameSprite::Render and the two per-sprite overlay renders that
+  // read the same position. Hooked together for sprite movement smoothing;
+  // any empty or non-unique entry leaves the feature off.
+  std::string_view spriteRender{};
+  std::string_view spriteRenderMarkers{};
+  std::string_view spriteRenderHealthBar{};
 };
 
 struct ReferenceRvas {
@@ -48,6 +54,9 @@ struct ReferenceRvas {
   // Diagnostic only; 0 means "not yet observed on this build".
   std::uintptr_t objectArrayGetShare{};
   std::uintptr_t staticRender{};
+  std::uintptr_t spriteRender{};
+  std::uintptr_t spriteRenderMarkers{};
+  std::uintptr_t spriteRenderHealthBar{};
 };
 
 struct RuntimeOffsets {

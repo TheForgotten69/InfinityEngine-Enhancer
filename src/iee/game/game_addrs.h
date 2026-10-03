@@ -14,6 +14,11 @@ namespace iee::game {
         // Optional (0 when the pattern did not resolve uniquely): the point
         // effects then stay additive instead of replacing the engine draws.
         std::uintptr_t StaticRender = 0;
+        // Optional, all-or-nothing: sprite movement smoothing needs every
+        // render that reads the sprite position.
+        std::uintptr_t SpriteRender = 0;
+        std::uintptr_t SpriteRenderMarkers = 0;
+        std::uintptr_t SpriteRenderHealthBar = 0;
         bool initialized = false;
     };
 

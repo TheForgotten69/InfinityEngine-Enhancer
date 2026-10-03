@@ -69,6 +69,17 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
 - The classification table grows from runtime logs of unclassified resrefs,
   not speculation. See [are-animation-detection.md](are-animation-detection.md).
 
+`src/iee/game/sprite_motion.*`
+
+- Host-safe `SpriteMotionTracker`: per-sprite slide from the last shown
+  position to the newest logic position over one observed tick interval.
+- Consumed by the sprite render hooks in `hooks.cpp` (`CGameSprite::Render`,
+  `RenderMarkers`, `RenderHealthBar`), which write the smoothed position into
+  `CGameObject::m_pos` for the duration of the engine call and restore the
+  logic position afterwards. Gated by `[Rendering] SmoothSpriteMovement`
+  (default off); the three targets resolve as a set or not at all, and only
+  the 2.7.3 manifest carries their patterns.
+
 `src/iee/game/object_statics.*`
 
 - Host-safe decode of the `CGameObjectArray` globals out of the engine's
