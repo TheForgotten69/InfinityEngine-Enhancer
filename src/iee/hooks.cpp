@@ -209,6 +209,7 @@ void publish_view_state(bool force = false, bool flushGpuUpload = true) {
       area::refresh_wed_cache(*g_ctx, infGame);
     }
   }
+  area::republish_area_animations_if_dirty(*g_ctx);
   if (!g_ctx->wed.load()) {
     return;
   }
@@ -292,7 +293,11 @@ static void detour_static_render(void* thisPtr, void* area, void* vidMode) {
           (header.nFlags &
            (game::kAreAnimationFlagUseWbm | game::kAreAnimationFlagUsePvrz)) == 0) {
         const auto info = game::make_area_animation_info(header);
-        if (game::should_replace_animation_draw(info.resrefView(), info.kind)) {
+        // Suppress only once the authored draw box is known: the engine's
+        // first draw loads the BAM that box is read from, and the point then
+        // lands exactly where RenderBam would have drawn.
+        if (game::should_replace_animation_draw(info.resrefView(), info.kind) &&
+            area::static_envelope_ready(thisPtr)) {
           return;  // replaced by the shader's point effects
         }
       }

@@ -31,6 +31,23 @@ enum class AreaAnimationKind : int {
 [[nodiscard]] AreaAnimationKind classify_area_animation(std::string_view resref,
                                                         std::string_view name) noexcept;
 
+struct frameTableEntry_st;
+
+// Union of a BAM cycle's frame draw boxes, relative to the object anchor and
+// unmirrored: RenderBam draws each frame's top-left at (anchor - center), so
+// a frame spans [-cx, w - cx] x [-cy, h - cy]. Stable across the animation,
+// unlike any single frame.
+struct BamEnvelope {
+  bool valid{};
+  std::int16_t left{};
+  std::int16_t top{};
+  std::int16_t right{};
+  std::int16_t bottom{};
+};
+
+// Grows `envelope` by one frame's draw box. Empty frames are ignored.
+void extend_bam_envelope(BamEnvelope& envelope, const frameTableEntry_st& frame) noexcept;
+
 struct AreaAnimationInfo {
   std::uint16_t x{};
   std::uint16_t y{};
@@ -44,14 +61,13 @@ struct AreaAnimationInfo {
   // map position. Loaded from the ARE record's height field; the memory walk
   // overrides it with the live value.
   std::int32_t objZ{};
-  // The engine's cached current BAM frame entry (CVidCell::m_pFrame) — the
-  // exact geometry RenderBam draws with. Valid only when the memory walk
-  // could read it (the object has rendered at least once).
-  bool frameValid{};
-  std::int16_t frameWidth{};
-  std::int16_t frameHeight{};
-  std::int16_t frameCenterX{};
-  std::int16_t frameCenterY{};
+  // Authored draw box from the BAM frame table. Valid only once the engine
+  // has loaded the BAM (the object has rendered at least once); until then
+  // the per-resref table is the fallback.
+  BamEnvelope envelope{};
+  // The live CGameStatic this record came from (memory walk only). Identity
+  // key for the render-thread envelope cache; never dereferenced host-side.
+  const void* object{};
   std::int16_t height{};
   std::uint32_t schedule{};
   std::uint32_t flags{};
@@ -65,6 +81,7 @@ struct AreaAnimationInfo {
   [[nodiscard]] std::string_view nameView() const noexcept;
   [[nodiscard]] bool isShown() const noexcept;
   [[nodiscard]] bool isLightSource() const noexcept;
+  [[nodiscard]] bool isMirrored() const noexcept;
 };
 
 struct AreaAnimationsInfo {

@@ -34,10 +34,31 @@ vanilla, and any resolution failure just keeps the engine draws. Gated by
 composite over sprites (true bloom) remain future P4 work consuming the same
 points.
 
-Placement follows the engine's own draw rule: `CGameStatic::RenderBam`
-anchors at the live `CGameObject::m_pos` with the screen Y lifted by the
-`m_posZ` elevation (`y = m_pos.y - m_posZ`) — mounted flames (wall sconces)
-carry authored Z, so the packed point subtracts it the same way.
+Placement follows the engine's own draw rule (`CGameStatic::RenderBam`,
+RVA `0x1F2B50` on 2.7.3): each frame's top-left is drawn at
+`(m_pos.x - centerX, m_pos.y - m_posZ - centerY)`, with the box flipped
+around `m_pos.x` when the record's mirror flag (bit 11) is set. The
+replacement therefore takes its base point and size from the BAM's own frame
+table:
+
+- `read_static_bam_envelope` walks `CVidCell::pRes` (`CResCell`: frame
+  table, cycle table, V1 frame lookup list) and unions the draw boxes of the
+  current cycle — or of every cycle when the record draws all sequences
+  (bit 9). The union is stable across the animation; a single frame is not.
+- The point is the box's bottom-centre, its height and half-width are the
+  box's. Fire and smoke both use it.
+- `CVidCell::m_pFrame` is **not** a usable source: `CVidCell::Render3d`
+  clears it at the end of every draw, so it is null whenever we look. (An
+  earlier revision read it and silently always fell back to the hand-tuned
+  table, which is why unknown flame resrefs and all smoke were misplaced.)
+- The frame table exists only while the engine has the BAM loaded, and the
+  engine loads it on first draw. The `CGameStatic::Render` hook therefore
+  keeps the engine draw until `area::static_envelope_ready` has captured the
+  box, then suppresses. Captured boxes are cached per live object (cleared at
+  `LoadArea`) because the engine may release a BAM it no longer draws, and
+  new captures trigger a throttled republish of the point set.
+- The per-resref `kFlameGeometry` table is now only the fallback for the
+  frames before a static's first engine draw.
 
 Scope boundary: **water bodies are not ARE animations.** Rivers/lakes/sea are
 WED overlays and stay on the existing `wed_runtime`/`tile_liquid` path. ARE

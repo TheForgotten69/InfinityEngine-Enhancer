@@ -170,6 +170,10 @@ bool AreaAnimationInfo::isShown() const noexcept {
   return (flags & kAreAnimationFlagIsShown) != 0;
 }
 
+bool AreaAnimationInfo::isMirrored() const noexcept {
+  return (flags & kAreAnimationFlagMirror) != 0;
+}
+
 bool AreaAnimationInfo::isLightSource() const noexcept {
   return (flags & kAreAnimationFlagNotLightSource) == 0;
 }
@@ -286,6 +290,46 @@ bool should_replace_animation_draw(std::string_view resref, AreaAnimationKind ki
   return false;
 }
 
+namespace {
+// Moves the point to the bottom-center of the authored draw box and sizes it
+// to that box, mirroring the X range the way RenderBam does. False when the
+// envelope is unknown or degenerate.
+bool apply_envelope(const AreaAnimationInfo& animation, AreaEffectPoint& point) noexcept {
+  const auto& envelope = animation.envelope;
+  if (!envelope.valid || envelope.right <= envelope.left || envelope.bottom <= envelope.top) {
+    return false;
+  }
+  const float left = animation.isMirrored() ? -static_cast<float>(envelope.right)
+                                            : static_cast<float>(envelope.left);
+  const float right = animation.isMirrored() ? -static_cast<float>(envelope.left)
+                                             : static_cast<float>(envelope.right);
+  point.x += (left + right) / 2.0f;
+  point.y += static_cast<float>(envelope.bottom);
+  point.height = static_cast<float>(envelope.bottom - envelope.top);
+  point.halfWidth = (std::max)((right - left) / 2.0f, 1.5f);
+  return true;
+}
+}  // namespace
+
+void extend_bam_envelope(BamEnvelope& envelope, const frameTableEntry_st& frame) noexcept {
+  if (frame.nWidth == 0 || frame.nHeight == 0) return;
+  const auto clamp16 = [](int value) {
+    return static_cast<std::int16_t>((std::clamp)(value, -32768, 32767));
+  };
+  const auto left = clamp16(-frame.nCenterX);
+  const auto top = clamp16(-frame.nCenterY);
+  const auto right = clamp16(static_cast<int>(frame.nWidth) - frame.nCenterX);
+  const auto bottom = clamp16(static_cast<int>(frame.nHeight) - frame.nCenterY);
+  if (!envelope.valid) {
+    envelope = {true, left, top, right, bottom};
+    return;
+  }
+  envelope.left = (std::min)(envelope.left, left);
+  envelope.top = (std::min)(envelope.top, top);
+  envelope.right = (std::max)(envelope.right, right);
+  envelope.bottom = (std::max)(envelope.bottom, bottom);
+}
+
 std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& info) {
   std::vector<AreaEffectPoint> points;
   points.reserve((std::min)(info.animations.size(), kMaxAreaEffectPoints));
@@ -312,26 +356,15 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
           point.halfWidth = 10.0f;
           return point;
         }
-        // RenderBam places the frame's top-left at objectPos - frameCenter,
-        // while the procedural flame grows upward from its bottom-center. Move
-        // the point to that authored bottom-center before suppressing the BAM.
-        // Note: while the effect suppresses the engine draw, CVidCell::m_pFrame
-        // normally stays null, so the reviewed per-resref table is the normal
-        // path for replaced flames.
         const auto upper = upper_copy(resref);
         point.reserved1 = upper.find("BLU") != std::string::npos ? 1.0f : 0.0f;  // palette id
-        if (animation.frameValid) {
-          point.height = static_cast<float>(animation.frameHeight);
-          point.halfWidth =
-              (std::max)(static_cast<float>(animation.frameWidth) / 2.0f, 1.5f);
-          point.x += static_cast<float>(animation.frameWidth) / 2.0f -
-                     static_cast<float>(animation.frameCenterX);
-          point.y += static_cast<float>(animation.frameHeight - animation.frameCenterY);
-        } else {
+        if (!apply_envelope(animation, point)) {
+          // BAM not loaded yet: reviewed per-resref table until the engine
+          // has drawn the object once.
           const auto& geometry = flame_geometry_for(upper);
           point.height = geometry.height;
           point.halfWidth = geometry.halfWidth;
-          point.x += geometry.dx;
+          point.x += animation.isMirrored() ? -geometry.dx : geometry.dx;
           point.y += geometry.dy;
         }
         return point;
@@ -341,8 +374,10 @@ std::vector<AreaEffectPoint> build_area_effect_points(const AreaAnimationsInfo& 
           return std::nullopt;  // authored plume art stays; nothing to add
         }
         point.kind = base;
-        point.height = 170.0f;
-        point.halfWidth = 11.0f;
+        if (!apply_envelope(animation, point)) {
+          point.height = 170.0f;
+          point.halfWidth = 11.0f;
+        }
         return point;
       }
       case AreaAnimationKind::Light: {

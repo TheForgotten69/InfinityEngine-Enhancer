@@ -1573,16 +1573,33 @@ void test_collect_area_static_animations() {
   CGameArea areaB{};
   std::array<CGameStatic, 3> statics{};
 
-  frameTableEntry_st liveFrame{};
-  liveFrame.nWidth = 12;
-  liveFrame.nHeight = 40;
-  liveFrame.nCenterX = 6;
-  liveFrame.nCenterY = 30;
+  // A loaded two-cycle BAM V1: cycle 0 has two frames whose boxes differ,
+  // cycle 1 a wider one. The lookup list maps cycle slots to frame entries.
+  std::array<frameTableEntry_st, 3> bamFrames{};
+  bamFrames[0] = {12, 40, 6, 30, 0};   // box -6,-30 .. 6,10
+  bamFrames[1] = {16, 44, 9, 36, 0};   // box -9,-36 .. 7,8
+  bamFrames[2] = {60, 10, 30, 5, 0};   // box -30,-5 .. 30,5
+  std::array<sequenceTableEntry_st, 2> bamSequences{};
+  bamSequences[0] = {2, 0};
+  bamSequences[1] = {1, 2};
+  std::array<std::uint16_t, 3> bamFrameList{1, 0, 2};
+  bamHeader_st bamHeader{};
+  bamHeader.nFrames = 3;
+  bamHeader.nSequences = 2;
+  std::byte bamData{};
+  CResCell bam{};
+  bam.baseclass_0.pData = &bamData;
+  bam.baseclass_0.bLoaded = true;
+  bam.m_pBamHeader = &bamHeader;
+  bam.m_pFrames = bamFrames.data();
+  bam.m_pSequences = bamSequences.data();
+  bam.m_pFrameList = bamFrameList.data();
+  bam.m_nFrameList = static_cast<std::uint16_t>(bamFrameList.size());
 
   statics[0].baseclass_0.m_objectType = kGameObjectTypeStatic;
   statics[0].baseclass_0.m_pArea = &areaA;
   statics[0].baseclass_0.m_posZ = 25;
-  statics[0].m_vidCell.m_pFrame = &liveFrame;
+  statics[0].m_vidCell.pRes = &bam;
   statics[0].m_header.rrAnimation = {'F', 'L', 'A', 'M', 'B', 'I', 'G', 0};
   const char fireName[] = "FLAMBIG";
   std::memcpy(statics[0].m_header.szName.data(), fireName, sizeof(fireName) - 1);
@@ -1619,10 +1636,34 @@ void test_collect_area_static_animations() {
               "Collected records should carry the live header fields");
   expect_true(!out.animations.empty() && out.animations[0].objZ == 25,
               "The walk mirrors the live m_posZ elevation");
-  expect_true(!out.animations.empty() && out.animations[0].frameValid &&
-                  out.animations[0].frameWidth == 12 && out.animations[0].frameHeight == 40 &&
-                  out.animations[0].frameCenterX == 6 && out.animations[0].frameCenterY == 30,
-              "The walk mirrors the engine's cached CVidCell frame geometry");
+  expect_true(!out.animations.empty() && out.animations[0].object == &statics[0],
+              "The walk records the live object as the envelope cache key");
+  const auto box = out.animations.empty() ? BamEnvelope{} : out.animations[0].envelope;
+  expect_true(box.valid && box.left == -9 && box.top == -36 && box.right == 7 && box.bottom == 10,
+              "The walk unions the current cycle's frame boxes from the BAM frame table");
+
+  BamEnvelope direct{};
+  statics[0].m_header.nFlags |= kAreAnimationFlagAllSequences;
+  expect_true(read_static_bam_envelope(&statics[0], direct) && direct.left == -30 &&
+                  direct.top == -36 && direct.right == 30 && direct.bottom == 10,
+              "A draw-all-sequences record unions every cycle");
+  statics[0].m_header.nFlags &= ~kAreAnimationFlagAllSequences;
+
+  bam.baseclass_0.bLoaded = false;
+  expect_true(!read_static_bam_envelope(&statics[0], direct) && !direct.valid,
+              "An unloaded BAM has no trustworthy frame table");
+  bam.baseclass_0.bLoaded = true;
+  bam.m_nFrameList = 1;
+  expect_true(!read_static_bam_envelope(&statics[0], direct),
+              "A cycle that overruns the frame lookup list fails closed");
+  bam.m_nFrameList = static_cast<std::uint16_t>(bamFrameList.size());
+  bamFrames[1].nWidth = 5000;
+  expect_true(!read_static_bam_envelope(&statics[0], direct),
+              "An implausible frame size fails closed");
+  bamFrames[1].nWidth = 16;
+  expect_true(!read_static_bam_envelope(nullptr, direct) &&
+                  !read_static_bam_envelope(&statics[1], direct),
+              "A null object or a cell without a resource yields no envelope");
 
   AreaAnimationsInfo invalidOut{};
   expect_true(!collect_area_static_animations(ObjectArrayGlobals{}, &areaA, invalidOut),
@@ -1670,17 +1711,34 @@ void test_build_area_effect_points() {
     animation.flags = kAreAnimationFlagIsShown;
     const char liveResref[] = "flamblu2";
     for (std::size_t c = 0; liveResref[c] != '\0'; ++c) animation.resref[c] = liveResref[c];
-    animation.frameValid = true;
-    animation.frameWidth = 8;
-    animation.frameHeight = 15;
-    animation.frameCenterX = 0;
-    animation.frameCenterY = 0;
+    animation.envelope = {true, -2, -12, 6, 3};  // off-centre box, 8 wide, 15 tall
     live.animations.push_back(animation);
-    const auto livePoints = build_area_effect_points(live);
-    expect_true(livePoints.size() == 1 && livePoints[0].x == 104.0f &&
-                    livePoints[0].y == 185.0f && livePoints[0].height == 15.0f &&
+    auto livePoints = build_area_effect_points(live);
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 102.0f &&
+                    livePoints[0].y == 173.0f && livePoints[0].height == 15.0f &&
                     livePoints[0].halfWidth == 4.0f && livePoints[0].reserved1 == 1.0f,
-                "Live frame geometry moves the object origin to the flame bottom-center");
+                "The authored box moves the object origin to the flame bottom-center");
+
+    live.animations[0].flags |= kAreAnimationFlagMirror;
+    livePoints = build_area_effect_points(live);
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 98.0f &&
+                    livePoints[0].y == 173.0f && livePoints[0].halfWidth == 4.0f,
+                "A mirrored record flips the box around the object X like RenderBam");
+
+    AreaAnimationInfo smoke{};
+    smoke.kind = AreaAnimationKind::Smoke;
+    smoke.objX = 300;
+    smoke.objY = 400;
+    smoke.flags = kAreAnimationFlagIsShown;
+    const char smokeResref[] = "CHIMSMK";
+    for (std::size_t c = 0; smokeResref[c] != '\0'; ++c) smoke.resref[c] = smokeResref[c];
+    smoke.envelope = {true, -20, -90, 10, -10};
+    live.animations = {smoke};
+    livePoints = build_area_effect_points(live);
+    expect_true(livePoints.size() == 1 && livePoints[0].x == 295.0f &&
+                    livePoints[0].y == 390.0f && livePoints[0].height == 80.0f &&
+                    livePoints[0].halfWidth == 15.0f,
+                "Smoke plumes take their base and size from the authored box too");
   }
 
   const auto points = build_area_effect_points(info);

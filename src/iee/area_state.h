@@ -30,6 +30,14 @@ bool read_view_transform(const game::CGameArea* area, ViewTransform& out);
 // Re-resolves the active area after LoadArea and caches its parsed WED into ctx.
 void refresh_wed_cache(AppContext& ctx, void* infGame);
 
+// Render thread. True once the authored BAM draw box of a replaced static is
+// known (cached, or readable now because the engine has loaded its BAM). The
+// CGameStatic::Render hook keeps the engine draw until then, so the first
+// engine draw loads the resource the box is read from.
+bool static_envelope_ready(const void* staticObject) noexcept;
+// Render thread. Rebuilds the effect points after new draw boxes were
+// captured; a no-op otherwise.
+void republish_area_animations_if_dirty(AppContext& ctx) noexcept;
 // Publishes an immediate CPU-side no-liquid generation. The next render
 // thread flush replaces any previous area's GPU mask before drawing.
 void reset_gpu_area_state() noexcept;

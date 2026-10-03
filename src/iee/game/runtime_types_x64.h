@@ -71,6 +71,27 @@ namespace iee::game {
         std::array<char, 8> m_resRef{};
     };
 
+    // Parsed BAM resource (EEex docs, 176 bytes). The table pointers are set
+    // by CResCell::Parse on Demand and are only meaningful while the base
+    // resource is loaded.
+    struct CResCell {
+        CRes baseclass_0{};
+        void *pUncompressedData{};
+        std::uint32_t nUncompressedSize{};
+        std::byte _pad0[4]{};
+        bamHeader_st *m_pBamHeader{};
+        BAMHEADERV2 *m_pBamHeaderV2{};
+        void *m_pQuads{};
+        frameTableEntry_st *m_pFrames{};
+        sequenceTableEntry_st *m_pSequences{};
+        std::uint16_t *m_pFrameList{};
+        std::uint16_t m_nFrameList{};
+        std::byte _pad1[6]{};
+        void *m_pPalette{};
+        std::int32_t m_bParsing{};
+        std::byte _pad2[4]{};
+    };
+
     struct CResPVR {
         CRes baseclass_0{};
         std::int32_t texture{};
@@ -145,7 +166,9 @@ namespace iee::game {
     struct CVidCell {
         void *vfptr{};
         CVidImage baseclass_0{};
-        std::array<std::byte, 16> baseclass_1{};
+        // CResHelper<CResCell, 1000>: the resource pointer, then its resref.
+        CResCell *pRes{};
+        CResRef cResRef{};
         std::int16_t m_nCurrentFrame{};
         std::uint16_t m_nCurrentSequence{};
         std::int32_t m_nAnimType{};
@@ -415,8 +438,9 @@ namespace iee::game {
     // Runtime object created from each ARE animation record. The engine keeps
     // the raw authored 76-byte record (CAreaFileStaticObject in the PDB, our
     // ARE_Animation_st) embedded at +0x60; script state (e.g. the shown flag
-    // toggled by StaticStart) mutates it in place. m_vidCell caches the
-    // current BAM frame entry (m_pFrame) that RenderBam draws with.
+    // toggled by StaticStart) mutates it in place. m_vidCell::m_pFrame is
+    // only non-null during a draw (Render3d clears it on exit), so authored
+    // geometry is read from the BAM frame table behind m_vidCell::pRes.
     struct CGameStatic {
         CGameObject baseclass_0{};
         ARE_Animation_st m_header{};
@@ -491,6 +515,11 @@ namespace iee::game {
     static_assert(sizeof(CSize) == 0x8);
     static_assert(sizeof(CRect) == 0x10);
     static_assert(sizeof(CRes) == 0x58);
+    static_assert(sizeof(CResCell) == 0xB0);
+    static_assert(offsetof(CResCell, m_pBamHeader) == 0x68);
+    static_assert(offsetof(CResCell, m_pFrames) == 0x80);
+    static_assert(offsetof(CResCell, m_nFrameList) == 0x98);
+    static_assert(offsetof(CVidCell, pRes) == 0x108);
     static_assert(sizeof(CResRef) == 0x8);
     static_assert(sizeof(CResPVR) == 0x70);
     static_assert(sizeof(CResTileSet) == 0x60);

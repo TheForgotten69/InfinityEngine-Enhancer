@@ -141,10 +141,20 @@ One override shader that covers every character and effect quad.
 ### C. Effect replacement framework
 
 Hook the per-object render, look the resref up in a table, then pass through
-or suppress and draw our own program at the object's position. This is the
-shipped `CGameStatic::Render` + `fpSEAM` point-effect pattern, generalised.
+or suppress and draw the replacement. The hook seam is the shipped
+`CGameStatic::Render` pattern, generalised.
 
-- C1 fix the existing water / smoke / fire replacements (current branch).
+Where the replacement is drawn is a separate choice. Today fire and smoke are
+painted inside `fpSEAM` (the tile pass), which has structural limits: they
+sit under every object, are multiplied by the global light colour, and cost
+a per-pixel loop over the point set. Drawing them with our own program at
+the engine's final blit (`CVidMode::FXBltToBack` `0x41D540`) would remove
+those limits, but needs the engine's internal batch flush pinned first.
+Owner decision 2026-10-03: stay in `fpSEAM` for now and fix placement there.
+
+- C1 fix placement and size of the existing smoke / fire replacements
+  (current branch): geometry now comes from the BAM frame table, see
+  `docs/are-animation-detection.md`.
 - C2 extend to VEF/VVC, projectiles, fireballs; first batch is the
   highest-frequency effects, the table grows from logs of unreplaced resrefs.
 - C3 effect-cast light: publish active effect positions into the existing

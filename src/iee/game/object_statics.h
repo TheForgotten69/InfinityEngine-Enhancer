@@ -29,6 +29,14 @@ inline constexpr std::size_t kObjectArrayMaxEntries = 0x8000;
 [[nodiscard]] bool decode_object_array_globals(const std::byte* function, std::size_t windowSize,
                                                ObjectArrayGlobals& out) noexcept;
 
+// Reads the authored draw box of a live CGameStatic's BAM straight from the
+// engine's parsed frame table (CVidCell::pRes -> CResCell): the union over
+// the current cycle, or over every cycle when the record draws all sequences.
+// Bounded safe reads only. Returns false until the engine has loaded the BAM
+// (first draw) and for anything that fails validation.
+[[nodiscard]] bool read_static_bam_envelope(const void* staticObject,
+                                            BamEnvelope& out) noexcept;
+
 // Walks the engine object array and collects the authored static-animation
 // records (CGameStatic::m_header) owned by `area` into classified entries.
 // Returns false when the array is unresolved or unreadable; an area with no

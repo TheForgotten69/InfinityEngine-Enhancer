@@ -187,6 +187,10 @@ namespace iee::game {
     inline constexpr std::uint32_t kAreAnimationFlagNoShadow = 1u << 1;
     inline constexpr std::uint32_t kAreAnimationFlagNotLightSource = 1u << 2;
     inline constexpr std::uint32_t kAreAnimationFlagDrawAsBackground = 1u << 8;
+    // RenderBam also draws every secondary cell (one per BAM sequence).
+    inline constexpr std::uint32_t kAreAnimationFlagAllSequences = 1u << 9;
+    // RenderBam flips the frame box around the object X (CInfinity::MIRROR_FX).
+    inline constexpr std::uint32_t kAreAnimationFlagMirror = 1u << 11;
     inline constexpr std::uint32_t kAreAnimationFlagUseWbm = 1u << 13;
     inline constexpr std::uint32_t kAreAnimationFlagUsePvrz = 1u << 15;
 
@@ -226,6 +230,13 @@ namespace iee::game {
         std::uint32_t ___u4{};
     };
 
+    // BAM cycle entry; identical shape in V1 and V2. V1 indexes the frame
+    // lookup list from nStartingFrame, V2 indexes the frame table directly.
+    struct sequenceTableEntry_st {
+        std::int16_t nFrames{};
+        std::uint16_t nStartingFrame{};
+    };
+
     struct st_tiledef {
         std::int32_t nTile{};
         std::int32_t nUsageCount{};
@@ -256,5 +267,6 @@ namespace iee::game {
     static_assert(sizeof(BAMHEADERV2) == 0x20);
     static_assert(sizeof(frame) == 0x18);
     static_assert(sizeof(frameTableEntry_st) == 0xC);
+    static_assert(sizeof(sequenceTableEntry_st) == 0x4);
     static_assert(sizeof(st_tiledef) == 0x18);
 }
