@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 
+#include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
 
 namespace iee::game {
@@ -129,7 +130,16 @@ std::shared_ptr<AnimationInterpolator::Expanded> AnimationInterpolator::load(
         parse_expanded_bam(expanded->image, expanded->view)) {
       result = std::move(expanded);
       ++loaded_;
+      LOG_INFO("Animation interpolation: loaded expanded BAM {} ({} frames)", resref,
+               result->view.header->nFrames);
+    } else {
+      LOG_WARN("Animation interpolation: {} is not a valid expanded BAM; ignored",
+               path.string());
     }
+  } else if (!error) {
+    LOG_WARN("Animation interpolation: {} has an unusable size; ignored", path.string());
+  } else {
+    LOG_INFO("Animation interpolation: no expanded BAM for {}", resref);
   }
   files_.emplace(resref, result);
   return result;
@@ -170,6 +180,9 @@ AnimationInterpolator::Resource* AnimationInterpolator::resource_for(CResCell* o
     bamHeader_st originalHeader{};
     if (!core::safe_read(snapshot.m_pBamHeader, originalHeader) ||
         originalHeader.nSequences != view.header->nSequences) {
+      LOG_WARN("Animation interpolation: expanded BAM {} does not match the game's cycle count; "
+               "ignored",
+               resref);
       resource->expanded.reset();
     } else {
       resource->cell = snapshot;
@@ -191,17 +204,34 @@ AnimationInterpolator::Resource* AnimationInterpolator::resource_for(CResCell* o
   return resources_.emplace(original, std::move(resource)).first->second.get();
 }
 
+void AnimationInterpolator::begin_scope(const void* owner) noexcept {
+  if (depth_++ > 0) return;
+  owner_ = owner;
+  scopeTouched_ = 0;
+  scopeMissed_ = false;
+  observeOnly_ = true;
+  try {
+    if (const auto known = owners_.find(owner); known != owners_.end()) {
+      observeOnly_ = !known->second;
+    }
+  } catch (...) {
+  }
+}
+
 void AnimationInterpolator::touch(CVidCell* cell, double now) noexcept {
   if (depth_ <= 0 || !cell) return;
   try {
     for (const auto& swap : swaps_) {
       if (swap.cell == cell) return;
     }
-    if (swaps_.size() >= kMaxSwapsPerScope || !cell->pRes) return;
+    if (!cell->pRes) return;
+    ++scopeTouched_;
     auto* original = cell->pRes;
     auto* resource = resource_for(original);
-    if (!resource || !resource->expanded) return;
-
+    if (!resource || !resource->expanded) {
+      scopeMissed_ = true;
+      return;
+    }
     const auto sequence = cell->m_nCurrentSequence;
     const auto frame = cell->m_nCurrentFrame;
     const auto& view = resource->expanded->view;
@@ -210,8 +240,10 @@ void AnimationInterpolator::touch(CVidCell* cell, double now) noexcept {
         !core::safe_read(original->m_pSequences + sequence, logic) || logic.nFrames <= 0 ||
         frame < 0 || frame >= logic.nFrames ||
         view.sequences[sequence].nFrames != logic.nFrames * 2) {
+      scopeMissed_ = true;
       return;
     }
+    if (observeOnly_ || swaps_.size() >= kMaxSwapsPerScope) return;
     const auto shown = tracker_.sample(cell, sequence, frame, logic.nFrames, now);
     swaps_.push_back({cell, original, frame});
     cell->pRes = &resource->cell;
@@ -219,6 +251,7 @@ void AnimationInterpolator::touch(CVidCell* cell, double now) noexcept {
     cell->m_pFrame = nullptr;
   } catch (...) {
     // Interpolation is cosmetic; any doubt draws the original frame.
+    scopeMissed_ = true;
   }
 }
 
@@ -226,10 +259,24 @@ void AnimationInterpolator::end_scope() noexcept {
   if (depth_ <= 0) return;
   if (--depth_ > 0) return;
   for (const auto& swap : swaps_) {
+    // Restore only our own swap: if the engine re-pointed the cell during the
+    // draw, its resource is the newer one and must win.
+    bool ours = false;
+    for (const auto& [original, resource] : resources_) {
+      if (swap.cell->pRes == &resource->cell) {
+        ours = true;
+        break;
+      }
+    }
+    if (!ours) continue;
     swap.cell->pRes = swap.original;
     swap.cell->m_nCurrentFrame = swap.frame;
     swap.cell->m_pFrame = nullptr;
   }
   swaps_.clear();
+  try {
+    owners_[owner_] = scopeTouched_ > 0 && !scopeMissed_;
+  } catch (...) {
+  }
 }
 }  // namespace iee::game

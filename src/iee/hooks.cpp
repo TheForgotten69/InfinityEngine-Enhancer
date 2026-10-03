@@ -395,7 +395,7 @@ static void detour_sprite_render(void* sprite, void* a, void* b) {
     call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
     return;
   }
-  g_animationInterp.begin_scope();
+  g_animationInterp.begin_scope(sprite);
   call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
   g_animationInterp.end_scope();
 }

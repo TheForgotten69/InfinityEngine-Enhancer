@@ -68,19 +68,30 @@ class AnimationFrameTracker {
 // frame back. Expanded files are read from `directory/<RESREF>.bam` on first
 // use; a BAM without one draws exactly as before.
 //
+// A creature is drawn from several frame-synced cells (body, weapon, shield,
+// helmet), each its own BAM. Swapping only some of them would draw the body
+// half a step behind its weapon, so a creature is interpolated only when
+// every cell it drew in its previous scope had an expanded BAM: each owner's
+// first scope (and any scope after a miss) only observes.
+//
 // Single-threaded: every call must come from the engine's render thread.
 class AnimationInterpolator {
  public:
   void set_directory(std::filesystem::path directory) { directory_ = std::move(directory); }
 
-  void begin_scope() noexcept { ++depth_; }
-  // Restores every cell swapped since the matching begin_scope.
+  // `owner` identifies the creature being drawn.
+  void begin_scope(const void* owner) noexcept;
+  // Restores every cell swapped since the matching begin_scope and records
+  // whether the owner's cells were all covered.
   void end_scope() noexcept;
   // Inside a scope: swap `cell` if it is not swapped yet and an expanded BAM
   // exists for its resource. Outside a scope, or on any doubt, does nothing.
   void touch(CVidCell* cell, double now) noexcept;
   // Area change: forget per-cell animation timing (loaded files are kept).
-  void reset_timing() noexcept { tracker_.clear(); }
+  void reset_timing() noexcept {
+    tracker_.clear();
+    owners_.clear();
+  }
 
   [[nodiscard]] std::size_t loaded_count() const noexcept { return loaded_; }
 
@@ -104,6 +115,11 @@ class AnimationInterpolator {
 
   std::filesystem::path directory_;
   int depth_{};
+  const void* owner_{};
+  bool observeOnly_{true};
+  bool scopeMissed_{};
+  std::size_t scopeTouched_{};
+  std::unordered_map<const void*, bool> owners_;  // owner -> last scope fully covered
   std::vector<Swap> swaps_;
   std::unordered_map<const CResCell*, std::unique_ptr<Resource>> resources_;
   std::unordered_map<std::string, std::shared_ptr<Expanded>> files_;

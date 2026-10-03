@@ -80,6 +80,15 @@ The supported runtime is intentionally narrow: one EEex-loaded Windows DLL, one 
   (default off); the three targets resolve as a set or not at all, and only
   the 2.7.3 manifest carries their patterns.
 
+`src/iee/game/animation_interp.*`
+
+- Host-safe draw-time substitution of expanded (frame-interpolated) BAMs:
+  validation of the expanded image, the per-cell frame chooser, and the
+  scoped `CVidCell` swap/restore. See item F of the 2026-10-03 roadmap for
+  the format and the engine facts it relies on.
+- Driven from `hooks.cpp`: `CGameSprite::Render` opens the scope, the three
+  `CVidCell` frame accessors call `touch`.
+
 `src/iee/game/object_statics.*`
 
 - Host-safe decode of the `CGameObjectArray` globals out of the engine's

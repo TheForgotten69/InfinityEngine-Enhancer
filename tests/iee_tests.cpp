@@ -1845,7 +1845,13 @@ void test_animation_interpolation() {
   interp.touch(&cell, 1.0);
   expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 1,
               "Outside a draw scope nothing is swapped");
-  interp.begin_scope();
+  int owner = 0;
+  interp.begin_scope(&owner);
+  interp.touch(&cell, 1.0);
+  expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 1,
+              "An owner's first scope only observes which cells are covered");
+  interp.end_scope();
+  interp.begin_scope(&owner);
   interp.touch(&cell, 1.0);
   expect_true(cell.pRes != &original && cell.pRes->m_pFrames != original.m_pFrames &&
                   cell.pRes->baseclass_0.bLoaded && cell.m_nCurrentFrame == 2 &&
@@ -1860,13 +1866,13 @@ void test_animation_interpolation() {
   expect_eq(interp.loaded_count(), std::size_t{1}, "The expanded file is read once");
 
   cell.m_nCurrentFrame = 2;
-  interp.begin_scope();
+  interp.begin_scope(&owner);
   interp.touch(&cell, 1.01);
   expect_eq(cell.m_nCurrentFrame, std::int16_t{3}, "A logic step draws the in-between first");
   interp.end_scope();
 
   cell.m_nCurrentFrame = 7;  // outside the logic cycle
-  interp.begin_scope();
+  interp.begin_scope(&owner);
   interp.touch(&cell, 1.02);
   expect_true(cell.pRes == &original && cell.m_nCurrentFrame == 7,
               "A frame outside the logic cycle is left to the engine");
@@ -1878,10 +1884,18 @@ void test_animation_interpolation() {
   other.baseclass_0.resref = missing;
   CVidCell otherCell{};
   otherCell.pRes = &other;
-  interp.begin_scope();
-  interp.touch(&otherCell, 1.0);
-  expect_true(otherCell.pRes == &other, "A BAM without an expanded file draws unchanged");
-  interp.end_scope();
+  // A creature with one uncovered cell is not interpolated at all, so its
+  // body never runs half a step behind its weapon.
+  cell.m_nCurrentFrame = 1;
+  int armed = 0;
+  for (int pass = 0; pass < 3; ++pass) {
+    interp.begin_scope(&armed);
+    interp.touch(&cell, 2.0 + pass);
+    interp.touch(&otherCell, 2.0 + pass);
+    expect_true(cell.pRes == &original && otherCell.pRes == &other,
+                "A creature with an uncovered cell draws every cell unchanged");
+    interp.end_scope();
+  }
   std::error_code cleanup;
   std::filesystem::remove_all(directory, cleanup);
 }

@@ -203,15 +203,59 @@ A sibling texture per PVRZ page, generated offline alongside the upscale.
 
 ### F. Animation frame in-betweening
 
-At the sprite render, decode frame N and N+1 with the same live palette and
-blend in our own shader by tick progress.
+Owner decision 2026-10-03: in-between frames are generated ahead of drawing
+with RIFE and stored as expanded BAMs; the engine keeps drawing them itself,
+so palettes, recolouring, wall clipping and layering are untouched.
 
-- Costs one extra CPU blit per sprite and a small animation latency.
-- Crossfade ghosts on fast limb motion; motion-compensated blending is
-  plausible at ~100 px but unproven on this art.
-- Starts as an offline spike on extracted BAM frames. No DLL work until the
-  spike shows acceptable quality.
-- PVRZ-backed sprites need a separate path.
+**Expanded BAM** (`iee-interp/<RESREF>.bam` in the game folder): an
+uncompressed BAM V1 with the original palette and cycle count. For an
+original cycle `[f0 .. f(L-1)]` the expanded cycle is
+`[f0, m(0,1), f1, m(1,2), ..., f(L-1), m(L-1,0)]`: original frame k at 2k,
+the in-between leading to k+1 at 2k+1. A slot with no usable in-between
+repeats frame k.
+
+**Draw-time swap** (implemented, `game::AnimationInterpolator`; in-game
+validation pending). Logic must keep the original BAM, because it counts
+frames from it (`CVidCell::IsEndOfSequence`, one frame per creature update).
+So only while `CGameSprite::Render` runs, each `CVidCell` the engine resolves
+a frame for is pointed at a private `CResCell` over the expanded image and at
+the frame for the current instant; both are restored when the draw returns.
+
+- Hooks: `CVidCell::GetFrame` (`0x4118A0`), `GetCurrentCenterPoint`
+  (`0x411660`), `GetCurrentFrameSize` (`0x411780`) — every path that first
+  reads a cell's frame during a draw goes through one of them.
+- Why a private `CResCell` is safe: `CRes::Demand` (`0x3F6D50`) returns
+  `pData` immediately when `bLoaded` is set, and
+  `CResCell::GetFrameData` (`0x3F79E0`) only adds the frame offset to
+  `m_pBamHeader`. The private cell is never in the engine's resource table,
+  so nothing evicts or frees it.
+- Timing: for the first half of the observed animation step after logic
+  moves k-1 -> k the in-between is shown, then frame k. Half a step of lag,
+  no guessing ahead.
+- A creature is interpolated only if every cell it drew last time has an
+  expanded BAM (body, weapon, shield and helmet are separate, frame-synced
+  BAMs; a partial swap would draw the body behind its weapon).
+- Gated by `[Rendering] InterpolateAnimations` (default off, 2.7.3 only).
+  The log names each expanded BAM loaded and each resref that has none.
+
+**Generation** (prototype only so far, Linux Python in a scratch folder):
+RIFE v4.25-heavy through `rife-ncnn-vulkan` in batch mode, colour and
+silhouette side by side at 4x, result mapped back to palette indices
+restricted to the entries the two source frames use (an unrestricted match
+put 17% of pixels on entries from other recolour ranges). Pairs whose
+silhouettes overlap too little, and in-betweens whose area drifts from the
+pair's mean, are dropped. Measured: about 40 frame pairs per second on an
+RTX 4090 including PNG I/O.
+
+Tested alternatives: RIFE v4.6/v4.25/v4.26 variants (v4.25-heavy best),
+IFRNet (worse), plain crossfade (ghosting). GIMM-VFI, FILM and GMFSS need a
+PyTorch stack and were not tested. No model handled a limb that crosses its
+own length in one step.
+
+Still to build: the generator as our own Windows program (runs natively and
+under Proton, calls the RIFE executable), invoked for the animations an area
+needs with a status line on the loading screen; equipment overlay families;
+non-creature animations.
 
 ### G. Small polish
 
