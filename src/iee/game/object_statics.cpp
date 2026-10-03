@@ -135,7 +135,9 @@ bool read_static_bam_envelope(const void* staticObject, BamEnvelope& out) noexce
       for (std::size_t offset = 0; offset < count; ++offset) {
         std::size_t frameIndex = static_cast<std::size_t>(entry.nStartingFrame) + offset;
         if (!direct) {
-          if (frameIndex >= cell.m_nFrameList) return false;
+          // CResCell::Parse never fills m_nFrameList (it stays 0), so the
+          // lookup list has no usable length; the frame-count check on the
+          // listed index and the bounded reads are the guard.
           std::uint16_t listed = kBamNoFrame;
           if (!core::safe_read(cell.m_pFrameList + frameIndex, listed)) return false;
           if (listed == kBamNoFrame) continue;

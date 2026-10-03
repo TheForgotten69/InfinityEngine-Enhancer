@@ -85,7 +85,7 @@ namespace iee::game {
         frameTableEntry_st *m_pFrames{};
         sequenceTableEntry_st *m_pSequences{};
         std::uint16_t *m_pFrameList{};
-        std::uint16_t m_nFrameList{};
+        std::uint16_t m_nFrameList{};  // not set by CResCell::Parse; do not rely on it
         std::byte _pad1[6]{};
         void *m_pPalette{};
         std::int32_t m_bParsing{};

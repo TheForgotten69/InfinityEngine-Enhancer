@@ -1595,7 +1595,7 @@ void test_collect_area_static_animations() {
   bam.m_pFrames = bamFrames.data();
   bam.m_pSequences = bamSequences.data();
   bam.m_pFrameList = bamFrameList.data();
-  bam.m_nFrameList = static_cast<std::uint16_t>(bamFrameList.size());
+  bam.m_nFrameList = 0;  // as in the engine: CResCell::Parse leaves it unset
 
   statics[0].baseclass_0.m_objectType = kGameObjectTypeStatic;
   statics[0].baseclass_0.m_pArea = &areaA;
@@ -1654,10 +1654,10 @@ void test_collect_area_static_animations() {
   expect_true(!read_static_bam_envelope(&statics[0], direct) && !direct.valid,
               "An unloaded BAM has no trustworthy frame table");
   bam.baseclass_0.bLoaded = true;
-  bam.m_nFrameList = 1;
+  bamFrameList[0] = 7;
   expect_true(!read_static_bam_envelope(&statics[0], direct),
-              "A cycle that overruns the frame lookup list fails closed");
-  bam.m_nFrameList = static_cast<std::uint16_t>(bamFrameList.size());
+              "A lookup entry beyond the frame table fails closed");
+  bamFrameList[0] = 1;
   bamFrames[1].nWidth = 5000;
   expect_true(!read_static_bam_envelope(&statics[0], direct),
               "An implausible frame size fails closed");
