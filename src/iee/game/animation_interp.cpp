@@ -15,6 +15,7 @@ namespace {
 constexpr std::uint32_t kBamSignature = 0x204D4142;   // "BAM "
 constexpr std::uint32_t kBamVersion1 = 0x20203156;    // "V1  "
 constexpr std::uint32_t kRawFrameFlag = 0x80000000u;
+constexpr std::uint16_t kBamNoFrame = 0xFFFF;
 constexpr std::size_t kPaletteBytes = 256 * 4;
 constexpr std::size_t kMaxExpandedBamBytes = 64u * 1024u * 1024u;
 constexpr std::size_t kMaxSwapsPerScope = 32;
@@ -69,7 +70,8 @@ bool parse_expanded_bam(std::span<std::byte> image, ExpandedBamView& out) noexce
                   image.data() + header.nFrameListOffset +
                       (sequence.nStartingFrame + slot) * sizeof(listed),
                   sizeof(listed));
-      if (listed >= header.nFrames) return false;
+      // 0xFFFF is the format's "no frame in this slot"; the engine skips it.
+      if (listed >= header.nFrames && listed != kBamNoFrame) return false;
     }
   }
 

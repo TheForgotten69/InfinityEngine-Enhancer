@@ -1788,6 +1788,9 @@ void test_animation_interpolation() {
   expect_true(!parse_expanded_bam(bad, view), "A frame whose pixels overrun the image is rejected");
   bad = make_raw_bam(5, {{0, 3, 1, 9, 2, 2}});
   expect_true(!parse_expanded_bam(bad, view), "A lookup entry beyond the frame table is rejected");
+  auto sparse = make_raw_bam(5, {{0, 3, 1, 4, 2, 2}, {0xFFFF, 0xFFFF}});
+  expect_true(parse_expanded_bam(sparse, view),
+              "The format's empty-slot marker (0xFFFF) is a valid lookup entry");
   bad = good;
   frameTableEntry_st rle{};
   std::memcpy(&rle, bad.data() + sizeof(bamHeader_st), sizeof(rle));
