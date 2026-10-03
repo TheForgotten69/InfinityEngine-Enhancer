@@ -242,7 +242,8 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
   auto& ctx = *g_ctx;
   try {
     core::advance_readability_cache_epoch();
-    LOG_DEBUG("LoadArea called - resetting scale detection for new area");
+    LOG_INFO("LoadArea called on thread {} - resetting scale detection for new area",
+              GetCurrentThreadId());
     ctx.infGame.store(thisPtr, std::memory_order_relaxed);
     // Invalidate any older refresh before clearing its published CPU state.
     area::reset_gpu_area_state();
@@ -330,15 +331,24 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* 
   auto* position = reinterpret_cast<game::CPoint*>(static_cast<std::byte*>(sprite) +
                                                    offsetof(game::CGameObject, m_pos));
   game::CPoint logic{};
+  std::int32_t shownX = 0;
+  std::int32_t shownY = 0;
   bool swapped = false;
   try {
+    static bool threadLogged = false;
+    if (!threadLogged) {
+      threadLogged = true;
+      LOG_INFO("Sprite smoothing: first sprite render on thread {}", GetCurrentThreadId());
+    }
     if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) g_spriteMotion.clear();
     if (core::safe_read(position, logic)) {
       const auto shown =
           g_spriteMotion.sample(sprite, {logic.x, logic.y}, sprite_motion_frame_seconds());
       if (shown.x != logic.x || shown.y != logic.y) {
-        position->x = shown.x;
-        position->y = shown.y;
+        shownX = shown.x;
+        shownY = shown.y;
+        position->x = shownX;
+        position->y = shownY;
         swapped = true;
       }
     }
@@ -348,7 +358,9 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* 
   ++g_spritePositionSwapDepth;
   original(sprite, a, b);
   --g_spritePositionSwapDepth;
-  if (swapped) *position = logic;
+  // Restore only our own write: if the engine moved the sprite meanwhile, its
+  // value is the newer logic position and must win.
+  if (swapped && position->x == shownX && position->y == shownY) *position = logic;
 }
 
 static void detour_sprite_render(void* sprite, void* a, void* b) {
