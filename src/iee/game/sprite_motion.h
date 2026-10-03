@@ -20,6 +20,9 @@ struct MotionPoint {
 // Host-safe and single-threaded: the caller owns the clock and the thread.
 class SpriteMotionTracker {
  public:
+  explicit SpriteMotionTracker(std::int32_t snapDistance = kSnapDistance) noexcept
+      : snapDistance_(snapDistance) {}
+
   // Logic-tick interval assumed until two consecutive moves are observed.
   static constexpr double kDefaultInterval = 1.0 / 30.0;
   // Observed intervals outside this range are not a steady walk (first step
@@ -27,8 +30,12 @@ class SpriteMotionTracker {
   static constexpr double kMinInterval = 1.0 / 90.0;
   static constexpr double kMaxInterval = 1.0 / 14.0;
   // A larger single-tick move is a teleport or a reused object address and
-  // is shown immediately.
+  // is shown immediately. Creatures use the default; fast movers (projectiles)
+  // pass a larger limit.
   static constexpr std::int32_t kSnapDistance = 48;
+  // A key not sampled for this long was off screen or is a new object at a
+  // reused address: it starts over instead of sliding from a stale position.
+  static constexpr double kForgetSeconds = 0.5;
   static constexpr std::size_t kPruneThreshold = 1024;
   static constexpr double kStaleSeconds = 5.0;
 
@@ -52,6 +59,7 @@ class SpriteMotionTracker {
   [[nodiscard]] static MotionPoint shown(const State& state, double now) noexcept;
   void prune(double now);
 
+  std::int32_t snapDistance_;
   std::unordered_map<const void*, State> states_;
 };
 }  // namespace iee::game

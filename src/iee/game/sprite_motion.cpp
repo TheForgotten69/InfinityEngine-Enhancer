@@ -29,10 +29,15 @@ MotionPoint SpriteMotionTracker::sample(const void* key, MotionPoint current, do
     return current;
   }
 
+  const bool forgotten = now - state.lastSeen > kForgetSeconds;
   state.lastSeen = now;
+  if (forgotten) {
+    state = {current, current, now, kDefaultInterval, now};
+    return current;
+  }
   if (current != state.to) {
     const auto jump = (std::max)(std::abs(current.x - state.to.x), std::abs(current.y - state.to.y));
-    if (jump > kSnapDistance) {
+    if (jump > snapDistance_) {
       state.from = current;
     } else {
       // Start from what is on screen now so an early tick never jumps back.

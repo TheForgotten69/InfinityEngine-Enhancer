@@ -42,6 +42,7 @@ using SpriteRenderFn = void (*)(void*, void*, void*);
 static core::Hook<SpriteRenderFn> g_spriteRenderHook;
 static core::Hook<SpriteRenderFn> g_spriteMarkersHook;
 static core::Hook<SpriteRenderFn> g_spriteHealthBarHook;
+static core::Hook<SpriteRenderFn> g_projectileBamHook;
 
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
@@ -298,6 +299,8 @@ static void detour_draw_color_tone(int mode) {
 // logic position is restored afterwards. All of it runs on the engine's main
 // thread; LoadArea only raises the reset flag.
 static game::SpriteMotionTracker g_spriteMotion;
+// Projectiles cover far more ground per tick than creatures.
+static game::SpriteMotionTracker g_projectileMotion{192};
 static int g_spritePositionSwapDepth = 0;
 
 // One timestamp per presented frame, so a sprite, its selection circle and
@@ -320,8 +323,9 @@ static double sprite_motion_frame_seconds() noexcept {
   return seconds;
 }
 
-static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* sprite, void* a,
-                                        void* b) {
+static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
+                                        game::SpriteMotionTracker& tracker, void* sprite,
+                                        void* a, void* b) {
   const auto original = hook.original();
   // Nested sprite renders already see the smoothed position.
   if (!sprite || !g_ctx || g_spritePositionSwapDepth > 0) {
@@ -340,10 +344,13 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* 
       threadLogged = true;
       LOG_INFO("Sprite smoothing: first sprite render on thread {}", GetCurrentThreadId());
     }
-    if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) g_spriteMotion.clear();
+    if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) {
+      g_spriteMotion.clear();
+      g_projectileMotion.clear();
+    }
     if (core::safe_read(position, logic)) {
       const auto shown =
-          g_spriteMotion.sample(sprite, {logic.x, logic.y}, sprite_motion_frame_seconds());
+          tracker.sample(sprite, {logic.x, logic.y}, sprite_motion_frame_seconds());
       if (shown.x != logic.x || shown.y != logic.y) {
         shownX = shown.x;
         shownY = shown.y;
@@ -364,13 +371,17 @@ static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook, void* 
 }
 
 static void detour_sprite_render(void* sprite, void* a, void* b) {
-  call_with_smoothed_position(g_spriteRenderHook, sprite, a, b);
+  call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
 }
 static void detour_sprite_markers(void* sprite, void* a, void* b) {
-  call_with_smoothed_position(g_spriteMarkersHook, sprite, a, b);
+  call_with_smoothed_position(g_spriteMarkersHook, g_spriteMotion, sprite, a, b);
 }
 static void detour_sprite_health_bar(void* sprite, void* a, void* b) {
-  call_with_smoothed_position(g_spriteHealthBarHook, sprite, a, b);
+  call_with_smoothed_position(g_spriteHealthBarHook, g_spriteMotion, sprite, a, b);
+}
+
+static void detour_projectile_bam_render(void* projectile, void* a, void* b) {
+  call_with_smoothed_position(g_projectileBamHook, g_projectileMotion, projectile, a, b);
 }
 
 // CGameStatic::Render hook: while the fpSEAM point effects are active, the
@@ -513,6 +524,18 @@ bool install_all(AppContext& ctx) {
       }
     }
 
+    if (ctx.cfg.smoothSpriteMovement && ctx.addrs.ProjectileBamRender) {
+      try {
+        g_projectileBamHook.create(reinterpret_cast<void*>(ctx.addrs.ProjectileBamRender),
+                                   reinterpret_cast<void*>(&detour_projectile_bam_render));
+        g_projectileBamHook.enable();
+        LOG_INFO("Projectile movement smoothing hook installed");
+      } catch (...) {
+        (void)g_projectileBamHook.remove();
+        LOG_WARN("Projectile movement smoothing hook failed; projectiles move at the logic rate");
+      }
+    }
+
     g_loadAreaHook.enable();
     LOG_INFO("LoadArea hook enabled");
 
@@ -554,6 +577,7 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_projectileBamHook.remove();
   (void)g_spriteHealthBarHook.remove();
   (void)g_spriteMarkersHook.remove();
   (void)g_spriteRenderHook.remove();
@@ -577,6 +601,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_projectileBamHook.disable();
   (void)g_spriteHealthBarHook.disable();
   (void)g_spriteMarkersHook.disable();
   (void)g_spriteRenderHook.disable();

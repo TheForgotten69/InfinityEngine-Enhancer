@@ -46,6 +46,9 @@ struct PatternSet {
   std::string_view spriteRender{};
   std::string_view spriteRenderMarkers{};
   std::string_view spriteRenderHealthBar{};
+  // Optional: CProjectileBAM::Render (arrows, bolts, missiles). Smoothed with
+  // the same position swap; independent of the sprite set.
+  std::string_view projectileBamRender{};
 };
 
 struct ReferenceRvas {
@@ -57,6 +60,7 @@ struct ReferenceRvas {
   std::uintptr_t spriteRender{};
   std::uintptr_t spriteRenderMarkers{};
   std::uintptr_t spriteRenderHealthBar{};
+  std::uintptr_t projectileBamRender{};
 };
 
 struct RuntimeOffsets {

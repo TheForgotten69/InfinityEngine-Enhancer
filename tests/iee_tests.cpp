@@ -1705,13 +1705,24 @@ void test_sprite_motion_tracker() {
               "The slide spans the interval between the last two moves");
 
   // A tick that arrives early continues from the on-screen position.
-  (void)tracker.sample(&b, {0, 0}, 20.0);
+  (void)tracker.sample(&b, {0, 0}, 20.9);
   (void)tracker.sample(&b, {10, 0}, 21.0);
   expect_true(tracker.sample(&b, {20, 0}, 21.0 + tick / 2) == MotionPoint{5, 0},
               "An early move never jumps backwards or forwards");
 
-  expect_true(tracker.sample(&b, {500, 500}, 22.0) == MotionPoint{500, 500},
+  expect_true(tracker.sample(&b, {500, 500}, 21.3) == MotionPoint{500, 500},
               "A teleport-sized move is shown immediately");
+
+  // Back on screen after a gap (or a new object at a reused address).
+  expect_true(tracker.sample(&b, {510, 500}, 22.0 + SpriteMotionTracker::kForgetSeconds + 0.1) ==
+                  MotionPoint{510, 500},
+              "A sprite not sampled for a while starts over instead of sliding");
+
+  SpriteMotionTracker fast{192};
+  (void)fast.sample(&a, {0, 0}, 40.0);
+  (void)fast.sample(&a, {100, 0}, 40.1);
+  expect_true(fast.sample(&a, {100, 0}, 40.1 + tick / 2) == MotionPoint{50, 0},
+              "A larger snap limit lets fast movers slide");
 
   tracker.clear();
   expect_eq(tracker.size(), std::size_t{0}, "clear() forgets every sprite");

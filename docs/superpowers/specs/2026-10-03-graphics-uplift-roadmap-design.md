@@ -128,8 +128,14 @@ each sprite's draw position between ticks inside a `CGameSprite::Render` hook
 - `CGameSprite::RenderMarkers` (`0x36F170`) and `RenderHealthBar`
   (`0x36E820`) are wrapped with the same swap and share one per-frame
   timestamp, so circles and bars stay glued to the sprite.
-- Known limits: positions are whole world pixels; projectiles and effects
-  still step at the logic rate; anything else that reads `m_pos` during
+- In-game result 2026-10-03 (owner): works, visibly smoother. The field log
+  shows sprite renders and `LoadArea` on the same thread, so the position
+  swap cannot race the logic tick.
+- `CProjectileBAM::Render` (`0x233F20`) uses the same swap with its own
+  tracker and a larger snap limit; the tracker also starts over for a key not
+  sampled for 0.5 s (off screen, or a new object at a reused address).
+- Known limits: positions are whole world pixels; other projectile classes
+  and spell effects still step at the logic rate; anything else that reads `m_pos` during
   render (floating text, action icons drawn outside the three hooks) is not
   smoothed.
 

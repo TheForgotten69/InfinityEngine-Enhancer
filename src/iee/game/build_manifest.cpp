@@ -191,8 +191,10 @@ constexpr BuildManifest kKnownBuilds[] = {
             "48 8B 05 ? ? ? ? 48 33 C4 48 89 45 20 45 33 E4",
             "40 55 53 56 57 41 56 48 8B EC 48 83 EC 60 48 8B 41 18 4C 8B F2 48 8B F1",
             "4C 8B DC 55 57 49 8D AB 48 FF FF FF 48 81 EC A8 01 00 00",
+            // CProjectileBAM::Render (PDB-named, offline-verified unique).
+            "4C 8B DC 55 41 54 41 56 49 8D 6B A1 48 81 EC C0 00 00 00",
         },
-        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820},
+        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x233F20},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -229,7 +231,8 @@ static_assert(validate_pattern_format(kKnownBuilds[1].patterns.objectArrayGetSha
               "2.7.3 GetShare pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.spriteRender) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderMarkers) &&
-                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar),
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.projectileBamRender),
               "2.7.3 sprite render pattern format is invalid");
 static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace

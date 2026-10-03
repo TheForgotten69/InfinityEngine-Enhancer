@@ -19,6 +19,7 @@ namespace iee::game {
         std::uintptr_t SpriteRender = 0;
         std::uintptr_t SpriteRenderMarkers = 0;
         std::uintptr_t SpriteRenderHealthBar = 0;
+        std::uintptr_t ProjectileBamRender = 0;
         bool initialized = false;
     };
 
