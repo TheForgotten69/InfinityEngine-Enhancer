@@ -148,13 +148,20 @@ each sprite's draw position between ticks inside a `CGameSprite::Render` hook
 
 One override shader that covers every character and effect quad.
 
-- B1 upscaling kernel (pixel-art family; `FPCRSPRT` holds the developers' own
-  abandoned xBR attempt as a reference).
+- B1 sharpening kernel. Owner decision 2026-10-04: an FSR-family filter.
+  Only the spatial part applies (FSR1: edge-adaptive upscale plus
+  sharpening). FSR2/3 and other temporal upscalers do not fit, because a
+  pre-rendered sprite frame yields no new samples over time. The aim is clean
+  edges when the game magnifies sprites, not added detail.
 - B2 premultiplied-alpha halo fix (all three parts together, per the 2026-06-10
   design §4.8).
 - B3 soft shadows: tag `SHADOW_ENTRY` pixels at blit time, blur in shader.
 - B4 smooth wall occlusion: replace the dithered stipple with alpha.
 - Risk: atlas neighbour bleed; **gate** on per-quad UV rectangle availability.
+- Rejected 2026-10-04: offline AI upscaling of sprites. Real-ESRGAN (general,
+  anime and anime-video models) and SeedVR 7B (owner's test) smooth the
+  sprites without adding real detail; a 25-pixel-wide figure does not hold
+  enough to reconstruct.
 
 ### C. Effect replacement framework
 
@@ -265,17 +272,17 @@ item icons.
 
 ## 3. Order
 
-| # | Item | Why here |
+Revised 2026-10-04 after A and F's engine side were confirmed in game.
+
+| Phase | Items | Why here |
 |---|---|---|
-| 1 | C1 | Existing work on the branch; make it correct before building on it |
-| 2 | A | One hook, most certain perceived gain |
-| 3 | B1, B2 | Sprites are the most visible mismatch against 4x maps |
-| 4 | C2, C3 | Effects plus the light they cast |
-| 5 | D1, D2 | Shared offscreen plumbing |
-| 6 | B3, B4 | Ride on the `fpSprite` replacement |
-| 7 | F spike | Quality question answered offline first |
-| 8 | E1 → E2 → E3 | Largest visual jump, largest asset cost |
-| 9 | C4, D3, G | Polish |
+| 1 | F: in-betweens-only pack with source fingerprints, in-memory merge, standalone generator, vanilla pack as its own mod; narrow the all-cells rule to frame-synced cells | The owner's favourite feature currently depends on hand-generated whole files |
+| 2 | B1, B2 | Sprites are the most visible mismatch against 4x maps |
+| 3 | C1 confirmation, C2 (blood first), C3 | Effects plus the light they cast |
+| 4 | D1, D2 | Shared offscreen plumbing |
+| Later | B3, B4, E1 -> E2 -> E3, C4, D3, G | Polish and the large asset-driven items |
+
+Done: A (movement smoothing), F's draw-time swap.
 
 ## 4. Reversed decisions
 
