@@ -107,6 +107,7 @@ add_library(iee_common STATIC
     src/iee/game/tis_palette.cpp
     src/iee/game/tis_runtime.cpp
     src/iee/game/wed_runtime.cpp
+    src/iee/game/world_post_plan.cpp
 )
 
 target_include_directories(iee_common

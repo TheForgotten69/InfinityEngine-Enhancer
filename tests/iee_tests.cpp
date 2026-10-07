@@ -33,6 +33,7 @@
 #include "iee/game/tile_upscale.h"
 #include "iee/game/tis_palette.h"
 #include "iee/game/wed_runtime.h"
+#include "iee/game/world_post_plan.h"
 
 namespace {
 int g_failures = 0;
@@ -1266,6 +1267,50 @@ void test_interface_contract_token_boundary() {
   expect_eq(failed.missingIdentifiers.size(), std::size_t{1}, "only sTex missing");
   expect_eq(failed.missingIdentifiers[0], std::string("sTex"), "missing identifier is sTex");
 }
+void test_world_post_plan() {
+  using namespace iee::game;
+
+  expect_true(half_extent({1920, 1080}) == Extent{960, 540}, "Half extent halves both sides");
+  expect_true(half_extent({1, 1}) == Extent{1, 1}, "Half extent never reaches zero");
+  expect_true(half_extent({0, 0}) == Extent{1, 1}, "A degenerate extent still yields 1x1");
+
+  expect_eq(available_blur_levels({1920, 1080}), 6, "A full-HD image supports the level cap");
+  expect_eq(available_blur_levels({64, 64}), 3, "Levels stop before a side drops below 8");
+  expect_eq(available_blur_levels({10, 10}), 0, "A tiny image supports no blur levels");
+  expect_eq(available_blur_levels({0, 0}), 0, "A degenerate image supports no blur levels");
+
+  const auto none = blur_plan_for_radius(0.0f, {1920, 1080});
+  expect_eq(none.levels, 0, "Radius 0 means no blur");
+  expect_eq(blur_plan_for_radius(std::numeric_limits<float>::quiet_NaN(), {1920, 1080}).levels, 0,
+            "A NaN radius means no blur");
+  expect_eq(blur_plan_for_radius(-5.0f, {1920, 1080}).levels, 0, "A negative radius means no blur");
+
+  const auto small = blur_plan_for_radius(4.0f, {1920, 1080});
+  expect_eq(small.levels, 1, "A 4 px radius needs one level");
+  expect_eq(small.offset, 1.0f, "A radius equal to the level reach uses offset 1");
+
+  const auto typical = blur_plan_for_radius(24.0f, {1920, 1080});
+  expect_eq(typical.levels, 4, "A 24 px radius needs four levels (reach 32)");
+  expect_eq(typical.offset, 0.75f, "Offset scales the reach down to the radius");
+
+  const auto huge = blur_plan_for_radius(1000.0f, {1920, 1080});
+  expect_eq(huge.levels, 6, "Levels are capped by what the image supports");
+  expect_eq(huge.offset, 1.5f, "Offset is clamped so taps never skip texels badly");
+
+  expect_eq(blur_plan_for_radius(24.0f, {10, 10}).levels, 0,
+            "No blur is planned on an image too small to hold a level");
+
+  expect_eq(bloom_levels({960, 540}), 5, "Bloom uses at most five levels");
+  expect_eq(bloom_levels({40, 40}), 2, "Bloom levels shrink with the image");
+
+  expect_eq(pixels_per_world_pixel(3840.0f, 1920.0f), 2.0f, "Scale is viewport over world width");
+  expect_eq(pixels_per_world_pixel(3840.0f, 0.0f), 1.0f, "An unknown world width falls back to 1");
+  expect_eq(pixels_per_world_pixel(0.0f, 1920.0f), 1.0f, "An unknown viewport falls back to 1");
+  expect_eq(pixels_per_world_pixel(100000.0f, 1.0f), 8.0f, "Scale is clamped to a sane maximum");
+  expect_eq(pixels_per_world_pixel(std::numeric_limits<float>::infinity(), 100.0f), 1.0f,
+            "A non-finite input falls back to 1");
+}
+
 }  // namespace
 
 void test_area_liquid_texture_packing() {
@@ -2079,6 +2124,7 @@ int main() {
   test_collect_area_static_animations();
   test_sprite_motion_tracker();
   test_animation_interpolation();
+  test_world_post_plan();
   test_build_area_effect_points();
   test_config_detection_section();
 
