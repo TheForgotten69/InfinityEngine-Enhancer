@@ -25,6 +25,33 @@ int available_blur_levels(Extent base) noexcept;
 // The plan whose blur reaches about `radiusPixels` on an image of `base` size.
 BlurPlan blur_plan_for_radius(float radiusPixels, Extent base) noexcept;
 int bloom_levels(Extent base) noexcept;
+// Tells world draws from UI draws by where a frame is. Within a frame that
+// shows an area, everything queued up to the fog of war is world and everything
+// after it is UI; a frame that shows no area (menus, full-screen panels) is
+// all UI. The frame boundary may be reported more than once per presented
+// frame, so "an area was drawn recently" is counted in boundaries, not exact.
+class WorldPassGate {
+ public:
+  void on_frame() noexcept {
+    if (sinceArea_ < kNever) ++sinceArea_;
+    closedForFrame_ = false;
+  }
+  // The fog of war is about to be drawn: the world part of this frame is over.
+  void on_area_drawn() noexcept {
+    sinceArea_ = 0;
+    closedForFrame_ = true;
+  }
+  [[nodiscard]] bool open() const noexcept {
+    return !closedForFrame_ && sinceArea_ <= kTolerance;
+  }
+
+ private:
+  static constexpr int kTolerance = 4;
+  static constexpr int kNever = 1000;
+  int sinceArea_{kNever};
+  bool closedForFrame_{};
+};
+
 // How far to move the shown image towards the new one after `stepSeconds`,
 // for an exponential approach with time constant `smoothingSeconds`. 1 means
 // "show the new image": no smoothing, or a history too old to trust.

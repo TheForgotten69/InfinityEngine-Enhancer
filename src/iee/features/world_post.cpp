@@ -140,8 +140,11 @@ std::atomic<bool> g_dropFogHistory{false};
 // frame boundary to the fog; additive draws queued later belong to the UI.
 unsigned g_frame = 1;
 unsigned g_emissiveFrame = 0;
-bool g_worldPassOpen = false;
-bool g_fogSeenThisFrame = false;
+game::WorldPassGate g_worldPass;
+// Field counters for the per-area log line: frame boundaries seen and sprite
+// atlases upscaled since the previous area frame.
+int g_frameTicksSinceArea = 0;
+int g_atlasUpscalesSinceArea = 0;
 int g_emissiveCommands = 0;
 int g_savedDrawFramebuffer = 0;
 int g_savedReadFramebuffer = 0;
@@ -859,14 +862,12 @@ void world_post_poll_hotkeys() noexcept {
 
 void world_post_on_frame() noexcept {
   ++g_frame;
-  // The world pass is only open on frames that follow a frame which drew an
-  // area: in menus and full-screen panels every draw is UI.
-  g_worldPassOpen = g_fogSeenThisFrame;
-  g_fogSeenThisFrame = false;
+  g_worldPass.on_frame();
+  ++g_frameTicksSinceArea;
 }
 
 bool world_post_wants_atlas_upscale() noexcept {
-  return g_worldPassOpen && g_settings.spriteUpscale && !g_failed;
+  return g_worldPass.open() && g_settings.spriteUpscale && !g_failed;
 }
 
 unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, int height,
@@ -909,6 +910,7 @@ unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, i
         fn.glBindTexture(gl::TEXTURE_2D, atlas.upscaled.texture);
         fn.glDrawArrays(gl::TRIANGLES, 0, 3);
         result = atlas.sharpened.texture;
+        ++g_atlasUpscalesSinceArea;
         if (!g_resources.atlasDrawnOnce) {
           g_resources.atlasDrawnOnce = true;
           if (!gl::check_error("sprite atlas upscale")) {
@@ -932,7 +934,7 @@ unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, i
 }
 
 bool world_post_wants_emissive() noexcept {
-  return g_worldPassOpen && g_settings.bloom && !g_failed;
+  return g_worldPass.open() && g_settings.bloom && !g_failed;
 }
 
 bool world_post_begin_emissive() noexcept {
@@ -980,8 +982,7 @@ void world_post_end_emissive(int commands) noexcept {
 bool world_post_before_fog(const WorldView& view) noexcept {
   g_view = view;
   const auto& fn = gl::get_gl_functions();
-  g_worldPassOpen = false;
-  g_fogSeenThisFrame = true;
+  g_worldPass.on_area_drawn();
   if (!fn.postProcessAvailable) {
     fail("the GL context lacks framebuffer or vertex-array support");
     return false;
@@ -1020,11 +1021,13 @@ bool world_post_before_fog(const WorldView& view) noexcept {
         try {
           LOG_INFO(
               "World post: softFog={} (radius {} world px, blur levels={} offset={:.2f}), "
-              "bloom={} (strength {}, light spill {}, {} additive draws this frame), viewport "
-              "{}x{}, {:.3f} px per world px, engine framebuffer draw={} read={}",
+              "bloom={} (strength {}, light spill {}, {} additive draws this frame), sprite "
+              "upscale={} ({} atlas passes, {} frame boundaries since the last area frame), "
+              "viewport {}x{}, {:.3f} px per world px, engine framebuffer draw={} read={}",
               g_settings.softFog, g_settings.fogRadius, plan.levels, plan.offset,
               g_settings.bloom, g_settings.bloomStrength, g_settings.lightSpill,
-              g_emissiveFrame == g_frame ? g_emissiveCommands : 0, viewport[2], viewport[3],
+              g_emissiveFrame == g_frame ? g_emissiveCommands : 0, g_settings.spriteUpscale,
+              g_atlasUpscalesSinceArea, g_frameTicksSinceArea, viewport[2], viewport[3],
               g_pixelsPerWorldPixel, g_engineDrawFramebuffer, g_engineReadFramebuffer);
         } catch (...) {
         }
@@ -1032,6 +1035,8 @@ bool world_post_before_fog(const WorldView& view) noexcept {
     }
     bind_engine_framebuffer();
   }
+  g_frameTicksSinceArea = 0;
+  g_atlasUpscalesSinceArea = 0;
   // The guards have restored the engine's state; hand it our target for the
   // fog draw only. Framebuffer bindings are not part of the engine's cache.
   if (capturing) fn.glBindFramebuffer(gl::FRAMEBUFFER, g_resources.fogCapture.framebuffer);

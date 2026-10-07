@@ -1541,6 +1541,34 @@ void test_sprite_atlas_lookup() {
   expect_true(atlas_info(layout, count, -1).textureName == nullptr, "A negative slot has none");
 }
 
+void test_world_pass_gate() {
+  using namespace iee::game;
+  WorldPassGate gate;
+  expect_true(!gate.open(), "Nothing is world before an area has been drawn");
+  gate.on_frame();
+  expect_true(!gate.open(), "A frame boundary alone does not open the world pass");
+
+  gate.on_area_drawn();
+  expect_true(!gate.open(), "After the area is drawn the rest of the frame is UI");
+  gate.on_frame();
+  expect_true(gate.open(), "The frame after an area frame starts in the world pass");
+  gate.on_area_drawn();
+  expect_true(!gate.open(), "It closes again once that frame's area is drawn");
+
+  // The frame boundary can be reported more than once per presented frame.
+  gate.on_frame();
+  gate.on_frame();
+  expect_true(gate.open(), "A doubled frame boundary still opens the world pass");
+  gate.on_area_drawn();
+  gate.on_frame();
+  gate.on_frame();
+  gate.on_frame();
+  expect_true(gate.open(), "A few boundaries without an area are tolerated");
+
+  for (int i = 0; i < 8; ++i) gate.on_frame();
+  expect_true(!gate.open(), "With no area drawn for several frames, everything is UI");
+}
+
 void test_world_post_plan() {
   using namespace iee::game;
 
@@ -2411,6 +2439,7 @@ int main() {
   test_sprite_motion_tracker();
   test_animation_interpolation();
   test_world_post_plan();
+  test_world_pass_gate();
   test_tick_clock_and_particle_backstep();
   test_draw_queue();
   test_sprite_atlas_lookup();
