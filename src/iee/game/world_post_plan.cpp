@@ -39,6 +39,14 @@ int bloom_levels(Extent base) noexcept {
   return std::min(kMaxBloomLevels, available_blur_levels(base));
 }
 
+float temporal_blend(float stepSeconds, float smoothingSeconds) noexcept {
+  constexpr float kStaleSeconds = 0.5f;
+  if (!(smoothingSeconds > 0.0f)) return 1.0f;
+  // Written so NaN drops the history.
+  if (!(stepSeconds >= 0.0f) || stepSeconds > kStaleSeconds) return 1.0f;
+  return 1.0f - std::exp(-stepSeconds / smoothingSeconds);
+}
+
 float pixels_per_world_pixel(float viewportWidth, float viewWorldWidth) noexcept {
   if (!std::isfinite(viewportWidth) || !std::isfinite(viewWorldWidth)) return 1.0f;
   if (!(viewportWidth > 0.0f) || !(viewWorldWidth > 0.0f)) return 1.0f;

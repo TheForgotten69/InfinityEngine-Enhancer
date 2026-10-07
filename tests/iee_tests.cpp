@@ -1274,6 +1274,7 @@ void test_config_world_post() {
   expect_eq(defaults.softFogRadius, 24.0f, "Soft fog radius default");
   expect_eq(defaults.lightSpill, 1.5f, "Light spill default");
   expect_eq(defaults.softFogDrift, 10.0f, "Soft fog drift default");
+  expect_eq(defaults.softFogSmoothing, 0.25f, "Soft fog smoothing default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1286,6 +1287,7 @@ void test_config_world_post() {
     out << "Bloom = true\n";
     out << "LightSpill = 3\n";
     out << "SoftFogDrift = 20\n";
+    out << "SoftFogSmoothing = 0.5\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
@@ -1294,6 +1296,7 @@ void test_config_world_post() {
   expect_eq(cfg.softFogRadius, 40.0f, "Soft fog radius should parse");
   expect_eq(cfg.lightSpill, 3.0f, "Light spill should parse");
   expect_eq(cfg.softFogDrift, 20.0f, "Soft fog drift should parse");
+  expect_eq(cfg.softFogSmoothing, 0.5f, "Soft fog smoothing should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
@@ -1302,6 +1305,7 @@ void test_config_world_post() {
     out << "SoftFogRadius = 100000\n";
     out << "LightSpill = 700\n";
     out << "SoftFogDrift = -4\n";
+    out << "SoftFogSmoothing = 99\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
@@ -1309,6 +1313,7 @@ void test_config_world_post() {
   expect_eq(cfg.softFogRadius, 256.0f, "Soft fog radius is clamped to its maximum");
   expect_eq(cfg.lightSpill, 8.0f, "Light spill is clamped to its maximum");
   expect_eq(cfg.softFogDrift, 0.0f, "Soft fog drift is clamped to 0");
+  expect_eq(cfg.softFogSmoothing, 2.0f, "Soft fog smoothing is clamped to its maximum");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {
@@ -1436,6 +1441,17 @@ void test_world_post_plan() {
 
   expect_eq(bloom_levels({960, 540}), 5, "Bloom uses at most five levels");
   expect_eq(bloom_levels({40, 40}), 2, "Bloom levels shrink with the image");
+
+  expect_eq(temporal_blend(0.1f, 0.0f), 1.0f, "No smoothing time means the new image is shown at once");
+  expect_eq(temporal_blend(0.0f, 0.25f), 0.0f, "No elapsed time keeps the shown image");
+  expect_true(std::abs(temporal_blend(0.25f, 0.25f) - 0.6321f) < 0.001f,
+              "One smoothing time moves 63% of the way to the new image");
+  expect_true(temporal_blend(0.01f, 0.25f) < temporal_blend(0.02f, 0.25f),
+              "A longer frame moves further");
+  expect_eq(temporal_blend(0.8f, 0.25f), 1.0f, "After a long gap the history is stale and dropped");
+  expect_eq(temporal_blend(-1.0f, 0.25f), 1.0f, "A negative step drops the history");
+  expect_eq(temporal_blend(std::numeric_limits<float>::quiet_NaN(), 0.25f), 1.0f,
+            "A NaN step drops the history");
 
   expect_eq(pixels_per_world_pixel(3840.0f, 1920.0f), 2.0f, "Scale is viewport over world width");
   expect_eq(pixels_per_world_pixel(3840.0f, 0.0f), 1.0f, "An unknown world width falls back to 1");

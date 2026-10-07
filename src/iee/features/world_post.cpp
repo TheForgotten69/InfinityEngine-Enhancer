@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 
 #include "iee/core/config.h"
@@ -28,6 +29,17 @@ struct CompositeProgram {
   int scale{-1};
   int dither{-1};
   int curve{-1};
+};
+
+// Blends the new fog image with the one shown last frame, looked up at the
+// same place on the map.
+struct FogTemporalProgram {
+  unsigned id{};
+  int origin{-1};
+  int size{-1};
+  int previousOrigin{-1};
+  int previousSize{-1};
+  int blend{-1};
 };
 
 struct FogProgram {
@@ -56,6 +68,7 @@ struct Settings {
   float bloomStrength{};
   float lightSpill{};
   float fogDrift{};
+  float fogSmoothing{};
 };
 
 // Everything that lives and dies with one GL context.
@@ -66,10 +79,17 @@ struct Resources {
   unsigned vertexBuffer{};
   CompositeProgram composite{};
   FogProgram fog{};
+  FogTemporalProgram fogTemporal{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
   Target fogCapture{};
   BlurChain fogChain{};
+  // The fog as shown last frame and the one being built, swapped each frame.
+  std::array<Target, 2> fogHistory{};
+  int fogHistoryCurrent{};
+  bool fogHistoryValid{};
+  WorldView fogHistoryView{};
+  std::chrono::steady_clock::time_point fogHistoryTime{};
   // The engine's additive (light-emitting) draws of this frame, on black.
   Target emissive{};
   Target emissiveHalf{};
@@ -86,6 +106,7 @@ int g_engineReadFramebuffer = 0;
 float g_pixelsPerWorldPixel = 1.0f;
 WorldView g_view{};
 std::atomic<bool> g_logNextFrame{true};
+std::atomic<bool> g_dropFogHistory{false};
 // Frame bookkeeping for the emissive capture. The world pass runs from the
 // frame boundary to the fog; additive draws queued later belong to the UI.
 unsigned g_frame = 1;
@@ -121,6 +142,33 @@ void main() {
   if (uCurve > 0.5) color = vec3(1.0) - exp(-color);
   float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   fragColor = vec4(color + uDither * (noise - 0.5) / 255.0, 1.0);
+}
+)glsl";
+
+// The engine recomputes visibility on its logic tick, so the fog would step
+// while everything else moves smoothly. This moves the shown fog a fraction
+// (uBlend) of the way to the new one each frame. The previous image is read
+// at the same world position, so scrolling and zooming do not smear it;
+// where that position was off screen the new image is used as is.
+constexpr const char* kFogTemporalSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+uniform sampler2D uHistory;
+uniform vec2 uOrigin;
+uniform vec2 uSize;
+uniform vec2 uPreviousOrigin;
+uniform vec2 uPreviousSize;
+uniform float uBlend;
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+  vec3 current = texture(uTexture, vUv).rgb;
+  vec2 world = uOrigin + vec2(vUv.x, 1.0 - vUv.y) * uSize;
+  vec2 previous = (world - uPreviousOrigin) / uPreviousSize;
+  previous.y = 1.0 - previous.y;
+  float inside = step(0.0, previous.x) * step(previous.x, 1.0) * step(0.0, previous.y) *
+                 step(previous.y, 1.0);
+  vec3 history = texture(uHistory, previous).rgb;
+  fragColor = vec4(mix(current, history, inside * (1.0 - uBlend)), 1.0);
 }
 )glsl";
 
@@ -398,10 +446,19 @@ bool create_shared_resources() noexcept {
   resources.blurDown.id = build_program(kBlurDownSource);
   resources.blurUp.id = build_program(kBlurUpSource);
   resources.fog.id = build_program(kFogSource);
+  resources.fogTemporal.id = build_program(kFogTemporalSource);
   if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id ||
-      !resources.fog.id) {
+      !resources.fog.id || !resources.fogTemporal.id) {
     return false;
   }
+  auto& temporal = resources.fogTemporal;
+  temporal.origin = fn.glGetUniformLocation(temporal.id, "uOrigin");
+  temporal.size = fn.glGetUniformLocation(temporal.id, "uSize");
+  temporal.previousOrigin = fn.glGetUniformLocation(temporal.id, "uPreviousOrigin");
+  temporal.previousSize = fn.glGetUniformLocation(temporal.id, "uPreviousSize");
+  temporal.blend = fn.glGetUniformLocation(temporal.id, "uBlend");
+  fn.glUseProgram(temporal.id);
+  fn.glUniform1i(fn.glGetUniformLocation(temporal.id, "uHistory"), 1);
   resources.composite.curve = fn.glGetUniformLocation(resources.composite.id, "uCurve");
   resources.fog.worldOrigin = fn.glGetUniformLocation(resources.fog.id, "uWorldOrigin");
   resources.fog.worldSize = fn.glGetUniformLocation(resources.fog.id, "uWorldSize");
@@ -419,6 +476,10 @@ bool create_sized_resources(game::Extent viewport) noexcept {
   const auto half = game::half_extent(viewport);
   if (!create_target(resources.fogCapture, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
   if (!create_chain(resources.fogChain, viewport)) return false;
+  for (auto& history : resources.fogHistory) {
+    if (!create_target(history, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
+  }
+  resources.fogHistoryValid = false;
   if (!create_target(resources.emissive, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
   if (!create_target(resources.emissiveHalf, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
   if (!create_chain(resources.bloomChain, half)) return false;
@@ -507,7 +568,7 @@ void draw_bloom() noexcept {
 
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
   g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
-                cfg.lightSpill, cfg.softFogDrift};
+                cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing};
 }
 
 bool world_post_active() noexcept {
@@ -646,12 +707,52 @@ bool world_post_before_fog(const WorldView& view) noexcept {
 void world_post_after_fog() noexcept {
   const auto& fn = gl::get_gl_functions();
   auto& resources = g_resources;
-  core::GlStateGuard textures({0});
+  core::GlStateGuard textures({0, 1});
   core::GlPassGuard pass;
   set_pass_state();
   const auto plan =
       game::blur_plan_for_radius(g_settings.fogRadius * g_pixelsPerWorldPixel, resources.viewport);
   const bool blurred = run_blur(resources.fogCapture, resources.fogChain, plan, false) > 0;
+  unsigned fogTexture = resources.fogChain.levels[0].texture;
+  const bool viewKnown = g_view.width > 0.0f && g_view.height > 0.0f;
+  if (g_dropFogHistory.exchange(false, std::memory_order_relaxed)) {
+    resources.fogHistoryValid = false;
+  }
+  if (blurred && viewKnown && g_settings.fogSmoothing > 0.0f) {
+    const auto now = std::chrono::steady_clock::now();
+    const float step = std::chrono::duration<float>(now - resources.fogHistoryTime).count();
+    const float blend = resources.fogHistoryValid
+                            ? game::temporal_blend(step, g_settings.fogSmoothing)
+                            : 1.0f;
+    const auto& shown = resources.fogHistory[static_cast<std::size_t>(resources.fogHistoryCurrent)];
+    const int next = 1 - resources.fogHistoryCurrent;
+    const auto& target = resources.fogHistory[static_cast<std::size_t>(next)];
+    const auto& temporal = resources.fogTemporal;
+    fn.glBindFramebuffer(gl::FRAMEBUFFER, target.framebuffer);
+    fn.glViewport(0, 0, target.extent.width, target.extent.height);
+    fn.glUseProgram(temporal.id);
+    fn.glUniform2f(temporal.origin, g_view.scrollX, g_view.scrollY);
+    fn.glUniform2f(temporal.size, g_view.width, g_view.height);
+    fn.glUniform2f(temporal.previousOrigin, resources.fogHistoryView.scrollX,
+                   resources.fogHistoryView.scrollY);
+    // A zero size would divide by zero; with blend 1 the history is unused.
+    fn.glUniform2f(temporal.previousSize,
+                   resources.fogHistoryValid ? resources.fogHistoryView.width : 1.0f,
+                   resources.fogHistoryValid ? resources.fogHistoryView.height : 1.0f);
+    fn.glUniform1f(temporal.blend, blend);
+    fn.glActiveTexture(gl::TEXTURE0 + 1);
+    fn.glBindTexture(gl::TEXTURE_2D, shown.texture);
+    fn.glActiveTexture(gl::TEXTURE0);
+    fn.glBindTexture(gl::TEXTURE_2D, fogTexture);
+    fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+    resources.fogHistoryCurrent = next;
+    resources.fogHistoryValid = true;
+    resources.fogHistoryView = g_view;
+    resources.fogHistoryTime = now;
+    fogTexture = target.texture;
+  } else {
+    resources.fogHistoryValid = false;
+  }
   bind_engine_framebuffer();
   fn.glViewport(0, 0, resources.viewport.width, resources.viewport.height);
   // framebuffer = framebuffer * visible fraction
@@ -665,7 +766,7 @@ void world_post_after_fog() noexcept {
     // Wrapped hourly so the float keeps sub-frame precision.
     fn.glUniform1f(resources.fog.time,
                    static_cast<float>(GetTickCount64() % 3600000ULL) / 1000.0f);
-    fn.glBindTexture(gl::TEXTURE_2D, resources.fogChain.levels[0].texture);
+    fn.glBindTexture(gl::TEXTURE_2D, fogTexture);
     fn.glDrawArrays(gl::TRIANGLES, 0, 3);
   } else {
     // Unblurred capture: must reproduce the engine's fog exactly.
@@ -684,7 +785,10 @@ void world_post_after_fog() noexcept {
   }
 }
 
-void world_post_on_area_load() noexcept { g_logNextFrame.store(true, std::memory_order_relaxed); }
+void world_post_on_area_load() noexcept {
+  g_logNextFrame.store(true, std::memory_order_relaxed);
+  g_dropFogHistory.store(true, std::memory_order_relaxed);
+}
 
 void world_post_forget() noexcept { g_resources = {}; }
 }  // namespace iee::features

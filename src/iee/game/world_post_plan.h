@@ -25,6 +25,10 @@ int available_blur_levels(Extent base) noexcept;
 // The plan whose blur reaches about `radiusPixels` on an image of `base` size.
 BlurPlan blur_plan_for_radius(float radiusPixels, Extent base) noexcept;
 int bloom_levels(Extent base) noexcept;
+// How far to move the shown image towards the new one after `stepSeconds`,
+// for an exponential approach with time constant `smoothingSeconds`. 1 means
+// "show the new image": no smoothing, or a history too old to trust.
+float temporal_blend(float stepSeconds, float smoothingSeconds) noexcept;
 // Screen pixels per world pixel at the current zoom; 1 when either is unknown.
 float pixels_per_world_pixel(float viewportWidth, float viewWorldWidth) noexcept;
 }  // namespace iee::game

@@ -295,3 +295,23 @@ for more.
 - **Light falloff.** The light spill now samples a deeper level of the bloom
   chain (wide blurs only) and maps it through `1 - exp(-x)`, so a small source
   lights a wider area and the area next to it saturates instead of clipping.
+
+## 13. Revision 2026-10-07 (later): fog smoothed over time
+
+Owner observation: the fog is "pinned to one tick". The engine recomputes
+visibility on its logic tick, so the reveal steps while sprites and the camera
+move at display rate.
+
+The blurred fog is now blended with the image shown on the previous frame
+(`SoftFogSmoothing`, seconds, default 0.25, 0 = off): each frame the shown fog
+moves `1 - exp(-dt / smoothing)` of the way to the new capture
+(`game::temporal_blend`). The previous image is sampled at the same world
+position, using the current and previous view transforms, so scrolling and
+zooming do not smear it; positions that were off screen take the new value.
+History is dropped on area load, on resize, after a gap of more than 0.5 s,
+and whenever the view transform is unknown. The unblurred path
+(`SoftFogRadius = 0`) is not smoothed and still reproduces the engine's fog.
+
+This relies on `area::read_view_transform` being correct at `RenderFog` time,
+which is not yet confirmed in game: a wrong scroll would show as fog trailing
+behind the camera.
