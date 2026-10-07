@@ -27,6 +27,10 @@ namespace iee::game {
         // Optional, each independent; 0 where unresolved. Indexed like
         // BuildManifest::smoothedObjectRenders.
         std::array<std::uintptr_t, 8> SmoothedObjectRenders{};
+        // Optional, all-or-nothing: the world post passes (soft fog of war,
+        // bloom) need the fog render to hook and the queue flush to call.
+        std::uintptr_t RenderFog = 0;
+        std::uintptr_t DrawFlush = 0;
         bool initialized = false;
     };
 

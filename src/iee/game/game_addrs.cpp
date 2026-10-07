@@ -79,19 +79,20 @@ namespace iee::game {
             }
         }
 
+        const auto resolveOptional = [&](const char *name, std::string_view pattern,
+                                         std::uintptr_t referenceRva) -> std::uintptr_t {
+            if (pattern.empty()) return 0;
+            std::size_t matches = 0;
+            auto target = reinterpret_cast<std::uintptr_t>(
+                core::find_unique_in_module(nullptr, pattern, &matches));
+            recover(name, target, matches, referenceRva, pattern);
+            if (!target) LOG_WARN("{} pattern matched {} times", name, matches);
+            return target;
+        };
+
         // Optional targets: sprite movement smoothing. Resolved only when
         // requested, and only as a complete set.
         if (cfg.smoothSpriteMovement || cfg.interpolateAnimations) {
-            const auto resolveOptional = [&](const char *name, std::string_view pattern,
-                                             std::uintptr_t referenceRva) -> std::uintptr_t {
-                if (pattern.empty()) return 0;
-                std::size_t matches = 0;
-                auto target = reinterpret_cast<std::uintptr_t>(
-                    core::find_unique_in_module(nullptr, pattern, &matches));
-                recover(name, target, matches, referenceRva, pattern);
-                if (!target) LOG_WARN("{} pattern matched {} times", name, matches);
-                return target;
-            };
             const auto &patterns = manifest.patterns;
             const auto &rvas = manifest.referenceRvas;
             out.SpriteRender =
@@ -140,6 +141,28 @@ namespace iee::game {
                 out.SpriteRender = out.SpriteRenderMarkers = out.SpriteRenderHealthBar = 0;
                 LOG_WARN("Sprite movement smoothing disabled: this build has no complete set of "
                          "sprite render targets");
+            }
+        }
+
+        // Optional targets: world post passes. Resolved only when requested
+        // (or when debug hotkeys can switch them on), and only as a pair.
+        if (cfg.softFogOfWar || cfg.bloom || cfg.enableDebugHotkeys) {
+            out.RenderFog = resolveOptional("CInfinity::RenderFog", manifest.patterns.renderFog,
+                                            manifest.referenceRvas.renderFog);
+            out.DrawFlush = resolveOptional("DrawFlush_GL", manifest.patterns.drawFlush,
+                                            manifest.referenceRvas.drawFlush);
+            if (out.RenderFog && out.DrawFlush) {
+                LOG_INFO("World post targets resolved at RVA 0x{:X} / 0x{:X}",
+                         out.RenderFog - moduleBase, out.DrawFlush - moduleBase);
+            } else {
+                const bool known =
+                    !manifest.patterns.renderFog.empty() && !manifest.patterns.drawFlush.empty();
+                out.RenderFog = out.DrawFlush = 0;
+                if (cfg.softFogOfWar || cfg.bloom) {
+                    LOG_WARN("Soft fog of war and bloom disabled: {}",
+                             known ? "RenderFog/DrawFlush did not resolve uniquely"
+                                   : "this build has no RenderFog/DrawFlush targets");
+                }
             }
         }
 

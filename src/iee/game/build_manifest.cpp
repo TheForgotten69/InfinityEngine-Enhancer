@@ -196,9 +196,15 @@ constexpr BuildManifest kKnownBuilds[] = {
             "40 53 48 83 EC 20 48 8B D9 48 8B 89 08 01 00 00 48 85 C9 0F",
             "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B F9 33 DB 48 8B 89 08 01 00 00 "
             "48 8B F2 48 85 C9 75 15 48 89 1A 33 C0",
+            // CInfinity::RenderFog and DrawFlush_GL (PDB-named, each
+            // offline-verified unique on the Steam 2.7.3.0 binary).
+            "48 89 5C 24 10 4C 89 44 24 18 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 "
+            "48 8B D9 E8 ? ? ? ? B9 FF FF FF FF E8 ? ? ? ? B9 E1 0D 00 00",
+            "4C 8B DC 55 41 56 41 57 49 8D 6B D8 48 81 EC 10 01 00 00 48 8B 05 ? ? ? ? "
+            "48 33 C4 48 89 45 90 45 33 F6 44 39 35 ? ? ? ? 45 8B FE 0F 84",
         },
         {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x4118A0, 0x411660,
-         0x411780},
+         0x411780, 0x2A1B60, 0x42B350},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -263,6 +269,9 @@ static_assert([] {
   }
   return true;
 }(), "2.7.3 smoothed object render pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderFog) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.drawFlush),
+              "2.7.3 world post pattern format is invalid");
 static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace
 

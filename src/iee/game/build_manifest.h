@@ -53,6 +53,11 @@ struct PatternSet {
   // being searched for.
   std::string_view vidCellGetFrame{};
   std::string_view vidCellFrameAccessor{};
+  // Optional: CInfinity::RenderFog and the GL backend's queue flush
+  // (DrawFlush_GL). Hooked/called together for the world post passes (soft
+  // fog of war, bloom); either empty or non-unique leaves both off.
+  std::string_view renderFog{};
+  std::string_view drawFlush{};
 };
 
 struct ReferenceRvas {
@@ -67,6 +72,8 @@ struct ReferenceRvas {
   std::uintptr_t vidCellGetFrame{};
   std::uintptr_t vidCellGetCurrentCenterPoint{};
   std::uintptr_t vidCellGetCurrentFrameSize{};
+  std::uintptr_t renderFog{};
+  std::uintptr_t drawFlush{};
 };
 
 struct RuntimeOffsets {

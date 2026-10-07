@@ -1267,6 +1267,74 @@ void test_interface_contract_token_boundary() {
   expect_eq(failed.missingIdentifiers.size(), std::size_t{1}, "only sTex missing");
   expect_eq(failed.missingIdentifiers[0], std::string("sTex"), "missing identifier is sTex");
 }
+void test_config_world_post() {
+  iee::core::EngineConfig defaults{};
+  expect_true(!defaults.softFogOfWar && !defaults.bloom, "World post effects default off");
+  expect_eq(defaults.softFogRadius, 24.0f, "Soft fog radius default");
+  expect_eq(defaults.bloomThreshold, 0.80f, "Bloom threshold default");
+  expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
+
+  const auto tempPath =
+      std::filesystem::current_path() / "InfinityEngine-Enhancer-world-post-test.ini";
+  {
+    std::ofstream out(tempPath, std::ios::trunc);
+    out << "[Rendering]\n";
+    out << "SoftFogOfWar = true\n";
+    out << "SoftFogRadius = 40\n";
+    out << "Bloom = true\n";
+    out << "BloomThreshold = 0.6\n";
+    out << "BloomStrength = 0.5\n";
+  }
+  iee::core::EngineConfig cfg{};
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg), "World post keys should load");
+  expect_true(cfg.softFogOfWar && cfg.bloom, "World post bools should parse");
+  expect_eq(cfg.softFogRadius, 40.0f, "Soft fog radius should parse");
+  expect_eq(cfg.bloomThreshold, 0.6f, "Bloom threshold should parse");
+  expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
+
+  {
+    std::ofstream out(tempPath, std::ios::trunc);
+    out << "[Rendering]\n";
+    out << "SoftFogRadius = 100000\n";
+    out << "BloomThreshold = 7\n";
+    out << "BloomStrength = -3\n";
+  }
+  cfg = {};
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg), "Out-of-range values should load");
+  expect_eq(cfg.softFogRadius, 256.0f, "Soft fog radius is clamped to its maximum");
+  expect_eq(cfg.bloomThreshold, 1.0f, "Bloom threshold is clamped to 1");
+  expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
+
+  {
+    std::ofstream out(tempPath, std::ios::trunc);
+    out << "[Rendering]\n";
+    out << "SoftFogRadius = nan\n";
+    out << "BloomThreshold = inf\n";
+    out << "BloomStrength = nan\n";
+  }
+  cfg = {};
+  expect_true(iee::core::ConfigManager::load(tempPath, cfg), "Non-finite values should load");
+  expect_eq(cfg.softFogRadius, 24.0f, "A non-finite radius falls back to the default");
+  expect_eq(cfg.bloomThreshold, 0.80f, "A non-finite threshold falls back to the default");
+  expect_eq(cfg.bloomStrength, 0.35f, "A non-finite strength falls back to the default");
+
+  std::error_code error;
+  std::filesystem::remove(tempPath, error);
+}
+
+void test_manifest_world_post_targets() {
+  const auto found = iee::game::find_manifest("BGEE 2.7.3.x");
+  expect_true(found.has_value(), "The 2.7.3 manifest should be registered");
+  if (!found) return;
+  const auto& manifest = found->get();
+  expect_true(!manifest.patterns.renderFog.empty(), "2.7.3 should carry a RenderFog pattern");
+  expect_true(!manifest.patterns.drawFlush.empty(), "2.7.3 should carry a DrawFlush pattern");
+  expect_eq(manifest.referenceRvas.renderFog, std::uintptr_t{0x2A1B60}, "RenderFog reference RVA");
+  expect_eq(manifest.referenceRvas.drawFlush, std::uintptr_t{0x42B350}, "DrawFlush reference RVA");
+  expect_true(iee::game::current_manifest().patterns.renderFog.empty(),
+              "The 2.6.6 manifest has no world post targets");
+}
+
 void test_world_post_plan() {
   using namespace iee::game;
 
@@ -2112,6 +2180,7 @@ int main() {
   test_tile_table_detection_ignores_garbage_steps();
   test_tile_table_detection_uses_coordinate_deltas();
   test_manifest_infgame_offsets();
+  test_manifest_world_post_targets();
   test_shader_name_extraction();
   test_interface_contract();
   test_interface_contract_token_boundary();
@@ -2127,6 +2196,7 @@ int main() {
   test_world_post_plan();
   test_build_area_effect_points();
   test_config_detection_section();
+  test_config_world_post();
 
   if (g_failures != 0) {
     std::cerr << g_failures << " test(s) failed\n";
