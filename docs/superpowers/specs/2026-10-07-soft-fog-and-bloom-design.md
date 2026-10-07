@@ -335,3 +335,35 @@ All shaders are checked offline with `glslangValidator` (extract the
 source to those that declare `float noise(vec2 p);`). A shader that fails to
 compile in game switches fog and bloom off for the session, so run this
 before pushing shader changes.
+
+## 15. Revision 2026-10-07 (later): what else is stepped on the logic tick
+
+Owner request: find everything pinned to the engine tick and decouple it.
+Survey of the world-pass draws against their per-tick updates (2.7.3):
+
+| Thing | Per-tick update | Status |
+|---|---|---|
+| Creatures, circles, health bars, 8 projectile/effect types | `m_pos` | Smoothed earlier (item A) |
+| Fog of war | visibility map | Smoothed (section 13) |
+| Rain, snow, sparkles | `CParticle::AsynchronousUpdate` (`0x423C30`) adds velocity to position | **Smoothed now** |
+| Floating text over creatures | `CGameText::AIUpdate` copies the target's `m_pos` | **Smoothed now** |
+| Selection-circle pulse, talk markers | `CMarker::AsynchronousUpdate` counters | Not done: a size animation, not a position; low value |
+| `CProjectileSkyStrikeBAM`, spell-hit and travel-door projectiles | not drawn from `m_pos` | Not done |
+| Animation frames of effects and ambient animations | frame counters | Needs in-between art (paused item F) |
+| Screen fades, day/night tint | stepped values | Not done; day/night rejected by the owner |
+| Camera scroll | — | Already at display rate under EEex |
+
+Particles: `CParticle::Render` (`0x425BE0`; called by `CVidMode::BKRender`
+for rain and snow and by `CSparkleCluster::Render`) is wrapped. A `TickClock`
+fed from the particle update gives the fraction of the current tick elapsed;
+the particle is drawn at `position - velocity * (1 - fraction)`, which is
+exact because the update is a plain add. Gravity-only particles step back by
+their gravity in height. The position is restored after the engine call
+unless the engine changed it meanwhile. Layout mirrored as `game::CParticle`.
+
+Floating text: `CGameText::Render` (`0x1F39A0`) joins the smoothed-object
+table, so it slides with its creature.
+
+Both ride on `SmoothSpriteMovement`. Known gap: the tick clock is global, so
+if some particles keep updating while others are frozen (time stop during
+rain), the frozen ones jitter by one step.

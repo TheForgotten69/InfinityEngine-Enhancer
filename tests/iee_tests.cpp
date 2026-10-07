@@ -1275,7 +1275,7 @@ void test_config_world_post() {
   expect_eq(defaults.lightSpill, 1.5f, "Light spill default");
   expect_eq(defaults.softFogDrift, 10.0f, "Soft fog drift default");
   expect_eq(defaults.softFogSmoothing, 0.25f, "Soft fog smoothing default");
-  expect_eq(defaults.heatShimmer, 2.5f, "Heat shimmer default");
+  expect_eq(defaults.heatShimmer, 1.5f, "Heat shimmer default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1349,6 +1349,19 @@ void test_manifest_world_post_targets() {
   expect_eq(manifest.referenceRvas.drawFlush, std::uintptr_t{0x42B350}, "DrawFlush reference RVA");
   expect_true(iee::game::current_manifest().patterns.renderFog.empty(),
               "The 2.6.6 manifest has no world post targets");
+  expect_true(!manifest.patterns.particleUpdate.empty() && !manifest.patterns.particleRender.empty(),
+              "2.7.3 should carry the particle update and render patterns");
+  expect_eq(manifest.referenceRvas.particleUpdate, std::uintptr_t{0x423C30},
+            "CParticle::AsynchronousUpdate reference RVA");
+  expect_eq(manifest.referenceRvas.particleRender, std::uintptr_t{0x425BE0},
+            "CParticle::Render reference RVA");
+  bool smoothsFloatingText = false;
+  for (const auto& target : manifest.smoothedObjectRenders) {
+    if (target.name && std::string_view(target.name) == "CGameText::Render") {
+      smoothsFloatingText = target.referenceRva == 0x1F39A0 && !target.pattern.empty();
+    }
+  }
+  expect_true(smoothsFloatingText, "2.7.3 should smooth floating text with the other objects");
 }
 
 void test_draw_queue() {
@@ -1409,6 +1422,47 @@ void test_draw_queue() {
             "A missing function yields no address");
   expect_eq(draw_queue_commands_address(layout, 0x200000), std::uintptr_t{0x200000 - 0x180A8},
             "The command array sits a fixed distance before the count");
+}
+
+void test_tick_clock_and_particle_backstep() {
+  using namespace iee::game;
+  TickClock clock;
+  expect_eq(clock.phase(5.0), 1.0, "With no tick seen, things are drawn where the engine has them");
+
+  clock.on_update(10.0);
+  expect_eq(clock.phase(10.0), 0.0, "A tick starts a new step");
+  expect_true(std::abs(clock.phase(10.0 + TickClock::kDefaultInterval / 2.0) - 0.5) < 1e-9,
+              "Half a default interval later the step is half done");
+  expect_eq(clock.phase(10.5), 1.0, "The step ends after one interval and stays there");
+  expect_eq(clock.phase(9.0), 0.0, "A time before the tick is clamped to the start");
+
+  // Hundreds of particles update within one tick: that burst is one tick.
+  clock.on_update(10.001);
+  clock.on_update(10.002);
+  expect_eq(clock.phase(10.0), 0.0, "Updates within a burst do not restart the step");
+  clock.on_update(10.05);
+  expect_true(std::abs(clock.phase(10.075) - 0.5) < 1e-9,
+              "The observed interval between ticks sets the step length");
+
+  clock.on_update(20.0);  // a 10 s gap is a pause, not a tick length
+  expect_true(std::abs(clock.phase(20.0 + TickClock::kDefaultInterval / 2.0) - 0.5) < 1e-9,
+              "An implausible interval falls back to the default");
+
+  const ParticleState falling{{1000, 2000, 300}, {40, -20, -8}, 0, false};
+  expect_true(particle_draw_position(falling, 1.0) == ParticlePoint{1000, 2000, 300},
+              "At the end of a step a particle is drawn at its logic position");
+  expect_true(particle_draw_position(falling, 0.0) == ParticlePoint{960, 2020, 308},
+              "At the start of a step it is drawn one tick back along its velocity");
+  expect_true(particle_draw_position(falling, 0.5) == ParticlePoint{980, 2010, 304},
+              "In between it is drawn part of the way");
+  const ParticleState gravityOnly{{1000, 2000, 300}, {40, -20, 0}, 16, true};
+  expect_true(particle_draw_position(gravityOnly, 0.0) == ParticlePoint{960, 2020, 316},
+              "A gravity-only particle steps back by its gravity in height");
+  expect_true(particle_draw_position(falling, std::numeric_limits<double>::quiet_NaN()) ==
+                  ParticlePoint{1000, 2000, 300},
+              "A NaN phase draws the logic position");
+  expect_true(particle_draw_position(falling, 7.0) == ParticlePoint{1000, 2000, 300},
+              "A phase past the end draws the logic position");
 }
 
 void test_world_post_plan() {
@@ -2281,6 +2335,7 @@ int main() {
   test_sprite_motion_tracker();
   test_animation_interpolation();
   test_world_post_plan();
+  test_tick_clock_and_particle_backstep();
   test_draw_queue();
   test_build_area_effect_points();
   test_config_detection_section();

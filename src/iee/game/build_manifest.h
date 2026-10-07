@@ -58,6 +58,11 @@ struct PatternSet {
   // fog of war, bloom); either empty or non-unique leaves both off.
   std::string_view renderFog{};
   std::string_view drawFlush{};
+  // Optional pair: CParticle::AsynchronousUpdate and CParticle::Render (rain,
+  // snow, sparkles). The update marks the logic tick; the render is wrapped
+  // to draw each particle part of the way through its step.
+  std::string_view particleUpdate{};
+  std::string_view particleRender{};
 };
 
 struct ReferenceRvas {
@@ -74,6 +79,8 @@ struct ReferenceRvas {
   std::uintptr_t vidCellGetCurrentFrameSize{};
   std::uintptr_t renderFog{};
   std::uintptr_t drawFlush{};
+  std::uintptr_t particleUpdate{};
+  std::uintptr_t particleRender{};
 };
 
 struct RuntimeOffsets {
@@ -109,7 +116,7 @@ struct ObjectRenderTarget {
   std::string_view pattern{};
   std::uintptr_t referenceRva{};
 };
-inline constexpr std::size_t kMaxSmoothedObjectRenders = 8;
+inline constexpr std::size_t kMaxSmoothedObjectRenders = 12;
 
 // The GL backend's draw queue (gl.cmds / gl.n), consumed by DrawFlush_GL.
 // Used to pick out the engine's additive (light-emitting) draws.

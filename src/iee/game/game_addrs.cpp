@@ -134,6 +134,15 @@ namespace iee::game {
                 out.SmoothedObjectRenders[index] =
                     resolveOptional(target.name, target.pattern, target.referenceRva);
             }
+            if (cfg.smoothSpriteMovement) {
+                out.ParticleUpdate = resolveOptional("CParticle::AsynchronousUpdate",
+                                                     patterns.particleUpdate, rvas.particleUpdate);
+                out.ParticleRender = resolveOptional("CParticle::Render", patterns.particleRender,
+                                                     rvas.particleRender);
+                if (!(out.ParticleUpdate && out.ParticleRender)) {
+                    out.ParticleUpdate = out.ParticleRender = 0;
+                }
+            }
             if (out.SpriteRender && out.SpriteRenderMarkers && out.SpriteRenderHealthBar) {
                 LOG_INFO("Sprite render targets resolved at RVA 0x{:X} / 0x{:X} / 0x{:X}",
                          out.SpriteRender - moduleBase, out.SpriteRenderMarkers - moduleBase,

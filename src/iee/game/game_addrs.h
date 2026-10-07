@@ -2,12 +2,13 @@
 #include <array>
 #include <cstdint>
 
+#include "iee/game/build_manifest.h"
+
 namespace iee {
     namespace core { struct EngineConfig; }
 }
 
 namespace iee::game {
-    struct BuildManifest;
 
     struct GameAddresses {
         std::uintptr_t LoadArea = 0;
@@ -26,7 +27,10 @@ namespace iee::game {
         std::uintptr_t VidCellGetCurrentFrameSize = 0;
         // Optional, each independent; 0 where unresolved. Indexed like
         // BuildManifest::smoothedObjectRenders.
-        std::array<std::uintptr_t, 8> SmoothedObjectRenders{};
+        std::array<std::uintptr_t, kMaxSmoothedObjectRenders> SmoothedObjectRenders{};
+        // Optional pair: particle (rain, snow, sparkle) movement smoothing.
+        std::uintptr_t ParticleUpdate = 0;
+        std::uintptr_t ParticleRender = 0;
         // Optional, all-or-nothing: the world post passes (soft fog of war,
         // bloom) need the fog render to hook and the queue flush to call.
         std::uintptr_t RenderFog = 0;

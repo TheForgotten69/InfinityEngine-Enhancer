@@ -431,6 +431,27 @@ namespace iee::game {
         std::array<std::byte, 0x40> _tail{};
     };
 
+    // CParticle: a rain drop, snow flake or sparkle. Positions and velocities
+    // are fixed point; CParticle::AsynchronousUpdate adds the velocity to the
+    // position once per logic tick. Offsets from that function's 2.7.3
+    // disassembly; only the leading fields are described.
+    struct CParticle {
+        std::int16_t m_nTimeStamp{};
+        std::int16_t m_nTailLength{};
+        std::byte _pad0[8]{};
+        std::uint8_t m_wType{};  // bit 0: gravity only, no vertical velocity
+        std::byte _pad1[3]{};
+        std::int32_t m_nLifeSpan{};
+        std::byte _pad2[4]{};
+        std::int32_t m_posX{};
+        std::int32_t m_posY{};
+        std::int32_t m_posZ{};
+        std::int32_t m_velX{};
+        std::int32_t m_velY{};
+        std::int32_t m_velZ{};
+        std::int32_t m_nGravity{};
+    };
+
     // CGameObject::m_objectType for ARE "static" ambient animations
     // (script share type '0'; CGameStatic).
     inline constexpr std::uint8_t kGameObjectTypeStatic = 0x30;
@@ -565,6 +586,10 @@ namespace iee::game {
     static_assert(offsetof(CGameArea, m_visibility) == 0xBB0);
     static_assert(offsetof(CGameArea, m_lTiledObjects) == 0xED0);
     static_assert(offsetof(CGameArea, m_ptOldViewPos) == 0xF78);
+    static_assert(offsetof(CParticle, m_wType) == 0xC);
+    static_assert(offsetof(CParticle, m_posX) == 0x18);
+    static_assert(offsetof(CParticle, m_velX) == 0x24);
+    static_assert(offsetof(CParticle, m_nGravity) == 0x30);
     static_assert(offsetof(CGameObject, m_objectType) == 0x8);
     static_assert(offsetof(CGameObject, m_pos) == 0xC);
     static_assert(offsetof(CGameObject, m_pArea) == 0x18);

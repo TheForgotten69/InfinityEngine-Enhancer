@@ -62,7 +62,7 @@ static void normalize(EngineConfig& cfg) noexcept {
   if (!std::isfinite(cfg.softFogDrift)) cfg.softFogDrift = 10.0f;
   if (!std::isfinite(cfg.softFogSmoothing)) cfg.softFogSmoothing = 0.25f;
   if (!std::isfinite(cfg.lightSpill)) cfg.lightSpill = 1.5f;
-  if (!std::isfinite(cfg.heatShimmer)) cfg.heatShimmer = 2.5f;
+  if (!std::isfinite(cfg.heatShimmer)) cfg.heatShimmer = 1.5f;
   if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
   cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
   cfg.softFogDrift = std::clamp(cfg.softFogDrift, 0.0f, 64.0f);

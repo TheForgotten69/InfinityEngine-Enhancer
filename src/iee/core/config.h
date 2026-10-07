@@ -18,7 +18,7 @@ struct EngineConfig {
   // How strongly light-emitting effects brighten what is around them; 0 = off.
   float lightSpill = 1.5f;
   // World pixels the air above warm light sources ripples by; 0 = off.
-  float heatShimmer = 2.5f;
+  float heatShimmer = 1.5f;
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;

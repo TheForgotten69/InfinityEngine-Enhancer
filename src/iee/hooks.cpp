@@ -70,6 +70,12 @@ static core::Hook<DrawFlushFn> g_drawFlushHook;
 static std::int32_t* g_drawQueueCount = nullptr;
 static game::DrawCommand* g_drawQueueCommands = nullptr;
 
+// CParticle::AsynchronousUpdate() and CParticle::Render(CPoint&, CRect&, type, n).
+using ParticleUpdateFn = unsigned char (*)(void*);
+using ParticleRenderFn = void (*)(void*, void*, void*, unsigned short, unsigned short);
+static core::Hook<ParticleUpdateFn> g_particleUpdateHook;
+static core::Hook<ParticleRenderFn> g_particleRenderHook;
+
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
 static std::atomic<bool> g_spriteMotionReset{false};
@@ -427,6 +433,57 @@ static int detour_vid_cell_frame_size(void* cell, void* out) {
   g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
   return g_vidCellFrameSizeHook.original()(cell, out);
 }
+// Particle smoothing (rain, snow, sparkles). The engine adds each particle's
+// velocity to its position once per logic tick, so between ticks its previous
+// position is known exactly. Drawing it part of the way from there removes
+// the stepping. The update may run on another thread: the tick clock is
+// atomic, and the position is only put back if the engine has not moved the
+// particle in the meantime.
+static game::TickClock g_particleTick;
+
+static double monotonic_seconds() noexcept {
+  static const double frequency = [] {
+    LARGE_INTEGER value{};
+    QueryPerformanceFrequency(&value);
+    return static_cast<double>(value.QuadPart);
+  }();
+  LARGE_INTEGER counter{};
+  QueryPerformanceCounter(&counter);
+  return static_cast<double>(counter.QuadPart) / frequency;
+}
+
+static unsigned char detour_particle_update(void* particle) {
+  g_particleTick.on_update(monotonic_seconds());
+  return g_particleUpdateHook.original()(particle);
+}
+
+static void detour_particle_render(void* self, void* origin, void* clip, unsigned short type,
+                                   unsigned short count) {
+  const auto original = g_particleRenderHook.original();
+  auto* particle = static_cast<game::CParticle*>(self);
+  const double phase = g_particleTick.phase(sprite_motion_frame_seconds());
+  if (!particle || phase >= 1.0) {
+    original(self, origin, clip, type, count);
+    return;
+  }
+  const game::ParticlePoint logic{particle->m_posX, particle->m_posY, particle->m_posZ};
+  const auto shown = game::particle_draw_position(
+      {logic,
+       {particle->m_velX, particle->m_velY, particle->m_velZ},
+       particle->m_nGravity,
+       (particle->m_wType & 1) != 0},
+      phase);
+  particle->m_posX = shown.x;
+  particle->m_posY = shown.y;
+  particle->m_posZ = shown.z;
+  original(self, origin, clip, type, count);
+  if (particle->m_posX == shown.x && particle->m_posY == shown.y && particle->m_posZ == shown.z) {
+    particle->m_posX = logic.x;
+    particle->m_posY = logic.y;
+    particle->m_posZ = logic.z;
+  }
+}
+
 static void detour_sprite_markers(void* sprite, void* a, void* b) {
   call_with_smoothed_position(g_spriteMarkersHook, g_spriteMotion, sprite, a, b);
 }
@@ -690,6 +747,22 @@ bool install_all(AppContext& ctx) {
         }
       }
       LOG_INFO("Object movement smoothing hooks installed: {}", installed);
+
+      if (ctx.addrs.ParticleUpdate && ctx.addrs.ParticleRender) {
+        try {
+          g_particleUpdateHook.create(reinterpret_cast<void*>(ctx.addrs.ParticleUpdate),
+                                      reinterpret_cast<void*>(&detour_particle_update));
+          g_particleRenderHook.create(reinterpret_cast<void*>(ctx.addrs.ParticleRender),
+                                      reinterpret_cast<void*>(&detour_particle_render));
+          g_particleUpdateHook.enable();
+          g_particleRenderHook.enable();
+          LOG_INFO("Particle movement smoothing hooks installed (rain, snow, sparkles)");
+        } catch (...) {
+          (void)g_particleRenderHook.remove();
+          (void)g_particleUpdateHook.remove();
+          LOG_WARN("Particle movement smoothing hooks failed; particles move at the logic rate");
+        }
+      }
     }
 
     if (ctx.addrs.RenderFog && ctx.addrs.DrawFlush) {
@@ -770,6 +843,8 @@ void uninstall_all() noexcept {
   (void)g_vidCellFrameSizeHook.remove();
   (void)g_vidCellCenterPointHook.remove();
   (void)g_vidCellGetFrameHook.remove();
+  (void)g_particleRenderHook.remove();
+  (void)g_particleUpdateHook.remove();
   for (auto& hook : g_objectRenderHooks) (void)hook.remove();
   (void)g_spriteHealthBarHook.remove();
   (void)g_spriteMarkersHook.remove();
@@ -799,6 +874,8 @@ void prepare_for_shutdown() noexcept {
   (void)g_vidCellFrameSizeHook.disable();
   (void)g_vidCellCenterPointHook.disable();
   (void)g_vidCellGetFrameHook.disable();
+  (void)g_particleRenderHook.disable();
+  (void)g_particleUpdateHook.disable();
   for (auto& hook : g_objectRenderHooks) (void)hook.disable();
   (void)g_spriteHealthBarHook.disable();
   (void)g_spriteMarkersHook.disable();

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -62,4 +63,48 @@ class SpriteMotionTracker {
   std::int32_t snapDistance_;
   std::unordered_map<const void*, State> states_;
 };
+
+// The engine's logic tick, as seen from any function it calls once (or many
+// times in a burst) per tick. Things the engine advances by a known amount per
+// tick can then be drawn part of the way through the step. on_update may run
+// on a different thread from phase.
+class TickClock {
+ public:
+  static constexpr double kDefaultInterval = 1.0 / 30.0;
+  static constexpr double kMinInterval = 1.0 / 90.0;
+  static constexpr double kMaxInterval = 1.0 / 14.0;
+  // Calls closer together than this belong to the same tick.
+  static constexpr double kBurstSeconds = 0.004;
+
+  void on_update(double now) noexcept;
+  // 0 right after a tick, rising to 1 one tick interval later and staying
+  // there (so nothing drifts while the game is paused). 1 before any tick.
+  [[nodiscard]] double phase(double now) const noexcept;
+
+ private:
+  std::atomic<double> tickStart_{-1.0};
+  std::atomic<double> lastUpdate_{-1.0};
+  std::atomic<double> interval_{kDefaultInterval};
+};
+
+struct ParticlePoint {
+  std::int32_t x{};
+  std::int32_t y{};
+  std::int32_t z{};
+  friend bool operator==(const ParticlePoint&, const ParticlePoint&) = default;
+};
+
+// A CParticle after its per-tick update: the engine added `velocity` to the
+// position (CParticle::AsynchronousUpdate). A gravity-only particle instead
+// lost `gravity` in height.
+struct ParticleState {
+  ParticlePoint position{};
+  ParticlePoint velocity{};
+  std::int32_t gravity{};
+  bool gravityOnly{};
+};
+
+// Where to draw a particle `phase` of the way through the current tick: its
+// previous position at 0, its logic position at 1.
+ParticlePoint particle_draw_position(const ParticleState& particle, double phase) noexcept;
 }  // namespace iee::game

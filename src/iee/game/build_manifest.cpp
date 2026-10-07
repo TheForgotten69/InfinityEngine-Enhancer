@@ -202,9 +202,15 @@ constexpr BuildManifest kKnownBuilds[] = {
             "48 8B D9 E8 ? ? ? ? B9 FF FF FF FF E8 ? ? ? ? B9 E1 0D 00 00",
             "4C 8B DC 55 41 56 41 57 49 8D 6B D8 48 81 EC 10 01 00 00 48 8B 05 ? ? ? ? "
             "48 33 C4 48 89 45 90 45 33 F6 44 39 35 ? ? ? ? 45 8B FE 0F 84",
+            // CParticle::AsynchronousUpdate and CParticle::Render (PDB-named,
+            // each offline-verified unique).
+            "48 89 5C 24 18 57 48 83 EC 20 8B 51 10 45 33 C0 48 8B D9 41 8B F8 8D 42 FF 89 41 10 "
+            "85 D2",
+            "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 40 "
+            "44 0F B7 29 4C 8B F9 66 44 3B 69 02",
         },
         {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x4118A0, 0x411660,
-         0x411780, 0x2A1B60, 0x42B350},
+         0x411780, 0x2A1B60, 0x42B350, 0x423C30, 0x425BE0},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -236,6 +242,12 @@ constexpr BuildManifest kKnownBuilds[] = {
             {"CGameTemporal::Render", "4C 8B DC 55 56 57 41 57 49 8D 6B A1 48 81 EC", 0x36CD80},
             {"CGameChunk::Render", "4C 8B DC 55 56 57 41 55 41 57 49 8D 6B A1", 0x36B7A0},
             {"CVEFVidCell::Render", "4C 8B DC 55 56 41 57 49 8D 6B A1 48 81 EC D0", 0x254B00},
+            // Floating text over a creature: each tick it copies its target's
+            // m_pos into its own and draws from there.
+            {"CGameText::Render",
+             "40 57 48 81 EC B0 00 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 44 24 78 48 8B C2 "
+             "48 8B F9 4D 85 C0 74 15 48 63 51 48",
+             0x1F39A0},
         }},
         // Disassembly-verified on the Steam 2.7.3.0 binary: DrawFlush_GL+0x24
         // compares gl.n (0x2F73FD0); DrawEnd_GL writes gl.cmds at 0x2F5BF28
@@ -274,6 +286,9 @@ static_assert([] {
   }
   return true;
 }(), "2.7.3 smoothed object render pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.particleUpdate) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.particleRender),
+              "2.7.3 particle pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderFog) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.drawFlush),
               "2.7.3 world post pattern format is invalid");

@@ -51,4 +51,35 @@ MotionPoint SpriteMotionTracker::sample(const void* key, MotionPoint current, do
   }
   return shown(state, now);
 }
+
+void TickClock::on_update(double now) noexcept {
+  const double last = lastUpdate_.exchange(now, std::memory_order_relaxed);
+  if (last >= 0.0 && now - last < kBurstSeconds && now >= last) return;
+  const double previousTick = tickStart_.exchange(now, std::memory_order_relaxed);
+  const double observed = now - previousTick;
+  interval_.store(previousTick >= 0.0 && observed >= kMinInterval && observed <= kMaxInterval
+                      ? observed
+                      : kDefaultInterval,
+                  std::memory_order_relaxed);
+}
+
+double TickClock::phase(double now) const noexcept {
+  const double start = tickStart_.load(std::memory_order_relaxed);
+  if (start < 0.0) return 1.0;
+  const double elapsed = (now - start) / interval_.load(std::memory_order_relaxed);
+  // Written so NaN lands on the logic position.
+  if (!(elapsed < 1.0)) return 1.0;
+  return elapsed > 0.0 ? elapsed : 0.0;
+}
+
+ParticlePoint particle_draw_position(const ParticleState& particle, double phase) noexcept {
+  if (!(phase >= 0.0) || !(phase < 1.0)) return particle.position;
+  const double back = 1.0 - phase;
+  const auto step = [back](std::int32_t delta) {
+    return static_cast<std::int32_t>(std::lround(static_cast<double>(delta) * back));
+  };
+  const auto heightStep = particle.gravityOnly ? -particle.gravity : particle.velocity.z;
+  return {particle.position.x - step(particle.velocity.x),
+          particle.position.y - step(particle.velocity.y), particle.position.z - step(heightStep)};
+}
 }  // namespace iee::game
