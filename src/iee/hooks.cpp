@@ -554,12 +554,46 @@ static void detour_draw_flush() {
 // texture as needing a rebind, so the first draw picks ours up.
 static void detour_texture_upload(int x, int y, int width, int rows, void* pixels, bool second) {
   g_textureUploadHook.original()(x, y, width, rows, pixels, second);
-  if (!g_ctx || !g_drawQueueCount || second || x != 0 || y != 0 ||
-      !features::world_post_wants_atlas_upscale()) {
-    return;
-  }
+  if (!g_ctx || !g_drawQueueCount) return;
   const auto& layout = g_ctx->manifest->spriteAtlas;
   const auto count = reinterpret_cast<std::uintptr_t>(g_drawQueueCount);
+  // Field log: the first uploads seen while sprite upscaling wants to run,
+  // with everything the atlas lookup compares, so a mismatch is visible.
+  static int reached = 0;
+  if (reached < 4) {
+    ++reached;
+    try {
+      LOG_INFO("Texture upload hook reached (#{}, width={}, rows={}, wants upscale={})", reached,
+               width, rows, features::world_post_wants_atlas_upscale());
+    } catch (...) {
+    }
+  }
+  static int logged = 0;
+  if (logged < 12 && features::world_post_wants_atlas_upscale()) {
+    ++logged;
+    try {
+      const auto word = [&](std::ptrdiff_t offset) {
+        std::uint32_t value = 0;
+        std::memcpy(&value, reinterpret_cast<const void*>(count + offset), sizeof(value));
+        return value;
+      };
+      const auto pointer = [&](std::ptrdiff_t offset) {
+        std::uintptr_t value = 0;
+        std::memcpy(&value, reinterpret_cast<const void*>(count + offset), sizeof(value));
+        return value;
+      };
+      LOG_INFO(
+          "Texture upload #{}: x={} y={} width={} rows={} second={} pixels=0x{:X} | selected "
+          "texture={} | atlas0: {}x{} buffer=0x{:X} texture={} | atlas1: {}x{} buffer=0x{:X} "
+          "texture={} | slot={}",
+          logged, x, y, width, rows, second, reinterpret_cast<std::uintptr_t>(pixels),
+          (word(-0x64) >> 21) & 0x1FF, word(0x80), word(0x84), pointer(0xA0), word(0xA8),
+          word(0xB0), word(0xB4), pointer(0xD0), word(0xD8),
+          game::atlas_slot_for_upload(layout, count, pixels));
+    } catch (...) {
+    }
+  }
+  if (second || x != 0 || y != 0 || !features::world_post_wants_atlas_upscale()) return;
   const int slot = game::atlas_slot_for_upload(layout, count, pixels);
   if (slot < 0 || static_cast<std::size_t>(slot) >= g_swappedAtlases.size()) return;
   auto& swapped = g_swappedAtlases[static_cast<std::size_t>(slot)];
