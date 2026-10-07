@@ -537,35 +537,7 @@ static void flush_with_emissive_replay() {
   features::world_post_end_emissive(static_cast<int>(collected));
 }
 
-// Field counters while the sprite path is being verified in game.
-static std::atomic<unsigned> g_flushCalls{0};
-static std::atomic<unsigned> g_uploadCalls{0};
-
-static void log_flush_diagnostics() {
-  // The first flushes that have draws queued: how many rows each sprite atlas
-  // has pending (what the engine is about to upload), and the hook counters.
-  static int logged = 0;
-  if (logged >= 6 || !g_drawQueueCount || *g_drawQueueCount <= 0) return;
-  ++logged;
-  const auto count = reinterpret_cast<std::uintptr_t>(g_drawQueueCount);
-  const auto word = [&](std::ptrdiff_t offset) {
-    std::uint32_t value = 0;
-    std::memcpy(&value, reinterpret_cast<const void*>(count + offset), sizeof(value));
-    return value;
-  };
-  LOG_INFO(
-      "Flush #{} ({} flush calls, {} upload calls so far): {} commands | atlas0 pending "
-      "y={} h={} texture={} | atlas1 pending y={} h={} texture={} | wants upscale={}",
-      logged, g_flushCalls.load(), g_uploadCalls.load(), *g_drawQueueCount, word(0x94), word(0x98),
-      word(0xA8), word(0xC4), word(0xC8), word(0xD8), features::world_post_wants_atlas_upscale());
-}
-
 static void detour_draw_flush() {
-  ++g_flushCalls;
-  try {
-    log_flush_diagnostics();
-  } catch (...) {
-  }
   flush_with_emissive_replay();
   // The engine uploads into, and binds, whatever name its texture table
   // holds: give it its own atlas textures back before the next upload.
@@ -581,47 +553,10 @@ static void detour_draw_flush() {
 // texture table until the flush is over. The upload has just marked the
 // texture as needing a rebind, so the first draw picks ours up.
 static void detour_texture_upload(int x, int y, int width, int rows, void* pixels, bool second) {
-  ++g_uploadCalls;
   g_textureUploadHook.original()(x, y, width, rows, pixels, second);
   if (!g_ctx || !g_drawQueueCount) return;
   const auto& layout = g_ctx->manifest->spriteAtlas;
   const auto count = reinterpret_cast<std::uintptr_t>(g_drawQueueCount);
-  // Field log: the first uploads seen while sprite upscaling wants to run,
-  // with everything the atlas lookup compares, so a mismatch is visible.
-  static int reached = 0;
-  if (reached < 4) {
-    ++reached;
-    try {
-      LOG_INFO("Texture upload hook reached (#{}, width={}, rows={}, wants upscale={})", reached,
-               width, rows, features::world_post_wants_atlas_upscale());
-    } catch (...) {
-    }
-  }
-  static int logged = 0;
-  if (logged < 12 && features::world_post_wants_atlas_upscale()) {
-    ++logged;
-    try {
-      const auto word = [&](std::ptrdiff_t offset) {
-        std::uint32_t value = 0;
-        std::memcpy(&value, reinterpret_cast<const void*>(count + offset), sizeof(value));
-        return value;
-      };
-      const auto pointer = [&](std::ptrdiff_t offset) {
-        std::uintptr_t value = 0;
-        std::memcpy(&value, reinterpret_cast<const void*>(count + offset), sizeof(value));
-        return value;
-      };
-      LOG_INFO(
-          "Texture upload #{}: x={} y={} width={} rows={} second={} pixels=0x{:X} | selected "
-          "texture={} | atlas0: {}x{} buffer=0x{:X} texture={} | atlas1: {}x{} buffer=0x{:X} "
-          "texture={} | slot={}",
-          logged, x, y, width, rows, second, reinterpret_cast<std::uintptr_t>(pixels),
-          (word(-0x64) >> 21) & 0x1FF, word(0x80), word(0x84), pointer(0xA0), word(0xA8),
-          word(0xB0), word(0xB4), pointer(0xD0), word(0xD8),
-          game::atlas_slot_for_upload(layout, count, pixels));
-    } catch (...) {
-    }
-  }
   if (second || x != 0 || y != 0 || !features::world_post_wants_atlas_upscale()) return;
   const int slot = game::atlas_slot_for_upload(layout, count, pixels);
   if (slot < 0 || static_cast<std::size_t>(slot) >= g_swappedAtlases.size()) return;

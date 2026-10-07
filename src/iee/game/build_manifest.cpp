@@ -296,6 +296,16 @@ static_assert([] {
 }(), "2.7.3 smoothed object render pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.textureUpload),
               "2.7.3 texture upload pattern format is invalid");
+// Positional initialisation guard: each slot must hold its own function's bytes.
+static_assert(kKnownBuilds[1].patterns.renderFog.starts_with("48 89 5C 24 10 4C 89 44 24 18") &&
+                  kKnownBuilds[1].patterns.drawFlush.starts_with("4C 8B DC 55 41 56 41 57") &&
+                  kKnownBuilds[1].patterns.particleUpdate.starts_with(
+                      "48 89 5C 24 18 57 48 83 EC 20 8B 51 10") &&
+                  kKnownBuilds[1].patterns.particleRender.starts_with(
+                      "48 89 5C 24 18 48 89 54 24 10 55 56 57") &&
+                  kKnownBuilds[1].patterns.textureUpload.starts_with(
+                      "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18"),
+              "a 2.7.3 hook pattern is in the wrong PatternSet slot");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.particleUpdate) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.particleRender),
               "2.7.3 particle pattern format is invalid");

@@ -28,6 +28,9 @@ struct BranchInstructionDesc {
   }
 };
 
+// Initialised positionally in build_manifest.cpp, in this order: add new
+// members at the end, and pin each pattern's first bytes there with a
+// static_assert so a value in the wrong slot cannot compile.
 struct PatternSet {
   std::string_view loadArea{};
   std::string_view renderTexture{};
@@ -58,14 +61,14 @@ struct PatternSet {
   // fog of war, bloom); either empty or non-unique leaves both off.
   std::string_view renderFog{};
   std::string_view drawFlush{};
-  // Optional: TexSubImage_GL, the upload of the streaming sprite atlas at the
-  // start of a flush. Hooked to upscale the atlas before it is drawn from.
-  std::string_view textureUpload{};
   // Optional pair: CParticle::AsynchronousUpdate and CParticle::Render (rain,
   // snow, sparkles). The update marks the logic tick; the render is wrapped
   // to draw each particle part of the way through its step.
   std::string_view particleUpdate{};
   std::string_view particleRender{};
+  // Optional: TexSubImage_GL, the upload of the streaming sprite atlas at the
+  // start of a flush. Hooked to upscale the atlas before it is drawn from.
+  std::string_view textureUpload{};
 };
 
 struct ReferenceRvas {

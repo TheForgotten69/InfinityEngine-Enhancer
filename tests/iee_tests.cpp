@@ -1359,6 +1359,18 @@ void test_manifest_world_post_targets() {
               "The 2.6.6 manifest has no world post targets");
   expect_true(!manifest.patterns.particleUpdate.empty() && !manifest.patterns.particleRender.empty(),
               "2.7.3 should carry the particle update and render patterns");
+  // The manifest is initialised positionally: a pattern in the wrong slot
+  // hooks the wrong function. Pin each pattern to its function's first bytes.
+  expect_true(manifest.patterns.renderFog.starts_with("48 89 5C 24 10 4C 89 44 24 18"),
+              "The RenderFog slot holds CInfinity::RenderFog's bytes");
+  expect_true(manifest.patterns.drawFlush.starts_with("4C 8B DC 55 41 56 41 57 49 8D 6B D8"),
+              "The DrawFlush slot holds DrawFlush_GL's bytes");
+  expect_true(manifest.patterns.particleUpdate.starts_with("48 89 5C 24 18 57 48 83 EC 20 8B 51 10"),
+              "The particle update slot holds CParticle::AsynchronousUpdate's bytes");
+  expect_true(manifest.patterns.particleRender.starts_with("48 89 5C 24 18 48 89 54 24 10 55 56 57"),
+              "The particle render slot holds CParticle::Render's bytes");
+  expect_true(manifest.patterns.textureUpload.starts_with("48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18"),
+              "The texture upload slot holds TexSubImage_GL's bytes");
   expect_eq(manifest.referenceRvas.particleUpdate, std::uintptr_t{0x423C30},
             "CParticle::AsynchronousUpdate reference RVA");
   expect_eq(manifest.referenceRvas.particleRender, std::uintptr_t{0x425BE0},
