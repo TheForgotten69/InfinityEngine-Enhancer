@@ -409,3 +409,15 @@ edges; the dark fringe from blending non-premultiplied alpha is unchanged
 (fixing it needs the blend mode swapped for alpha-blended sprites only, since
 additive sprites share the atlas); BAM v2 (PVRZ) sprites bypass the atlas and
 are not filtered.
+
+## 17. Revision 2026-10-08 (later): other sprite filters tried and removed
+
+After FSR1 2x first ran in game the owner disliked it and asked for
+Catmull-Rom followed by EASU. A build with four filters cycled by F7 (EASU 2x,
+Catmull-Rom 2x, Catmull-Rom then EASU at 4x, EASU twice at 4x) let them compare
+in game. Verdict: FSR1 2x (EASU then RCAS) is the one they prefer; the other
+three are "pure shite". That build was reverted, so the sprite pass is section
+16's again: one EASU stage and RCAS, toggled with F7.
+
+Lesson for this owner: offline comparison sheets did not predict their in-game
+opinion in either direction. Give them a runtime toggle and let them judge.
