@@ -111,6 +111,17 @@ bool OpenGLFunctions::initialize() noexcept {
       reinterpret_cast<PFN_glDeleteTextures>(get_gl1_proc_address(opengl32, "glDeleteTextures"));
   glPixelStorei =
       reinterpret_cast<PFN_glPixelStorei>(get_gl1_proc_address(opengl32, "glPixelStorei"));
+  glViewport = reinterpret_cast<PFN_glViewport>(get_gl1_proc_address(opengl32, "glViewport"));
+  glEnable = reinterpret_cast<PFN_glEnable>(get_gl1_proc_address(opengl32, "glEnable"));
+  glDisable = reinterpret_cast<PFN_glDisable>(get_gl1_proc_address(opengl32, "glDisable"));
+  glIsEnabled = reinterpret_cast<PFN_glIsEnabled>(get_gl1_proc_address(opengl32, "glIsEnabled"));
+  glBlendFunc = reinterpret_cast<PFN_glBlendFunc>(get_gl1_proc_address(opengl32, "glBlendFunc"));
+  glClearColor =
+      reinterpret_cast<PFN_glClearColor>(get_gl1_proc_address(opengl32, "glClearColor"));
+  glClear = reinterpret_cast<PFN_glClear>(get_gl1_proc_address(opengl32, "glClear"));
+  glDrawArrays =
+      reinterpret_cast<PFN_glDrawArrays>(get_gl1_proc_address(opengl32, "glDrawArrays"));
+  glGetFloatv = reinterpret_cast<PFN_glGetFloatv>(get_gl1_proc_address(opengl32, "glGetFloatv"));
 
   glGetString = reinterpret_cast<PFN_glGetString>(get_gl1_proc_address(opengl32, "glGetString"));
 
@@ -160,6 +171,33 @@ bool OpenGLFunctions::initialize() noexcept {
       reinterpret_cast<PFN_glGenerateMipmap>(get_ext_proc_address(opengl32, "glGenerateMipmap"));
   glBindFramebuffer =
       reinterpret_cast<PFN_glBindFramebuffer>(get_ext_proc_address(opengl32, "glBindFramebuffer"));
+  glGenFramebuffers = reinterpret_cast<PFN_glGenFramebuffers>(
+      get_ext_proc_address(opengl32, "glGenFramebuffers"));
+  glDeleteFramebuffers = reinterpret_cast<PFN_glDeleteFramebuffers>(
+      get_ext_proc_address(opengl32, "glDeleteFramebuffers"));
+  glFramebufferTexture2D = reinterpret_cast<PFN_glFramebufferTexture2D>(
+      get_ext_proc_address(opengl32, "glFramebufferTexture2D"));
+  glCheckFramebufferStatus = reinterpret_cast<PFN_glCheckFramebufferStatus>(
+      get_ext_proc_address(opengl32, "glCheckFramebufferStatus"));
+  glBlitFramebuffer = reinterpret_cast<PFN_glBlitFramebuffer>(
+      get_ext_proc_address(opengl32, "glBlitFramebuffer"));
+  glGenVertexArrays = reinterpret_cast<PFN_glGenVertexArrays>(
+      get_ext_proc_address(opengl32, "glGenVertexArrays"));
+  glDeleteVertexArrays = reinterpret_cast<PFN_glDeleteVertexArrays>(
+      get_ext_proc_address(opengl32, "glDeleteVertexArrays"));
+  glBindVertexArray = reinterpret_cast<PFN_glBindVertexArray>(
+      get_ext_proc_address(opengl32, "glBindVertexArray"));
+  glGenBuffers = reinterpret_cast<PFN_glGenBuffers>(get_ext_proc_address(opengl32, "glGenBuffers"));
+  glDeleteBuffers =
+      reinterpret_cast<PFN_glDeleteBuffers>(get_ext_proc_address(opengl32, "glDeleteBuffers"));
+  glBindBuffer = reinterpret_cast<PFN_glBindBuffer>(get_ext_proc_address(opengl32, "glBindBuffer"));
+  glBufferData = reinterpret_cast<PFN_glBufferData>(get_ext_proc_address(opengl32, "glBufferData"));
+  glEnableVertexAttribArray = reinterpret_cast<PFN_glEnableVertexAttribArray>(
+      get_ext_proc_address(opengl32, "glEnableVertexAttribArray"));
+  glVertexAttribPointer = reinterpret_cast<PFN_glVertexAttribPointer>(
+      get_ext_proc_address(opengl32, "glVertexAttribPointer"));
+  glBlendFuncSeparate = reinterpret_cast<PFN_glBlendFuncSeparate>(
+      get_ext_proc_address(opengl32, "glBlendFuncSeparate"));
   glIsProgram = reinterpret_cast<PFN_glIsProgram>(get_ext_proc_address(opengl32, "glIsProgram"));
   glShaderSourceARB =
       reinterpret_cast<PFN_glShaderSourceARB>(get_ext_proc_address(opengl32, "glShaderSourceARB"));
@@ -198,15 +236,24 @@ bool OpenGLFunctions::initialize() noexcept {
                            glTexImage2D != nullptr && glDeleteTextures != nullptr &&
                            glPixelStorei != nullptr && glActiveTexture != nullptr;
   compressedTextureUploadAvailable = textureUploadAvailable && glCompressedTexImage2D != nullptr;
+  postProcessAvailable =
+      textureUploadAvailable && readyForSourcePatching && glViewport && glEnable && glDisable &&
+      glIsEnabled && glBlendFunc && glClearColor && glClear && glDrawArrays && glGetFloatv &&
+      glBindFramebuffer && glGenFramebuffers && glDeleteFramebuffers && glFramebufferTexture2D &&
+      glCheckFramebufferStatus && glBlitFramebuffer && glGenVertexArrays &&
+      glDeleteVertexArrays && glBindVertexArray && glGenBuffers && glDeleteBuffers &&
+      glBindBuffer && glBufferData && glEnableVertexAttribArray && glVertexAttribPointer &&
+      glBlendFuncSeparate;
 
   if (valid) {
     LOG_INFO(
         "OpenGL initialized (source patching={}, ARB shaders={}, texture upload={}, compressed "
-        "texture upload={})",
+        "texture upload={}, post process={})",
         readyForSourcePatching ? "ready" : "partial",
         arbShaderObjectsAvailable ? "ready" : "partial",
         textureUploadAvailable ? "ready" : "partial",
-        compressedTextureUploadAvailable ? "ready" : "partial");
+        compressedTextureUploadAvailable ? "ready" : "partial",
+        postProcessAvailable ? "ready" : "partial");
     LOG_DEBUG(
         "OpenGL entry points: glGetString={}, glTexParameteri={}, glTexParameterf={}, "
         "glGetIntegerv={}, glGetTexParameteriv={}, glGetError={}, glGenTextures={}, "
