@@ -171,14 +171,18 @@ Radius 0 skips step 2 and composites the capture directly.
 
 The engine believes the hardware state equals `gl.hwState` after a flush and
 only issues changes relative to it. Everything our passes change must be put
-back exactly. `GlPassGuard` saves and restores: draw and read framebuffer,
-viewport, scissor box and enable, blend enable and function, depth test and
-depth mask, colour mask, cull face, current program, active texture and
-client active texture, the 2D binding and enable on units 0 and 1, vertex
-array object and array buffer binding, clear colour.
+back exactly. The rule is "restore everything our passes change", which is:
 
-The engine's texture-environment setup on unit 1 is not touched (we only use
-our own programs and rebind the saved textures).
+- `GlPassGuard`: current program, vertex array and array buffer bindings,
+  viewport, blend enable and functions, scissor, depth, stencil, alpha-test
+  and cull-face enables, clear colour.
+- `GlStateGuard({0})`: active texture and the 2D binding on unit 0. Our
+  passes only ever bind textures on unit 0.
+- The feature module itself: the draw and read framebuffer bindings, read at
+  the hook and rebound before returning.
+
+Not touched, so not saved: depth and colour masks (depth test is off, so
+nothing writes depth), client-active texture, unit 1, texture environment.
 
 All of this runs on the render thread inside an engine render call, the same
 thread and context as the existing draw-time hooks.
