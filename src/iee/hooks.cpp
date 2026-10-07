@@ -482,13 +482,15 @@ static void detour_render_fog(void* infinity, void* vidMode, void* visibility) {
     original(infinity, vidMode, visibility);
     return;
   }
-  float viewWorldWidth = 0.0f;
+  features::WorldView worldView{};
   if (const auto* activeArea = g_ctx->activeArea.load()) {
     area::ViewTransform view{};
-    if (area::read_view_transform(activeArea, view)) viewWorldWidth = view.viewWorldW;
+    if (area::read_view_transform(activeArea, view)) {
+      worldView = {view.scrollX, view.scrollY, view.viewWorldW, view.viewWorldH};
+    }
   }
   g_drawFlush();
-  const bool capturing = features::world_post_before_fog(viewWorldWidth);
+  const bool capturing = features::world_post_before_fog(worldView);
   original(infinity, vidMode, visibility);
   if (capturing) {
     g_drawFlush();

@@ -281,3 +281,17 @@ Known limits: the replay has no depth buffer, so a light source hidden behind
 a wall still glows; the light spill is screen-space, with no falloff model and
 no wall occlusion; art drawn with flag `0x200` (`DST_COLOR, ONE`) contributes
 nothing to a black target.
+
+## 12. Revision 2026-10-07 (later): fog drift and light falloff
+
+Owner feedback on section 11's build: bloom and fog both "feel better"; asked
+for more.
+
+- **Fog drift.** The blurred fog is composited by its own program, which
+  offsets the lookup by slow two-octave value noise anchored to world
+  coordinates (`SoftFogDrift`, world pixels, default 10, 0 = still). Flat
+  regions are unaffected, so only the edge moves. Needs the view transform;
+  without it the edge stays still.
+- **Light falloff.** The light spill now samples a deeper level of the bloom
+  chain (wide blurs only) and maps it through `1 - exp(-x)`, so a small source
+  lights a wider area and the area next to it saturates instead of clipping.

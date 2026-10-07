@@ -1273,6 +1273,7 @@ void test_config_world_post() {
   expect_true(!defaults.softFogOfWar && !defaults.bloom, "World post effects default off");
   expect_eq(defaults.softFogRadius, 24.0f, "Soft fog radius default");
   expect_eq(defaults.lightSpill, 1.5f, "Light spill default");
+  expect_eq(defaults.softFogDrift, 10.0f, "Soft fog drift default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1284,6 +1285,7 @@ void test_config_world_post() {
     out << "SoftFogRadius = 40\n";
     out << "Bloom = true\n";
     out << "LightSpill = 3\n";
+    out << "SoftFogDrift = 20\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
@@ -1291,6 +1293,7 @@ void test_config_world_post() {
   expect_true(cfg.softFogOfWar && cfg.bloom, "World post bools should parse");
   expect_eq(cfg.softFogRadius, 40.0f, "Soft fog radius should parse");
   expect_eq(cfg.lightSpill, 3.0f, "Light spill should parse");
+  expect_eq(cfg.softFogDrift, 20.0f, "Soft fog drift should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
@@ -1298,12 +1301,14 @@ void test_config_world_post() {
     out << "[Rendering]\n";
     out << "SoftFogRadius = 100000\n";
     out << "LightSpill = 700\n";
+    out << "SoftFogDrift = -4\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
   expect_true(iee::core::ConfigManager::load(tempPath, cfg), "Out-of-range values should load");
   expect_eq(cfg.softFogRadius, 256.0f, "Soft fog radius is clamped to its maximum");
   expect_eq(cfg.lightSpill, 8.0f, "Light spill is clamped to its maximum");
+  expect_eq(cfg.softFogDrift, 0.0f, "Soft fog drift is clamped to 0");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {

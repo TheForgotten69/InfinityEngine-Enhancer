@@ -11,6 +11,7 @@ struct EngineConfig {
   bool interpolateAnimations = false;
   bool softFogOfWar = false;
   float softFogRadius = 24.0f;  // world pixels; 0 = capture without blur
+  float softFogDrift = 10.0f;   // world pixels the soft edge drifts by; 0 = still
   bool bloom = false;
   float bloomStrength = 0.35f;
   // How strongly light-emitting effects brighten what is around them; 0 = off.

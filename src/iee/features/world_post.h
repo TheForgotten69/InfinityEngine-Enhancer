@@ -5,6 +5,14 @@ struct EngineConfig;
 }
 
 namespace iee::features {
+// The part of the world the view shows, in world pixels. All zero when unknown.
+struct WorldView {
+  float scrollX{};
+  float scrollY{};
+  float width{};
+  float height{};
+};
+
 // World post passes: soft fog of war, and glow plus light spill from the
 // engine's light-emitting draws, run from the
 // CInfinity::RenderFog detour. The engine queues the whole frame and only
@@ -38,8 +46,7 @@ void world_post_on_frame() noexcept;
 bool world_post_wants_emissive() noexcept;
 bool world_post_begin_emissive() noexcept;
 void world_post_end_emissive(int commands) noexcept;
-// viewWorldWidth: world pixels visible across the view (0 when unknown).
-bool world_post_before_fog(float viewWorldWidth) noexcept;
+bool world_post_before_fog(const WorldView& view) noexcept;
 void world_post_after_fog() noexcept;
 // Any thread. The next frame logs what engaged.
 void world_post_on_area_load() noexcept;

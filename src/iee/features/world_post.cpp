@@ -27,6 +27,15 @@ struct CompositeProgram {
   unsigned id{};
   int scale{-1};
   int dither{-1};
+  int curve{-1};
+};
+
+struct FogProgram {
+  unsigned id{};
+  int worldOrigin{-1};
+  int worldSize{-1};
+  int drift{-1};
+  int time{-1};
 };
 
 struct BlurProgram {
@@ -46,6 +55,7 @@ struct Settings {
   float fogRadius{};
   float bloomStrength{};
   float lightSpill{};
+  float fogDrift{};
 };
 
 // Everything that lives and dies with one GL context.
@@ -55,6 +65,7 @@ struct Resources {
   unsigned vertexArray{};
   unsigned vertexBuffer{};
   CompositeProgram composite{};
+  FogProgram fog{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
   Target fogCapture{};
@@ -73,6 +84,7 @@ bool g_failed = false;
 int g_engineDrawFramebuffer = 0;
 int g_engineReadFramebuffer = 0;
 float g_pixelsPerWorldPixel = 1.0f;
+WorldView g_view{};
 std::atomic<bool> g_logNextFrame{true};
 // Frame bookkeeping for the emissive capture. The world pass runs from the
 // frame boundary to the fog; additive draws queued later belong to the UI.
@@ -92,19 +104,62 @@ void main() {
 }
 )glsl";
 
-// Writes the texture scaled by uScale; the caller's blend mode decides whether
-// that multiplies (fog) or adds (bloom). uDither adds +-0.5/255 of ordered
-// noise to hide banding in long dark gradients.
+// Writes the texture scaled by uScale; the caller's blend mode decides how it
+// lands. uDither adds +-0.5/255 of ordered noise to hide banding in long dark
+// gradients. With uCurve set the value is treated as light and mapped through
+// 1 - exp(-x): faint light far from a source still registers, and light next
+// to the source saturates instead of clipping.
 constexpr const char* kCompositeSource = R"glsl(#version 330
 uniform sampler2D uTexture;
 uniform float uScale;
 uniform float uDither;
+uniform float uCurve;
 in vec2 vUv;
 out vec4 fragColor;
 void main() {
   vec3 color = texture(uTexture, vUv).rgb * uScale;
+  if (uCurve > 0.5) color = vec3(1.0) - exp(-color);
   float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   fragColor = vec4(color + uDither * (noise - 0.5) / 255.0, 1.0);
+}
+)glsl";
+
+// Multiplies the scene by the blurred fog capture (white = fully visible).
+// The lookup is pushed around by slow noise anchored to the world, so the
+// soft edge drifts like mist; where the capture is flat the push changes
+// nothing, so explored and unexplored areas keep the engine's exact shade.
+constexpr const char* kFogSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+uniform vec2 uWorldOrigin;
+uniform vec2 uWorldSize;
+uniform float uDrift;
+uniform float uTime;
+in vec2 vUv;
+out vec4 fragColor;
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float noise(vec2 p) {
+  vec2 cell = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(cell), hash(cell + vec2(1.0, 0.0)), f.x),
+             mix(hash(cell + vec2(0.0, 1.0)), hash(cell + vec2(1.0, 1.0)), f.x), f.y);
+}
+void main() {
+  vec2 uv = vUv;
+  if (uDrift > 0.0 && uWorldSize.x > 0.0 && uWorldSize.y > 0.0) {
+    vec2 world = uWorldOrigin + vec2(vUv.x, 1.0 - vUv.y) * uWorldSize;
+    vec2 p = world / 96.0;
+    vec2 push = vec2(noise(p + vec2(uTime * 0.07, uTime * 0.05)) +
+                         0.5 * noise(p * 2.3 - vec2(uTime * 0.11, 0.0)),
+                     noise(p + vec2(31.7, 17.3) - vec2(uTime * 0.06, uTime * 0.08)) +
+                         0.5 * noise(p * 2.3 + vec2(5.1, uTime * 0.09))) / 1.5 - 0.5;
+    uv += push * 2.0 * uDrift / uWorldSize;
+  }
+  vec3 visible = texture(uTexture, uv).rgb;
+  float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  fragColor = vec4(visible + (grain - 0.5) / 255.0, 1.0);
 }
 )glsl";
 
@@ -276,11 +331,12 @@ void set_pass_state() noexcept {
   fn.glActiveTexture(gl::TEXTURE0);
 }
 
-void draw_composite(unsigned texture, float scale, float dither) noexcept {
+void draw_composite(unsigned texture, float scale, float dither, bool lightCurve = false) noexcept {
   const auto& fn = gl::get_gl_functions();
   fn.glUseProgram(g_resources.composite.id);
   fn.glUniform1f(g_resources.composite.scale, scale);
   fn.glUniform1f(g_resources.composite.dither, dither);
+  fn.glUniform1f(g_resources.composite.curve, lightCurve ? 1.0f : 0.0f);
   fn.glBindTexture(gl::TEXTURE_2D, texture);
   fn.glDrawArrays(gl::TRIANGLES, 0, 3);
 }
@@ -341,7 +397,16 @@ bool create_shared_resources() noexcept {
   resources.composite.id = build_program(kCompositeSource);
   resources.blurDown.id = build_program(kBlurDownSource);
   resources.blurUp.id = build_program(kBlurUpSource);
-  if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id) return false;
+  resources.fog.id = build_program(kFogSource);
+  if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id ||
+      !resources.fog.id) {
+    return false;
+  }
+  resources.composite.curve = fn.glGetUniformLocation(resources.composite.id, "uCurve");
+  resources.fog.worldOrigin = fn.glGetUniformLocation(resources.fog.id, "uWorldOrigin");
+  resources.fog.worldSize = fn.glGetUniformLocation(resources.fog.id, "uWorldSize");
+  resources.fog.drift = fn.glGetUniformLocation(resources.fog.id, "uDrift");
+  resources.fog.time = fn.glGetUniformLocation(resources.fog.id, "uTime");
   resources.composite.scale = fn.glGetUniformLocation(resources.composite.id, "uScale");
   resources.composite.dither = fn.glGetUniformLocation(resources.composite.id, "uDither");
   resources.blurDown.step = fn.glGetUniformLocation(resources.blurDown.id, "uStep");
@@ -411,9 +476,13 @@ void draw_bloom() noexcept {
     fn.glEnable(gl::BLEND);
     if (g_settings.lightSpill > 0.0f) {
       // framebuffer += framebuffer * light: surfaces near a light source get
-      // brighter and take its colour; black stays black.
+      // brighter and take its colour; black stays black. The light comes
+      // from a deep level of the chain, i.e. only the wide blurs, so its
+      // reach does not depend on how sharp the source sprite is.
+      const int wide = levels > 3 ? 2 : (levels > 1 ? 1 : 0);
       fn.glBlendFunc(gl::DST_COLOR, gl::ONE);
-      draw_composite(glow, g_settings.lightSpill * perLevel, 0.0f);
+      draw_composite(resources.bloomChain.levels[static_cast<std::size_t>(wide)].texture,
+                     g_settings.lightSpill * 3.0f * perLevel, 0.0f, true);
     }
     if (g_settings.bloomStrength > 0.0f) {
       fn.glBlendFunc(gl::ONE, gl::ONE);
@@ -438,7 +507,7 @@ void draw_bloom() noexcept {
 
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
   g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
-                cfg.lightSpill};
+                cfg.lightSpill, cfg.softFogDrift};
 }
 
 bool world_post_active() noexcept {
@@ -514,7 +583,8 @@ void world_post_end_emissive(int commands) noexcept {
   fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(g_savedReadFramebuffer));
 }
 
-bool world_post_before_fog(float viewWorldWidth) noexcept {
+bool world_post_before_fog(const WorldView& view) noexcept {
+  g_view = view;
   const auto& fn = gl::get_gl_functions();
   g_worldPassOpen = false;
   if (!fn.postProcessAvailable) {
@@ -535,7 +605,7 @@ bool world_post_before_fog(float viewWorldWidth) noexcept {
       fail("GL resources could not be created");
     } else {
       g_pixelsPerWorldPixel =
-          game::pixels_per_world_pixel(static_cast<float>(viewport[2]), viewWorldWidth);
+          game::pixels_per_world_pixel(static_cast<float>(viewport[2]), view.width);
       set_pass_state();
       if (g_settings.bloom) {
         draw_bloom();
@@ -587,8 +657,20 @@ void world_post_after_fog() noexcept {
   // framebuffer = framebuffer * visible fraction
   fn.glEnable(gl::BLEND);
   fn.glBlendFunc(gl::DST_COLOR, gl::ZERO);
-  draw_composite(blurred ? resources.fogChain.levels[0].texture : resources.fogCapture.texture,
-                 1.0f, blurred ? 1.0f : 0.0f);
+  if (blurred) {
+    fn.glUseProgram(resources.fog.id);
+    fn.glUniform2f(resources.fog.worldOrigin, g_view.scrollX, g_view.scrollY);
+    fn.glUniform2f(resources.fog.worldSize, g_view.width, g_view.height);
+    fn.glUniform1f(resources.fog.drift, g_settings.fogDrift);
+    // Wrapped hourly so the float keeps sub-frame precision.
+    fn.glUniform1f(resources.fog.time,
+                   static_cast<float>(GetTickCount64() % 3600000ULL) / 1000.0f);
+    fn.glBindTexture(gl::TEXTURE_2D, resources.fogChain.levels[0].texture);
+    fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+  } else {
+    // Unblurred capture: must reproduce the engine's fog exactly.
+    draw_composite(resources.fogCapture.texture, 1.0f, 0.0f);
+  }
   if (!resources.fogDrawnOnce) {
     resources.fogDrawnOnce = true;
     if (!gl::check_error("world post fog composite")) {

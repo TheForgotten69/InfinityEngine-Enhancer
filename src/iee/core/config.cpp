@@ -59,9 +59,11 @@ static void normalize(EngineConfig& cfg) noexcept {
   cfg.maxAnisotropy = std::clamp(cfg.maxAnisotropy, 1.0f, 64.0f);
   cfg.lodBias = std::clamp(cfg.lodBias, -4.0f, 4.0f);
   if (!std::isfinite(cfg.softFogRadius)) cfg.softFogRadius = 24.0f;
+  if (!std::isfinite(cfg.softFogDrift)) cfg.softFogDrift = 10.0f;
   if (!std::isfinite(cfg.lightSpill)) cfg.lightSpill = 1.5f;
   if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
   cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
+  cfg.softFogDrift = std::clamp(cfg.softFogDrift, 0.0f, 64.0f);
   cfg.lightSpill = std::clamp(cfg.lightSpill, 0.0f, 8.0f);
   cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
@@ -108,6 +110,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.softFogOfWar);
     else if (iequals(key, "SoftFogRadius"))
       assign_float(cfg.softFogRadius);
+    else if (iequals(key, "SoftFogDrift"))
+      assign_float(cfg.softFogDrift);
     else if (iequals(key, "Bloom"))
       assign_bool(cfg.bloom);
     else if (iequals(key, "LightSpill"))
@@ -213,6 +217,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   write_bool(f, "InterpolateAnimations", cfg.interpolateAnimations);
   write_bool(f, "SoftFogOfWar", cfg.softFogOfWar);
   f << "SoftFogRadius = " << cfg.softFogRadius << "\n";
+  f << "SoftFogDrift = " << cfg.softFogDrift << "\n";
   write_bool(f, "Bloom", cfg.bloom);
   f << "LightSpill = " << cfg.lightSpill << "\n";
   f << "BloomStrength = " << cfg.bloomStrength << "\n";
