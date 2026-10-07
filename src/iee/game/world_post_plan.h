@@ -52,32 +52,6 @@ class WorldPassGate {
   bool closedForFrame_{};
 };
 
-// Sprite smoothing filters: one or two 2x upscale passes over the sprite atlas.
-enum class SpriteStage { Easu, CatmullRom };
-inline constexpr int kSpriteFilterCount = 4;
-struct SpriteFilterPlan {
-  int count{};
-  SpriteStage stages[2]{};
-  const char* name{"off"};
-  [[nodiscard]] constexpr int scale() const noexcept { return 1 << count; }
-};
-// 1 = FSR1 EASU 2x, 2 = Catmull-Rom 2x, 3 = Catmull-Rom 2x then EASU 2x,
-// 4 = EASU 2x twice. Anything else is off.
-constexpr SpriteFilterPlan sprite_filter_plan(int filter) noexcept {
-  switch (filter) {
-    case 1:
-      return {1, {SpriteStage::Easu, SpriteStage::Easu}, "FSR1 EASU 2x"};
-    case 2:
-      return {1, {SpriteStage::CatmullRom, SpriteStage::CatmullRom}, "Catmull-Rom 2x"};
-    case 3:
-      return {2, {SpriteStage::CatmullRom, SpriteStage::Easu}, "Catmull-Rom 2x then EASU 2x"};
-    case 4:
-      return {2, {SpriteStage::Easu, SpriteStage::Easu}, "EASU 2x twice"};
-    default:
-      return {};
-  }
-}
-
 // How far to move the shown image towards the new one after `stepSeconds`,
 // for an exponential approach with time constant `smoothingSeconds`. 1 means
 // "show the new image": no smoothing, or a history too old to trust.

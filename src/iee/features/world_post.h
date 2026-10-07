@@ -28,8 +28,7 @@ struct WorldView {
 void world_post_configure(const core::EngineConfig& cfg) noexcept;
 // True when at least one effect is switched on and no pass has failed.
 bool world_post_active() noexcept;
-// Debug A/B: F7 cycles the sprite filter (off and each filter), F8 toggles
-// soft fog of war, F9 bloom. Call once per
+// Debug A/B: F7 toggles sprite upscaling, F8 soft fog of war, F9 bloom. Call once per
 // frame, only when debug hotkeys are enabled.
 void world_post_poll_hotkeys() noexcept;
 // Frame boundary: the next world pass starts.
@@ -49,9 +48,8 @@ bool world_post_begin_emissive() noexcept;
 void world_post_end_emissive(int commands) noexcept;
 // Sprite smoothing. The engine composites sprites on the CPU into a streaming
 // atlas and uploads it at the start of a flush. Right after that upload, in
-// the world pass, the atlas is upscaled 2x or 4x by the configured filter
-// (game::sprite_filter_plan) and optionally sharpened; the caller makes the
-// engine draw from the returned texture
+// the world pass, the atlas is upscaled 2x with FSR1 (edge-adaptive upsample,
+// then sharpen); the caller makes the engine draw from the returned texture
 // for the rest of that flush and puts the engine's own back afterwards.
 // Normalised texture coordinates are unchanged by the larger texture.
 bool world_post_wants_atlas_upscale() noexcept;

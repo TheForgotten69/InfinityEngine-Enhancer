@@ -409,25 +409,3 @@ edges; the dark fringe from blending non-premultiplied alpha is unchanged
 (fixing it needs the blend mode swapped for alpha-blended sprites only, since
 additive sprites share the atlas); BAM v2 (PVRZ) sprites bypass the atlas and
 are not filtered.
-
-## 17. Revision 2026-10-08 (later): selectable sprite filters
-
-In-game verdict on section 16's FSR1 2x (once it actually ran; a manifest
-slot mix-up had put its hook on the wrong function for three builds): "looks
-like shit". The owner prefers Catmull-Rom and asked for Catmull-Rom followed
-by FSR's EASU.
-
-The sprite pass is now a plan of one or two 2x stages over the atlas
-(`game::sprite_filter_plan`), each texel-to-texel, followed by RCAS when
-`SpriteSharpness > 0`:
-
-| `SpriteFilter` | Stages | Scale |
-|---|---|---|
-| 1 | EASU | 2x |
-| 2 | Catmull-Rom | 2x |
-| 3 (default) | Catmull-Rom, EASU | 4x |
-| 4 | EASU, EASU | 4x |
-
-F7 cycles off and the four filters at runtime so the owner can judge them in
-game instead of from offline sheets, which did not predict their in-game
-opinion. A 4x atlas copy is 4096x4096 RGBA8 per stage.

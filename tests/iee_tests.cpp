@@ -1278,7 +1278,6 @@ void test_config_world_post() {
   expect_eq(defaults.heatShimmer, 1.5f, "Heat shimmer default");
   expect_true(!defaults.spriteUpscale, "Sprite upscaling defaults off");
   expect_eq(defaults.spriteSharpness, 0.5f, "Sprite sharpness default");
-  expect_eq(defaults.spriteFilter, 3, "Sprite filter defaults to Catmull-Rom then EASU");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1295,7 +1294,6 @@ void test_config_world_post() {
     out << "HeatShimmer = 4\n";
     out << "SpriteUpscale = true\n";
     out << "SpriteSharpness = 0.8\n";
-    out << "SpriteFilter = 2\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
@@ -1308,7 +1306,6 @@ void test_config_world_post() {
   expect_eq(cfg.heatShimmer, 4.0f, "Heat shimmer should parse");
   expect_true(cfg.spriteUpscale, "Sprite upscaling should parse");
   expect_eq(cfg.spriteSharpness, 0.8f, "Sprite sharpness should parse");
-  expect_eq(cfg.spriteFilter, 2, "Sprite filter should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
@@ -1320,7 +1317,6 @@ void test_config_world_post() {
     out << "SoftFogSmoothing = 99\n";
     out << "HeatShimmer = 500\n";
     out << "SpriteSharpness = 9\n";
-    out << "SpriteFilter = 40\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
@@ -1331,7 +1327,6 @@ void test_config_world_post() {
   expect_eq(cfg.softFogSmoothing, 2.0f, "Soft fog smoothing is clamped to its maximum");
   expect_eq(cfg.heatShimmer, 12.0f, "Heat shimmer is clamped to its maximum");
   expect_eq(cfg.spriteSharpness, 1.0f, "Sprite sharpness is clamped to 1");
-  expect_eq(cfg.spriteFilter, 4, "Sprite filter is clamped to the last mode");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {
@@ -1621,24 +1616,6 @@ void test_world_post_plan() {
 
   expect_eq(bloom_levels({960, 540}), 5, "Bloom uses at most five levels");
   expect_eq(bloom_levels({40, 40}), 2, "Bloom levels shrink with the image");
-
-  expect_eq(sprite_filter_plan(0).count, 0, "Filter 0 is off");
-  expect_eq(sprite_filter_plan(1).count, 1, "Filter 1 is one EASU pass");
-  expect_true(sprite_filter_plan(1).stages[0] == SpriteStage::Easu, "Filter 1 uses EASU");
-  expect_true(sprite_filter_plan(2).count == 1 &&
-                  sprite_filter_plan(2).stages[0] == SpriteStage::CatmullRom,
-              "Filter 2 is one Catmull-Rom pass");
-  expect_true(sprite_filter_plan(3).count == 2 &&
-                  sprite_filter_plan(3).stages[0] == SpriteStage::CatmullRom &&
-                  sprite_filter_plan(3).stages[1] == SpriteStage::Easu,
-              "Filter 3 is Catmull-Rom then EASU");
-  expect_true(sprite_filter_plan(4).count == 2 && sprite_filter_plan(4).stages[0] == SpriteStage::Easu &&
-                  sprite_filter_plan(4).stages[1] == SpriteStage::Easu,
-              "Filter 4 is EASU twice");
-  expect_eq(sprite_filter_plan(99).count, 0, "An unknown filter is off");
-  expect_eq(sprite_filter_plan(-1).count, 0, "A negative filter is off");
-  expect_eq(sprite_filter_plan(3).scale(), 4, "Two passes make 4x");
-  expect_eq(sprite_filter_plan(2).scale(), 2, "One pass makes 2x");
 
   expect_eq(temporal_blend(0.1f, 0.0f), 1.0f, "No smoothing time means the new image is shown at once");
   expect_eq(temporal_blend(0.0f, 0.25f), 0.0f, "No elapsed time keeps the shown image");
