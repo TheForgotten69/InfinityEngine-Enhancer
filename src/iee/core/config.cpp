@@ -58,6 +58,12 @@ static void normalize(EngineConfig& cfg) noexcept {
   if (!std::isfinite(cfg.lodBias)) cfg.lodBias = -0.25f;
   cfg.maxAnisotropy = std::clamp(cfg.maxAnisotropy, 1.0f, 64.0f);
   cfg.lodBias = std::clamp(cfg.lodBias, -4.0f, 4.0f);
+  if (!std::isfinite(cfg.softFogRadius)) cfg.softFogRadius = 24.0f;
+  if (!std::isfinite(cfg.bloomThreshold)) cfg.bloomThreshold = 0.80f;
+  if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
+  cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
+  cfg.bloomThreshold = std::clamp(cfg.bloomThreshold, 0.0f, 1.0f);
+  cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
 
 static void apply_kv(EngineConfig& cfg, const std::string& section, const std::string& key,
@@ -98,6 +104,16 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.smoothSpriteMovement);
     else if (iequals(key, "InterpolateAnimations"))
       assign_bool(cfg.interpolateAnimations);
+    else if (iequals(key, "SoftFogOfWar"))
+      assign_bool(cfg.softFogOfWar);
+    else if (iequals(key, "SoftFogRadius"))
+      assign_float(cfg.softFogRadius);
+    else if (iequals(key, "Bloom"))
+      assign_bool(cfg.bloom);
+    else if (iequals(key, "BloomThreshold"))
+      assign_float(cfg.bloomThreshold);
+    else if (iequals(key, "BloomStrength"))
+      assign_float(cfg.bloomStrength);
     return;
   }
 
@@ -195,6 +211,11 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   f << "LODBias = " << cfg.lodBias << "\n";
   write_bool(f, "SmoothSpriteMovement", cfg.smoothSpriteMovement);
   write_bool(f, "InterpolateAnimations", cfg.interpolateAnimations);
+  write_bool(f, "SoftFogOfWar", cfg.softFogOfWar);
+  f << "SoftFogRadius = " << cfg.softFogRadius << "\n";
+  write_bool(f, "Bloom", cfg.bloom);
+  f << "BloomThreshold = " << cfg.bloomThreshold << "\n";
+  f << "BloomStrength = " << cfg.bloomStrength << "\n";
 
   write_section(f, "Detection");
   write_bool(f, "AreaAnimationScan", cfg.enableAreaAnimationScan);

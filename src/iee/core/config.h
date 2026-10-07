@@ -9,6 +9,11 @@ struct EngineConfig {
   float lodBias = -0.25f;
   bool smoothSpriteMovement = false;
   bool interpolateAnimations = false;
+  bool softFogOfWar = false;
+  float softFogRadius = 24.0f;  // world pixels; 0 = capture without blur
+  bool bloom = false;
+  float bloomThreshold = 0.80f;
+  float bloomStrength = 0.35f;
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;
