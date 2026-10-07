@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <stdexcept>
@@ -23,6 +24,7 @@
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
 #include "iee/game/animation_interp.h"
+#include "iee/game/draw_queue.h"
 #include "iee/game/renderer.h"
 #include "iee/game/runtime_types_x64.h"
 #include "iee/game/sprite_motion.h"
@@ -61,6 +63,12 @@ using RenderFogFn = void (*)(void*, void*, void*);
 using DrawFlushFn = void (*)();
 static core::Hook<RenderFogFn> g_renderFogHook;
 static DrawFlushFn g_drawFlush = nullptr;
+// DrawFlush_GL is also detoured, to replay the queue's additive draws into
+// the bloom's emissive target. g_drawFlush stays the engine's entry point, so
+// our own flushes go through the detour too.
+static core::Hook<DrawFlushFn> g_drawFlushHook;
+static std::int32_t* g_drawQueueCount = nullptr;
+static game::DrawCommand* g_drawQueueCommands = nullptr;
 
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
@@ -439,6 +447,29 @@ static constexpr std::array<SpriteRenderFn, sizeof...(Slots)> object_render_deto
 static constexpr auto kObjectRenderDetours =
     object_render_detours(std::make_index_sequence<game::kMaxSmoothedObjectRenders>{});
 
+// Bloom source. The engine draws its light-emitting art (fires, spell
+// effects, glows) additively, and every queued command records its blend
+// mode. During the world pass each flush is followed by a second one that
+// holds only those commands, with our black emissive target bound. The vertex
+// data and textures of the first flush are still in place: the engine only
+// overwrites them when new draws are queued. Render thread only.
+static void detour_draw_flush() {
+  const auto original = g_drawFlushHook.original();
+  if (!g_ctx || !g_drawQueueCount || !features::world_post_wants_emissive()) {
+    original();
+    return;
+  }
+  static std::array<game::DrawCommand, 1024> additive;
+  const auto collected = game::collect_additive(g_ctx->manifest->drawQueue, g_drawQueueCommands,
+                                                *g_drawQueueCount, additive);
+  original();
+  if (collected == 0 || !features::world_post_begin_emissive()) return;
+  std::memcpy(g_drawQueueCommands, additive.data(), collected * sizeof(game::DrawCommand));
+  *g_drawQueueCount = static_cast<std::int32_t>(collected);
+  original();
+  features::world_post_end_emissive(static_cast<int>(collected));
+}
+
 // World post passes (soft fog of war, bloom). The engine queues every draw
 // and submits the queue in DrawFlush_GL at the end of the frame, so the world
 // only exists in the framebuffer once we flush, and the fog only lands in our
@@ -668,7 +699,18 @@ bool install_all(AppContext& ctx) {
         g_renderFogHook.enable();
         LOG_INFO("CInfinity::RenderFog hook installed (soft fog of war={}, bloom={})",
                  ctx.cfg.softFogOfWar, ctx.cfg.bloom);
+        if (ctx.addrs.DrawQueueCount && ctx.addrs.DrawQueueCommands) {
+          g_drawQueueCount = reinterpret_cast<std::int32_t*>(ctx.addrs.DrawQueueCount);
+          g_drawQueueCommands = reinterpret_cast<game::DrawCommand*>(ctx.addrs.DrawQueueCommands);
+          g_drawFlushHook.create(reinterpret_cast<void*>(ctx.addrs.DrawFlush),
+                                 reinterpret_cast<void*>(&detour_draw_flush));
+          g_drawFlushHook.enable();
+          LOG_INFO("DrawFlush_GL hook installed (bloom from the engine's additive draws)");
+        }
       } catch (...) {
+        g_drawQueueCount = nullptr;
+        g_drawQueueCommands = nullptr;
+        (void)g_drawFlushHook.remove();
         g_drawFlush = nullptr;
         (void)g_renderFogHook.remove();
         LOG_WARN("CInfinity::RenderFog hook failed; fog of war and bloom stay vanilla");
@@ -716,6 +758,9 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_drawFlushHook.remove();
+  g_drawQueueCount = nullptr;
+  g_drawQueueCommands = nullptr;
   (void)g_renderFogHook.remove();
   g_drawFlush = nullptr;
   features::world_post_forget();
@@ -747,6 +792,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_drawFlushHook.disable();
   (void)g_renderFogHook.disable();
   (void)g_vidCellFrameSizeHook.disable();
   (void)g_vidCellCenterPointHook.disable();

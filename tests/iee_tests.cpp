@@ -26,6 +26,7 @@
 #include "iee/game/object_statics.h"
 #include "iee/game/build_manifest.h"
 #include "iee/game/dds_texture.h"
+#include "iee/game/draw_queue.h"
 #include "iee/game/eeex_doc_layouts_x64.h"
 #include "iee/game/file_formats.h"
 #include "iee/game/runtime_types_x64.h"
@@ -1271,7 +1272,7 @@ void test_config_world_post() {
   iee::core::EngineConfig defaults{};
   expect_true(!defaults.softFogOfWar && !defaults.bloom, "World post effects default off");
   expect_eq(defaults.softFogRadius, 24.0f, "Soft fog radius default");
-  expect_eq(defaults.bloomThreshold, 0.80f, "Bloom threshold default");
+  expect_eq(defaults.lightSpill, 1.5f, "Light spill default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1282,40 +1283,40 @@ void test_config_world_post() {
     out << "SoftFogOfWar = true\n";
     out << "SoftFogRadius = 40\n";
     out << "Bloom = true\n";
-    out << "BloomThreshold = 0.6\n";
+    out << "LightSpill = 3\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
   expect_true(iee::core::ConfigManager::load(tempPath, cfg), "World post keys should load");
   expect_true(cfg.softFogOfWar && cfg.bloom, "World post bools should parse");
   expect_eq(cfg.softFogRadius, 40.0f, "Soft fog radius should parse");
-  expect_eq(cfg.bloomThreshold, 0.6f, "Bloom threshold should parse");
+  expect_eq(cfg.lightSpill, 3.0f, "Light spill should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
     std::ofstream out(tempPath, std::ios::trunc);
     out << "[Rendering]\n";
     out << "SoftFogRadius = 100000\n";
-    out << "BloomThreshold = 7\n";
+    out << "LightSpill = 700\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
   expect_true(iee::core::ConfigManager::load(tempPath, cfg), "Out-of-range values should load");
   expect_eq(cfg.softFogRadius, 256.0f, "Soft fog radius is clamped to its maximum");
-  expect_eq(cfg.bloomThreshold, 1.0f, "Bloom threshold is clamped to 1");
+  expect_eq(cfg.lightSpill, 8.0f, "Light spill is clamped to its maximum");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {
     std::ofstream out(tempPath, std::ios::trunc);
     out << "[Rendering]\n";
     out << "SoftFogRadius = nan\n";
-    out << "BloomThreshold = inf\n";
+    out << "LightSpill = inf\n";
     out << "BloomStrength = nan\n";
   }
   cfg = {};
   expect_true(iee::core::ConfigManager::load(tempPath, cfg), "Non-finite values should load");
   expect_eq(cfg.softFogRadius, 24.0f, "A non-finite radius falls back to the default");
-  expect_eq(cfg.bloomThreshold, 0.80f, "A non-finite threshold falls back to the default");
+  expect_eq(cfg.lightSpill, 1.5f, "A non-finite light spill falls back to the default");
   expect_eq(cfg.bloomStrength, 0.35f, "A non-finite strength falls back to the default");
 
   std::error_code error;
@@ -1333,6 +1334,66 @@ void test_manifest_world_post_targets() {
   expect_eq(manifest.referenceRvas.drawFlush, std::uintptr_t{0x42B350}, "DrawFlush reference RVA");
   expect_true(iee::game::current_manifest().patterns.renderFog.empty(),
               "The 2.6.6 manifest has no world post targets");
+}
+
+void test_draw_queue() {
+  using namespace iee::game;
+  const auto found = find_manifest("BGEE 2.7.3.x");
+  expect_true(found.has_value(), "The 2.7.3 manifest should be registered");
+  if (!found) return;
+  const DrawQueueLayout& layout = found->get().drawQueue;
+  expect_true(layout.valid(), "2.7.3 should describe the engine draw queue");
+  expect_true(!current_manifest().drawQueue.valid(), "2.6.6 has no draw queue layout");
+
+  // State word: blend enable is bit 8, source factor bits 9-12, destination
+  // factor bits 13-16; factor index 1 is GL_ONE, 6/7 are SRC_ALPHA and its inverse.
+  const auto state = [](bool blend, unsigned src, unsigned dst) {
+    return static_cast<std::uint32_t>((blend ? 1u << 8 : 0u) | (src << 9) | (dst << 13) | 0x3u);
+  };
+  expect_true(is_additive(layout, state(true, 4, 1)), "ONE_MINUS_DST_COLOR / ONE is additive");
+  expect_true(is_additive(layout, state(true, 3, 1)), "SRC_COLOR / ONE is additive");
+  expect_true(!is_additive(layout, state(true, 6, 7)), "Normal alpha blending is not additive");
+  expect_true(!is_additive(layout, state(false, 4, 1)), "Blending switched off is not additive");
+
+  const std::array<DrawCommand, 5> queue{{
+      {state(true, 6, 7), 0, 6},     // normal sprite
+      {state(true, 4, 1), 6, 12},    // glow
+      {state(true, 4, 1), 18, -1},   // a clear command must never be replayed
+      {state(true, 4, 1), 18, 0},    // empty
+      {state(true, 3, 1), 18, 6},    // glow
+  }};
+  std::array<DrawCommand, 8> out{};
+  expect_eq(collect_additive(layout, queue.data(), 5, out), std::size_t{2},
+            "Only drawable additive commands are collected");
+  expect_eq(out[0].primStart, 6, "Collected commands keep their order");
+  expect_eq(out[1].primStart, 18, "Collected commands keep their vertex range");
+  std::array<DrawCommand, 1> tiny{};
+  expect_eq(collect_additive(layout, queue.data(), 5, tiny), std::size_t{1},
+            "Collection stops at the output capacity");
+  expect_eq(collect_additive(layout, queue.data(), -3, out), std::size_t{0},
+            "A negative count collects nothing");
+  expect_eq(collect_additive(layout, queue.data(), 1 << 20, out), std::size_t{0},
+            "A count beyond the engine's queue capacity collects nothing");
+  expect_eq(collect_additive(layout, nullptr, 5, out), std::size_t{0},
+            "A missing queue collects nothing");
+
+  // cmp [rip + disp32], r14d at function offset 0x24: 44 39 35 <disp32>.
+  std::array<std::uint8_t, 0x40> code{};
+  code[0x24] = 0x44;
+  code[0x25] = 0x39;
+  code[0x26] = 0x35;
+  const std::int32_t disp = 0x1000;
+  std::memcpy(&code[0x27], &disp, sizeof(disp));
+  const auto base = reinterpret_cast<std::uintptr_t>(code.data());
+  expect_eq(draw_queue_count_address(layout, base), base + 0x2B + 0x1000,
+            "The count address is the rip-relative target of the compare");
+  code[0x25] = 0x00;
+  expect_eq(draw_queue_count_address(layout, base), std::uintptr_t{0},
+            "An unexpected instruction yields no address");
+  expect_eq(draw_queue_count_address(layout, 0), std::uintptr_t{0},
+            "A missing function yields no address");
+  expect_eq(draw_queue_commands_address(layout, 0x200000), std::uintptr_t{0x200000 - 0x180A8},
+            "The command array sits a fixed distance before the count");
 }
 
 void test_world_post_plan() {
@@ -2194,6 +2255,7 @@ int main() {
   test_sprite_motion_tracker();
   test_animation_interpolation();
   test_world_post_plan();
+  test_draw_queue();
   test_build_area_effect_points();
   test_config_detection_section();
   test_config_world_post();

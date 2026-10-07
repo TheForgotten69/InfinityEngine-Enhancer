@@ -12,8 +12,9 @@ struct EngineConfig {
   bool softFogOfWar = false;
   float softFogRadius = 24.0f;  // world pixels; 0 = capture without blur
   bool bloom = false;
-  float bloomThreshold = 0.80f;
   float bloomStrength = 0.35f;
+  // How strongly light-emitting effects brighten what is around them; 0 = off.
+  float lightSpill = 1.5f;
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;

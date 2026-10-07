@@ -9,6 +9,7 @@
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
+#include "iee/features/world_post.h"
 #include "iee/hooks.h"
 #include "iee/shader_probe.h"
 
@@ -64,6 +65,7 @@ void frame_tick() {
   g_frames.fetch_add(1, std::memory_order_relaxed);
   hooks::retry_shader_probe_install();
   probe::on_frame_tick(seconds_since_install());
+  features::world_post_on_frame();
 }
 
 void detour_sdl_swap(void* window) {

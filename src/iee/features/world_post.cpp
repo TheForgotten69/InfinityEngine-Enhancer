@@ -34,11 +34,6 @@ struct BlurProgram {
   int step{-1};
 };
 
-struct BrightProgram {
-  unsigned id{};
-  int threshold{-1};
-};
-
 // Level i is the base image halved i + 1 times.
 struct BlurChain {
   std::array<Target, game::kMaxBlurLevels> levels{};
@@ -49,8 +44,8 @@ struct Settings {
   bool softFog{};
   bool bloom{};
   float fogRadius{};
-  float bloomThreshold{};
   float bloomStrength{};
+  float lightSpill{};
 };
 
 // Everything that lives and dies with one GL context.
@@ -62,11 +57,11 @@ struct Resources {
   CompositeProgram composite{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
-  BrightProgram bright{};
   Target fogCapture{};
   BlurChain fogChain{};
-  Target bloomScene{};   // half-size copy of the world
-  Target bloomBright{};  // its bright parts
+  // The engine's additive (light-emitting) draws of this frame, on black.
+  Target emissive{};
+  Target emissiveHalf{};
   BlurChain bloomChain{};
   bool fogDrawnOnce{};
   bool bloomDrawnOnce{};
@@ -79,6 +74,14 @@ int g_engineDrawFramebuffer = 0;
 int g_engineReadFramebuffer = 0;
 float g_pixelsPerWorldPixel = 1.0f;
 std::atomic<bool> g_logNextFrame{true};
+// Frame bookkeeping for the emissive capture. The world pass runs from the
+// frame boundary to the fog; additive draws queued later belong to the UI.
+unsigned g_frame = 1;
+unsigned g_emissiveFrame = 0;
+bool g_worldPassOpen = false;
+int g_emissiveCommands = 0;
+int g_savedDrawFramebuffer = 0;
+int g_savedReadFramebuffer = 0;
 
 constexpr const char* kVertexSource = R"glsl(#version 330
 layout(location = 0) in vec2 aPosition;
@@ -137,24 +140,6 @@ void main() {
   sum += texture(uTexture, vUv + vec2(0.0, -uStep.y * 2.0));
   sum += texture(uTexture, vUv + vec2(-uStep.x, -uStep.y)) * 2.0;
   fragColor = sum / 12.0;
-}
-)glsl";
-
-// Keeps what is brighter than uThreshold at full strength, with a soft knee
-// so the cut-off does not flicker. The image is 8-bit, so nothing is brighter
-// than white: subtracting the threshold (as HDR bloom does) would leave at
-// most a few percent to glow with.
-constexpr const char* kBrightSource = R"glsl(#version 330
-uniform sampler2D uTexture;
-uniform float uThreshold;
-in vec2 vUv;
-out vec4 fragColor;
-void main() {
-  vec3 color = texture(uTexture, vUv).rgb;
-  float level = max(color.r, max(color.g, color.b));
-  const float knee = 0.1;
-  float weight = smoothstep(uThreshold - knee, uThreshold + knee, level);
-  fragColor = vec4(color * weight, 1.0);
 }
 )glsl";
 
@@ -356,16 +341,11 @@ bool create_shared_resources() noexcept {
   resources.composite.id = build_program(kCompositeSource);
   resources.blurDown.id = build_program(kBlurDownSource);
   resources.blurUp.id = build_program(kBlurUpSource);
-  resources.bright.id = build_program(kBrightSource);
-  if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id ||
-      !resources.bright.id) {
-    return false;
-  }
+  if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id) return false;
   resources.composite.scale = fn.glGetUniformLocation(resources.composite.id, "uScale");
   resources.composite.dither = fn.glGetUniformLocation(resources.composite.id, "uDither");
   resources.blurDown.step = fn.glGetUniformLocation(resources.blurDown.id, "uStep");
   resources.blurUp.step = fn.glGetUniformLocation(resources.blurUp.id, "uStep");
-  resources.bright.threshold = fn.glGetUniformLocation(resources.bright.id, "uThreshold");
   return true;
 }
 
@@ -374,8 +354,8 @@ bool create_sized_resources(game::Extent viewport) noexcept {
   const auto half = game::half_extent(viewport);
   if (!create_target(resources.fogCapture, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
   if (!create_chain(resources.fogChain, viewport)) return false;
-  if (!create_target(resources.bloomScene, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
-  if (!create_target(resources.bloomBright, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
+  if (!create_target(resources.emissive, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
+  if (!create_target(resources.emissiveHalf, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
   if (!create_chain(resources.bloomChain, half)) return false;
   resources.viewport = viewport;
   return true;
@@ -403,39 +383,42 @@ bool ensure_resources(game::Extent viewport) noexcept {
   return true;
 }
 
-// Adds a glow of the bright parts of the world image to the engine's
-// framebuffer. Runs before the fog so unexplored areas stay dark, and before
-// the UI is drawn so the UI cannot glow. Requires set_pass_state().
+// Glow and light spill from the frame's emissive image. Runs before the fog
+// so unexplored areas stay dark, and before the UI is drawn so the UI cannot
+// glow. Requires set_pass_state().
 void draw_bloom() noexcept {
   const auto& fn = gl::get_gl_functions();
   auto& resources = g_resources;
-  const auto half = resources.bloomScene.extent;
+  if (g_emissiveFrame != g_frame) return;  // nothing emitted light this frame
+  const auto half = resources.emissiveHalf.extent;
   const int planned = game::bloom_levels(half);
-  if (planned <= 0 || !(g_settings.bloomStrength > 0.0f)) return;
+  if (planned <= 0) return;
 
-  fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(g_engineDrawFramebuffer));
-  fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, resources.bloomScene.framebuffer);
+  fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, resources.emissive.framebuffer);
+  fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, resources.emissiveHalf.framebuffer);
   fn.glBlitFramebuffer(0, 0, resources.viewport.width, resources.viewport.height, 0, 0,
                        half.width, half.height, gl::COLOR_BUFFER_BIT, gl::LINEAR);
-
-  fn.glBindFramebuffer(gl::FRAMEBUFFER, resources.bloomBright.framebuffer);
-  fn.glViewport(0, 0, half.width, half.height);
-  fn.glUseProgram(resources.bright.id);
-  fn.glUniform1f(resources.bright.threshold, g_settings.bloomThreshold);
-  fn.glBindTexture(gl::TEXTURE_2D, resources.bloomScene.texture);
-  fn.glDrawArrays(gl::TRIANGLES, 0, 3);
-
-  const int levels = run_blur(resources.bloomBright, resources.bloomChain, {planned, 1.0f}, true);
+  const int levels =
+      run_blur(resources.emissiveHalf, resources.bloomChain, {planned, 1.0f}, true);
 
   bind_engine_framebuffer();
   fn.glViewport(0, 0, resources.viewport.width, resources.viewport.height);
   if (levels > 0) {
+    // Each level adds its share on the way up; normalise so the strengths
+    // mean the same thing at every resolution.
+    const float perLevel = 1.0f / static_cast<float>(levels);
+    const unsigned glow = resources.bloomChain.levels[0].texture;
     fn.glEnable(gl::BLEND);
-    fn.glBlendFunc(gl::ONE, gl::ONE);
-    // Each level adds its share on the way up; normalise so strength means
-    // the same thing at every resolution.
-    draw_composite(resources.bloomChain.levels[0].texture,
-                   g_settings.bloomStrength / static_cast<float>(levels), 0.0f);
+    if (g_settings.lightSpill > 0.0f) {
+      // framebuffer += framebuffer * light: surfaces near a light source get
+      // brighter and take its colour; black stays black.
+      fn.glBlendFunc(gl::DST_COLOR, gl::ONE);
+      draw_composite(glow, g_settings.lightSpill * perLevel, 0.0f);
+    }
+    if (g_settings.bloomStrength > 0.0f) {
+      fn.glBlendFunc(gl::ONE, gl::ONE);
+      draw_composite(glow, g_settings.bloomStrength * perLevel, 0.0f);
+    }
     fn.glDisable(gl::BLEND);
   }
 
@@ -454,8 +437,8 @@ void draw_bloom() noexcept {
 }  // namespace
 
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
-  g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomThreshold,
-                cfg.bloomStrength};
+  g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
+                cfg.lightSpill};
 }
 
 bool world_post_active() noexcept {
@@ -480,8 +463,60 @@ void world_post_poll_hotkeys() noexcept {
   }
 }
 
+void world_post_on_frame() noexcept {
+  ++g_frame;
+  g_worldPassOpen = true;
+}
+
+bool world_post_wants_emissive() noexcept {
+  return g_worldPassOpen && g_settings.bloom && !g_failed;
+}
+
+bool world_post_begin_emissive() noexcept {
+  const auto& fn = gl::get_gl_functions();
+  if (!fn.postProcessAvailable) return false;
+  fn.glGetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING, &g_savedDrawFramebuffer);
+  fn.glGetIntegerv(gl::READ_FRAMEBUFFER_BINDING, &g_savedReadFramebuffer);
+  int viewport[4]{};
+  fn.glGetIntegerv(gl::VIEWPORT, viewport);
+  if (viewport[0] != 0 || viewport[1] != 0 || viewport[2] <= 0 || viewport[3] <= 0) return false;
+  const game::Extent extent{viewport[2], viewport[3]};
+  const bool firstThisFrame = g_emissiveFrame != g_frame;
+  if (firstThisFrame || !(extent == g_resources.viewport) ||
+      gl::current_context() != g_resources.context) {
+    core::GlStateGuard textures({0});
+    core::GlPassGuard pass;
+    const bool ready = ensure_resources(extent);
+    if (ready) {
+      fn.glBindFramebuffer(gl::FRAMEBUFFER, g_resources.emissive.framebuffer);
+      fn.glDisable(gl::SCISSOR_TEST);
+      fn.glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+      fn.glClear(gl::COLOR_BUFFER_BIT);
+      g_emissiveCommands = 0;
+    }
+    fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, static_cast<unsigned>(g_savedDrawFramebuffer));
+    fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(g_savedReadFramebuffer));
+    if (!ready) {
+      fail("GL resources could not be created");
+      return false;
+    }
+    g_emissiveFrame = g_frame;
+  }
+  // State is the engine's again; only the framebuffer differs for the replay.
+  fn.glBindFramebuffer(gl::FRAMEBUFFER, g_resources.emissive.framebuffer);
+  return true;
+}
+
+void world_post_end_emissive(int commands) noexcept {
+  const auto& fn = gl::get_gl_functions();
+  g_emissiveCommands += commands;
+  fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, static_cast<unsigned>(g_savedDrawFramebuffer));
+  fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(g_savedReadFramebuffer));
+}
+
 bool world_post_before_fog(float viewWorldWidth) noexcept {
   const auto& fn = gl::get_gl_functions();
+  g_worldPassOpen = false;
   if (!fn.postProcessAvailable) {
     fail("the GL context lacks framebuffer or vertex-array support");
     return false;
@@ -520,11 +555,12 @@ bool world_post_before_fog(float viewWorldWidth) noexcept {
         try {
           LOG_INFO(
               "World post: softFog={} (radius {} world px, blur levels={} offset={:.2f}), "
-              "bloom={}, viewport {}x{}, {:.3f} px per world px, engine framebuffer draw={} "
-              "read={}",
+              "bloom={} (strength {}, light spill {}, {} additive draws this frame), viewport "
+              "{}x{}, {:.3f} px per world px, engine framebuffer draw={} read={}",
               g_settings.softFog, g_settings.fogRadius, plan.levels, plan.offset,
-              g_settings.bloom, viewport[2], viewport[3], g_pixelsPerWorldPixel,
-              g_engineDrawFramebuffer, g_engineReadFramebuffer);
+              g_settings.bloom, g_settings.bloomStrength, g_settings.lightSpill,
+              g_emissiveFrame == g_frame ? g_emissiveCommands : 0, viewport[2], viewport[3],
+              g_pixelsPerWorldPixel, g_engineDrawFramebuffer, g_engineReadFramebuffer);
         } catch (...) {
         }
       }

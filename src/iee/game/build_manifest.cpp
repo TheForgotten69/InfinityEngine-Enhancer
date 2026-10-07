@@ -237,6 +237,11 @@ constexpr BuildManifest kKnownBuilds[] = {
             {"CGameChunk::Render", "4C 8B DC 55 56 57 41 55 41 57 49 8D 6B A1", 0x36B7A0},
             {"CVEFVidCell::Render", "4C 8B DC 55 56 41 57 49 8D 6B A1 48 81 EC D0", 0x254B00},
         }},
+        // Disassembly-verified on the Steam 2.7.3.0 binary: DrawFlush_GL+0x24
+        // compares gl.n (0x2F73FD0); DrawEnd_GL writes gl.cmds at 0x2F5BF28
+        // (12 bytes each); DrawBlendFunc_GL packs src<<9 | dst<<13; the
+        // factor table at 0x5C12B0 has GL_ONE at index 1.
+        {0x24, 0x180A8, 8192, 8, 13, 1},
     },
 };
 

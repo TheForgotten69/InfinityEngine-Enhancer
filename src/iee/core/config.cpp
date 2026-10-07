@@ -59,10 +59,10 @@ static void normalize(EngineConfig& cfg) noexcept {
   cfg.maxAnisotropy = std::clamp(cfg.maxAnisotropy, 1.0f, 64.0f);
   cfg.lodBias = std::clamp(cfg.lodBias, -4.0f, 4.0f);
   if (!std::isfinite(cfg.softFogRadius)) cfg.softFogRadius = 24.0f;
-  if (!std::isfinite(cfg.bloomThreshold)) cfg.bloomThreshold = 0.80f;
+  if (!std::isfinite(cfg.lightSpill)) cfg.lightSpill = 1.5f;
   if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
   cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
-  cfg.bloomThreshold = std::clamp(cfg.bloomThreshold, 0.0f, 1.0f);
+  cfg.lightSpill = std::clamp(cfg.lightSpill, 0.0f, 8.0f);
   cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
 
@@ -110,8 +110,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_float(cfg.softFogRadius);
     else if (iequals(key, "Bloom"))
       assign_bool(cfg.bloom);
-    else if (iequals(key, "BloomThreshold"))
-      assign_float(cfg.bloomThreshold);
+    else if (iequals(key, "LightSpill"))
+      assign_float(cfg.lightSpill);
     else if (iequals(key, "BloomStrength"))
       assign_float(cfg.bloomStrength);
     return;
@@ -214,7 +214,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   write_bool(f, "SoftFogOfWar", cfg.softFogOfWar);
   f << "SoftFogRadius = " << cfg.softFogRadius << "\n";
   write_bool(f, "Bloom", cfg.bloom);
-  f << "BloomThreshold = " << cfg.bloomThreshold << "\n";
+  f << "LightSpill = " << cfg.lightSpill << "\n";
   f << "BloomStrength = " << cfg.bloomStrength << "\n";
 
   write_section(f, "Detection");

@@ -45,6 +45,7 @@ Operational instructions for AI coding agents working in this repository.
 - The engine does **zero** lighting work. Day/night is a swap of authored assets. `CGameArea` holds authored per-area bitmaps (`m_bmLum` +0x260, `m_pbmLumNight` +0x380, `m_bmHeight` +0x388) usable as static lookup data only.
 - Prefer `SDL_GL_SwapWindow` (SDL2.dll export) over `DrawFlip` patterns for the frame boundary.
 - The engine queues every draw (`DrawEnd_GL` only appends to `gl.cmds`) and submits the whole frame in `DrawFlush_GL` (2.7.3 RVA `0x42B350`), normally once at flip, and earlier whenever its 1024x1024 sprite atlas fills. Binding a framebuffer around an engine render function captures nothing, and an immediate GL draw of ours lands under the still-queued world. Flush first (see `features/world_post.*`), and restore every GL state touched: the flush issues changes relative to the engine's cached `gl.hwState`.
+- Each queued draw command is 12 bytes (state, first vertex, count) in `gl.cmds`, counted by `gl.n`. The state word carries the blend factors (source bits 9-12, destination bits 13-16, index 1 = `GL_ONE`). The engine draws its light-emitting art (sprite render flags `0x8` / `0x200`: fires, spell effects, glows) with destination `GL_ONE`, so "additive command" is a reliable "this emits light" signal; bloom is fed from it (`game/draw_queue.*`, `detour_draw_flush`).
 - `gl.pp.enabled` is forced false in 2.7.3 (`DrawInit_GL`): the engine's own offscreen target and `fpCatRom` are dead.
 
 ## Runtime Facts — Hooking Safety

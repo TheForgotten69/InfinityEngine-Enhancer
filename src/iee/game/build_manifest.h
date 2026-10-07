@@ -111,6 +111,25 @@ struct ObjectRenderTarget {
 };
 inline constexpr std::size_t kMaxSmoothedObjectRenders = 8;
 
+// The GL backend's draw queue (gl.cmds / gl.n), consumed by DrawFlush_GL.
+// Used to pick out the engine's additive (light-emitting) draws.
+struct DrawQueueLayout {
+  // Offset inside DrawFlush_GL of `cmp [rip + gl.n], r14d`.
+  std::size_t countCompareOffset{};
+  // gl.cmds starts this many bytes before gl.n.
+  std::uintptr_t commandsBeforeCount{};
+  std::uint32_t maxCommands{};
+  // Command state word: blend enable bit, destination factor field (4 bits),
+  // and the factor index that means GL_ONE.
+  std::uint32_t blendEnableBit{};
+  std::uint32_t blendDstShift{};
+  std::uint32_t blendFactorOne{};
+
+  [[nodiscard]] constexpr bool valid() const noexcept {
+    return countCompareOffset != 0 && commandsBeforeCount != 0 && maxCommands != 0;
+  }
+};
+
 struct BuildManifest {
   std::string_view buildId{};
   std::array<std::string_view, 2> supportedProductNames{};
@@ -122,6 +141,8 @@ struct BuildManifest {
   // Moving non-creature objects (projectiles, spell effect cells, debris).
   // Unused slots stay empty.
   std::array<ObjectRenderTarget, kMaxSmoothedObjectRenders> smoothedObjectRenders{};
+  // Optional; an invalid (empty) layout leaves emissive bloom off.
+  DrawQueueLayout drawQueue{};
 
   [[nodiscard]] constexpr bool validate() const noexcept {
     if (buildId.empty() || supportedProductNames[0].empty() || executableVersion.major == 0 ||

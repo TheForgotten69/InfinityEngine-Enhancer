@@ -31,6 +31,10 @@ namespace iee::game {
         // bloom) need the fog render to hook and the queue flush to call.
         std::uintptr_t RenderFog = 0;
         std::uintptr_t DrawFlush = 0;
+        // Optional: the draw queue DrawFlush_GL consumes (count and command
+        // array). 0 leaves the fog and flush hooks working without bloom.
+        std::uintptr_t DrawQueueCount = 0;
+        std::uintptr_t DrawQueueCommands = 0;
         bool initialized = false;
     };
 

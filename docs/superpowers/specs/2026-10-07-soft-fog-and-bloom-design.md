@@ -248,3 +248,36 @@ clamping) and INI parsing. GL behaviour is validated in game only.
 
 Light-source bloom, effect-cast light, normal-derived relief, FXAA, water
 reflections, changes to the engine's fog rules or colours.
+
+## 11. Revision 2026-10-07: bloom from the engine's additive draws
+
+In-game result of the threshold bloom (owner): bright painted art such as
+paper glowed as much as flames. The threshold approach is removed.
+
+`CVidCell::RenderTexture` (`0x425530`) selects the blend mode from the sprite
+render flags: flag `0x8` or `0x200` gives a destination factor of `GL_ONE`,
+everything else is normal alpha blending. The engine's own art flags therefore
+mark what emits light. Every queued command keeps its blend factors in its
+state word (`DrawBlendFunc_GL`: source at bits 9-12, destination at 13-16;
+factor table at `0x5C12B0`, index 1 = `GL_ONE`).
+
+Design:
+
+- `DrawFlush_GL` is detoured. During the world pass (frame boundary to
+  `RenderFog`) the detour copies the queue's additive commands, calls the
+  original, then binds a black "emissive" target, writes those commands back
+  into the queue and calls the original again. Vertex data and atlas textures
+  from the first flush are still valid: the engine overwrites them only when
+  new draws are queued.
+- `gl.n` is located from the rip-relative compare at `DrawFlush_GL+0x24`;
+  `gl.cmds` lies `0x180A8` bytes before it (`BuildManifest::drawQueue`).
+- Before the fog, the emissive image is halved, blurred through the bloom
+  chain, and applied twice: `framebuffer += framebuffer * light * LightSpill`
+  (surfaces near a source brighten and take its colour) and
+  `framebuffer += light * BloomStrength` (the halo).
+- INI: `BloomThreshold` is gone; `LightSpill` (default 1.5, 0 = off, max 8).
+
+Known limits: the replay has no depth buffer, so a light source hidden behind
+a wall still glows; the light spill is screen-space, with no falloff model and
+no wall occlusion; art drawn with flag `0x200` (`DST_COLOR, ONE`) contributes
+nothing to a black target.

@@ -97,6 +97,7 @@ add_library(iee_common STATIC
     src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp
     src/iee/game/dds_texture.cpp
+    src/iee/game/draw_queue.cpp
     src/iee/game/game_addrs.cpp
     src/iee/game/object_statics.cpp
     src/iee/game/resref_runtime.cpp

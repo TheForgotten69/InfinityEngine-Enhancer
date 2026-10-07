@@ -1,3 +1,4 @@
+#include "iee/game/draw_queue.h"
 #include "game_addrs.h"
 
 #include <array>
@@ -154,6 +155,18 @@ namespace iee::game {
             if (out.RenderFog && out.DrawFlush) {
                 LOG_INFO("World post targets resolved at RVA 0x{:X} / 0x{:X}",
                          out.RenderFog - moduleBase, out.DrawFlush - moduleBase);
+                out.DrawQueueCount = draw_queue_count_address(manifest.drawQueue, out.DrawFlush);
+                out.DrawQueueCommands =
+                    draw_queue_commands_address(manifest.drawQueue, out.DrawQueueCount);
+                if (out.DrawQueueCount && out.DrawQueueCommands) {
+                    LOG_INFO("Draw queue resolved: count at RVA 0x{:X}, commands at RVA 0x{:X}",
+                             out.DrawQueueCount - moduleBase, out.DrawQueueCommands - moduleBase);
+                } else {
+                    out.DrawQueueCount = out.DrawQueueCommands = 0;
+                    if (cfg.bloom) {
+                        LOG_WARN("Bloom disabled: the draw queue was not found in DrawFlush_GL");
+                    }
+                }
             } else {
                 const bool known =
                     !manifest.patterns.renderFog.empty() && !manifest.patterns.drawFlush.empty();
