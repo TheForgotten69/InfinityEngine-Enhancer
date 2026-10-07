@@ -1275,6 +1275,7 @@ void test_config_world_post() {
   expect_eq(defaults.lightSpill, 1.5f, "Light spill default");
   expect_eq(defaults.softFogDrift, 10.0f, "Soft fog drift default");
   expect_eq(defaults.softFogSmoothing, 0.25f, "Soft fog smoothing default");
+  expect_eq(defaults.heatShimmer, 2.5f, "Heat shimmer default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1288,6 +1289,7 @@ void test_config_world_post() {
     out << "LightSpill = 3\n";
     out << "SoftFogDrift = 20\n";
     out << "SoftFogSmoothing = 0.5\n";
+    out << "HeatShimmer = 4\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
@@ -1297,6 +1299,7 @@ void test_config_world_post() {
   expect_eq(cfg.lightSpill, 3.0f, "Light spill should parse");
   expect_eq(cfg.softFogDrift, 20.0f, "Soft fog drift should parse");
   expect_eq(cfg.softFogSmoothing, 0.5f, "Soft fog smoothing should parse");
+  expect_eq(cfg.heatShimmer, 4.0f, "Heat shimmer should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
@@ -1306,6 +1309,7 @@ void test_config_world_post() {
     out << "LightSpill = 700\n";
     out << "SoftFogDrift = -4\n";
     out << "SoftFogSmoothing = 99\n";
+    out << "HeatShimmer = 500\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
@@ -1314,6 +1318,7 @@ void test_config_world_post() {
   expect_eq(cfg.lightSpill, 8.0f, "Light spill is clamped to its maximum");
   expect_eq(cfg.softFogDrift, 0.0f, "Soft fog drift is clamped to 0");
   expect_eq(cfg.softFogSmoothing, 2.0f, "Soft fog smoothing is clamped to its maximum");
+  expect_eq(cfg.heatShimmer, 12.0f, "Heat shimmer is clamped to its maximum");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {

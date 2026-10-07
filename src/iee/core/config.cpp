@@ -62,11 +62,13 @@ static void normalize(EngineConfig& cfg) noexcept {
   if (!std::isfinite(cfg.softFogDrift)) cfg.softFogDrift = 10.0f;
   if (!std::isfinite(cfg.softFogSmoothing)) cfg.softFogSmoothing = 0.25f;
   if (!std::isfinite(cfg.lightSpill)) cfg.lightSpill = 1.5f;
+  if (!std::isfinite(cfg.heatShimmer)) cfg.heatShimmer = 2.5f;
   if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
   cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
   cfg.softFogDrift = std::clamp(cfg.softFogDrift, 0.0f, 64.0f);
   cfg.softFogSmoothing = std::clamp(cfg.softFogSmoothing, 0.0f, 2.0f);
   cfg.lightSpill = std::clamp(cfg.lightSpill, 0.0f, 8.0f);
+  cfg.heatShimmer = std::clamp(cfg.heatShimmer, 0.0f, 12.0f);
   cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
 
@@ -120,6 +122,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.bloom);
     else if (iequals(key, "LightSpill"))
       assign_float(cfg.lightSpill);
+    else if (iequals(key, "HeatShimmer"))
+      assign_float(cfg.heatShimmer);
     else if (iequals(key, "BloomStrength"))
       assign_float(cfg.bloomStrength);
     return;
@@ -225,6 +229,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   f << "SoftFogSmoothing = " << cfg.softFogSmoothing << "\n";
   write_bool(f, "Bloom", cfg.bloom);
   f << "LightSpill = " << cfg.lightSpill << "\n";
+  f << "HeatShimmer = " << cfg.heatShimmer << "\n";
   f << "BloomStrength = " << cfg.bloomStrength << "\n";
 
   write_section(f, "Detection");

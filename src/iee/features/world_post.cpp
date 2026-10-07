@@ -42,6 +42,14 @@ struct FogTemporalProgram {
   int blend{-1};
 };
 
+struct ShimmerProgram {
+  unsigned id{};
+  int worldOrigin{-1};
+  int worldSize{-1};
+  int strength{-1};
+  int time{-1};
+};
+
 struct FogProgram {
   unsigned id{};
   int worldOrigin{-1};
@@ -69,6 +77,7 @@ struct Settings {
   float lightSpill{};
   float fogDrift{};
   float fogSmoothing{};
+  float heatShimmer{};
 };
 
 // Everything that lives and dies with one GL context.
@@ -80,6 +89,7 @@ struct Resources {
   CompositeProgram composite{};
   FogProgram fog{};
   FogTemporalProgram fogTemporal{};
+  ShimmerProgram shimmer{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
   Target fogCapture{};
@@ -94,6 +104,7 @@ struct Resources {
   Target emissive{};
   Target emissiveHalf{};
   BlurChain bloomChain{};
+  Target sceneCopy{};  // the world image, read back while it is redrawn rippled
   bool fogDrawnOnce{};
   bool bloomDrawnOnce{};
 };
@@ -122,6 +133,22 @@ out vec2 vUv;
 void main() {
   vUv = aPosition * 0.5 + 0.5;
   gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+)glsl";
+
+// Smooth 2D value noise in [0, 1], shared by the shaders that animate. It is
+// handed to the compiler as a second source string after the shader that
+// declares `float noise(vec2 p);`.
+constexpr const char* kValueNoiseSource = R"glsl(
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float noise(vec2 p) {
+  vec2 cell = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(cell), hash(cell + vec2(1.0, 0.0)), f.x),
+             mix(hash(cell + vec2(0.0, 1.0)), hash(cell + vec2(1.0, 1.0)), f.x), f.y);
 }
 )glsl";
 
@@ -184,16 +211,7 @@ uniform float uDrift;
 uniform float uTime;
 in vec2 vUv;
 out vec4 fragColor;
-float hash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-float noise(vec2 p) {
-  vec2 cell = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(cell), hash(cell + vec2(1.0, 0.0)), f.x),
-             mix(hash(cell + vec2(0.0, 1.0)), hash(cell + vec2(1.0, 1.0)), f.x), f.y);
-}
+float noise(vec2 p);
 void main() {
   vec2 uv = vUv;
   if (uDrift > 0.0 && uWorldSize.x > 0.0 && uWorldSize.y > 0.0) {
@@ -208,6 +226,37 @@ void main() {
   vec3 visible = texture(uTexture, uv).rgb;
   float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   fragColor = vec4(visible + (grain - 0.5) / 255.0, 1.0);
+}
+)glsl";
+
+// Heat haze. Redraws the scene with its lookup rippled where the blurred
+// emissive image (uMask) is warm, i.e. redder than it is blue, so fires and
+// torches shimmer and cold or white magic does not. The mask is also read
+// from below each pixel, because hot air rises above its source. The ripple
+// is anchored to the world and flows upward.
+constexpr const char* kShimmerSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+uniform sampler2D uMask;
+uniform vec2 uWorldOrigin;
+uniform vec2 uWorldSize;
+uniform float uStrength;
+uniform float uTime;
+in vec2 vUv;
+out vec4 fragColor;
+float noise(vec2 p);
+float warmth(vec2 uv) {
+  vec3 light = texture(uMask, uv).rgb;
+  return light.r - light.b;
+}
+void main() {
+  vec2 rise = vec2(0.0, 26.0 / uWorldSize.y);
+  float heat = max(warmth(vUv), max(0.8 * warmth(vUv - rise), 0.5 * warmth(vUv - 2.0 * rise)));
+  heat = clamp(heat * 4.0, 0.0, 1.0);
+  vec2 world = uWorldOrigin + vec2(vUv.x, 1.0 - vUv.y) * uWorldSize;
+  vec2 p = world / 9.0;
+  vec2 ripple = vec2(noise(p + vec2(0.0, uTime * 2.2)), noise(p * 1.3 + vec2(7.0, uTime * 2.8))) - 0.5;
+  vec2 offset = ripple * 2.0 * uStrength * heat / uWorldSize;
+  fragColor = vec4(texture(uTexture, vUv + offset).rgb, 1.0);
 }
 )glsl";
 
@@ -254,11 +303,14 @@ void fail(const char* reason) noexcept {
   }
 }
 
-unsigned compile_shader(unsigned type, const char* source) noexcept {
+// `appended` is an optional second source string (shared helper functions).
+unsigned compile_shader(unsigned type, const char* source,
+                        const char* appended = nullptr) noexcept {
   const auto& fn = gl::get_gl_functions();
   const unsigned shader = fn.glCreateShader(type);
   if (!shader) return 0;
-  fn.glShaderSource(shader, 1, &source, nullptr);
+  const char* sources[2] = {source, appended};
+  fn.glShaderSource(shader, appended ? 2 : 1, sources, nullptr);
   fn.glCompileShader(shader);
   int status = 0;
   fn.glGetShaderiv(shader, gl::COMPILE_STATUS, &status);
@@ -275,10 +327,10 @@ unsigned compile_shader(unsigned type, const char* source) noexcept {
   return shader;
 }
 
-unsigned build_program(const char* fragmentSource) noexcept {
+unsigned build_program(const char* fragmentSource, const char* appended = nullptr) noexcept {
   const auto& fn = gl::get_gl_functions();
   const unsigned vertex = compile_shader(gl::VERTEX_SHADER, kVertexSource);
-  const unsigned fragment = compile_shader(gl::FRAGMENT_SHADER, fragmentSource);
+  const unsigned fragment = compile_shader(gl::FRAGMENT_SHADER, fragmentSource, appended);
   unsigned program = 0;
   if (vertex && fragment) {
     program = fn.glCreateProgram();
@@ -379,6 +431,11 @@ void set_pass_state() noexcept {
   fn.glActiveTexture(gl::TEXTURE0);
 }
 
+// Wrapped hourly so the float keeps sub-frame precision.
+float animation_seconds() noexcept {
+  return static_cast<float>(GetTickCount64() % 3600000ULL) / 1000.0f;
+}
+
 void draw_composite(unsigned texture, float scale, float dither, bool lightCurve = false) noexcept {
   const auto& fn = gl::get_gl_functions();
   fn.glUseProgram(g_resources.composite.id);
@@ -445,12 +502,21 @@ bool create_shared_resources() noexcept {
   resources.composite.id = build_program(kCompositeSource);
   resources.blurDown.id = build_program(kBlurDownSource);
   resources.blurUp.id = build_program(kBlurUpSource);
-  resources.fog.id = build_program(kFogSource);
+  resources.fog.id = build_program(kFogSource, kValueNoiseSource);
   resources.fogTemporal.id = build_program(kFogTemporalSource);
   if (!resources.composite.id || !resources.blurDown.id || !resources.blurUp.id ||
       !resources.fog.id || !resources.fogTemporal.id) {
     return false;
   }
+  resources.shimmer.id = build_program(kShimmerSource, kValueNoiseSource);
+  if (!resources.shimmer.id) return false;
+  auto& shimmer = resources.shimmer;
+  shimmer.worldOrigin = fn.glGetUniformLocation(shimmer.id, "uWorldOrigin");
+  shimmer.worldSize = fn.glGetUniformLocation(shimmer.id, "uWorldSize");
+  shimmer.strength = fn.glGetUniformLocation(shimmer.id, "uStrength");
+  shimmer.time = fn.glGetUniformLocation(shimmer.id, "uTime");
+  fn.glUseProgram(shimmer.id);
+  fn.glUniform1i(fn.glGetUniformLocation(shimmer.id, "uMask"), 1);
   auto& temporal = resources.fogTemporal;
   temporal.origin = fn.glGetUniformLocation(temporal.id, "uOrigin");
   temporal.size = fn.glGetUniformLocation(temporal.id, "uSize");
@@ -482,6 +548,7 @@ bool create_sized_resources(game::Extent viewport) noexcept {
   resources.fogHistoryValid = false;
   if (!create_target(resources.emissive, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
   if (!create_target(resources.emissiveHalf, half, gl::RGBA16F, gl::HALF_FLOAT)) return false;
+  if (!create_target(resources.sceneCopy, viewport, gl::RGBA8, gl::UNSIGNED_BYTE)) return false;
   if (!create_chain(resources.bloomChain, half)) return false;
   resources.viewport = viewport;
   return true;
@@ -527,6 +594,35 @@ void draw_bloom() noexcept {
   const int levels =
       run_blur(resources.emissiveHalf, resources.bloomChain, {planned, 1.0f}, true);
 
+  if (levels > 0 && g_settings.heatShimmer > 0.0f) {
+    // Before the glow is added, so the haze bends the scene and not the halo.
+    fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(g_engineDrawFramebuffer));
+    fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, resources.sceneCopy.framebuffer);
+    fn.glBlitFramebuffer(0, 0, resources.viewport.width, resources.viewport.height, 0, 0,
+                         resources.viewport.width, resources.viewport.height,
+                         gl::COLOR_BUFFER_BIT, gl::NEAREST);
+    bind_engine_framebuffer();
+    fn.glViewport(0, 0, resources.viewport.width, resources.viewport.height);
+    // Without the view transform, fall back to screen pixels as "world".
+    const bool viewKnown = g_view.width > 0.0f && g_view.height > 0.0f;
+    const auto& shimmer = resources.shimmer;
+    const int mask = levels > 1 ? 1 : 0;
+    fn.glUseProgram(shimmer.id);
+    fn.glUniform2f(shimmer.worldOrigin, viewKnown ? g_view.scrollX : 0.0f,
+                   viewKnown ? g_view.scrollY : 0.0f);
+    fn.glUniform2f(shimmer.worldSize,
+                   viewKnown ? g_view.width : static_cast<float>(resources.viewport.width),
+                   viewKnown ? g_view.height : static_cast<float>(resources.viewport.height));
+    fn.glUniform1f(shimmer.strength, g_settings.heatShimmer);
+    fn.glUniform1f(shimmer.time, animation_seconds());
+    fn.glActiveTexture(gl::TEXTURE0 + 1);
+    fn.glBindTexture(gl::TEXTURE_2D,
+                     resources.bloomChain.levels[static_cast<std::size_t>(mask)].texture);
+    fn.glActiveTexture(gl::TEXTURE0);
+    fn.glBindTexture(gl::TEXTURE_2D, resources.sceneCopy.texture);
+    fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+  }
+
   bind_engine_framebuffer();
   fn.glViewport(0, 0, resources.viewport.width, resources.viewport.height);
   if (levels > 0) {
@@ -568,7 +664,7 @@ void draw_bloom() noexcept {
 
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
   g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
-                cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing};
+                cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing, cfg.heatShimmer};
 }
 
 bool world_post_active() noexcept {
@@ -657,7 +753,7 @@ bool world_post_before_fog(const WorldView& view) noexcept {
 
   bool capturing = false;
   {
-    core::GlStateGuard textures({0});
+    core::GlStateGuard textures({0, 1});
     core::GlPassGuard pass;
     const int* viewport = pass.viewport();
     if (viewport[0] != 0 || viewport[1] != 0 || viewport[2] <= 0 || viewport[3] <= 0) {
@@ -763,9 +859,7 @@ void world_post_after_fog() noexcept {
     fn.glUniform2f(resources.fog.worldOrigin, g_view.scrollX, g_view.scrollY);
     fn.glUniform2f(resources.fog.worldSize, g_view.width, g_view.height);
     fn.glUniform1f(resources.fog.drift, g_settings.fogDrift);
-    // Wrapped hourly so the float keeps sub-frame precision.
-    fn.glUniform1f(resources.fog.time,
-                   static_cast<float>(GetTickCount64() % 3600000ULL) / 1000.0f);
+    fn.glUniform1f(resources.fog.time, animation_seconds());
     fn.glBindTexture(gl::TEXTURE_2D, fogTexture);
     fn.glDrawArrays(gl::TRIANGLES, 0, 3);
   } else {

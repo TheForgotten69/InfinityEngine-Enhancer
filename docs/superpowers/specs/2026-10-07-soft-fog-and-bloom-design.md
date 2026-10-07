@@ -315,3 +315,23 @@ and whenever the view transform is unknown. The unblurred path
 This relies on `area::read_view_transform` being correct at `RenderFog` time,
 which is not yet confirmed in game: a wrong scroll would show as fog trailing
 behind the camera.
+
+## 14. Revision 2026-10-07 (later): heat shimmer
+
+Owner verdict on section 13: fog smoothing is "perfect". Next pick: heat haze.
+Rejected by the owner: smoothing day/night transitions (areas swap maps, so
+there is nothing to blend) and radius-based light sources with wall blocking
+(not convinced it would work).
+
+`HeatShimmer` (world pixels, default 2.5, 0 = off, needs `Bloom`): after the
+emissive blur and before the glow is added, the world image is copied and
+redrawn with its lookup rippled by world-anchored, upward-flowing noise. The
+ripple is scaled by how warm the blurred emissive image is (red minus blue),
+read at the pixel and at two points below it so the haze sits above its
+source. Cold and white effects do not shimmer.
+
+All shaders are checked offline with `glslangValidator` (extract the
+`R"glsl(...)glsl"` bodies from `world_post.cpp`; append the shared noise
+source to those that declare `float noise(vec2 p);`). A shader that fails to
+compile in game switches fog and bloom off for the session, so run this
+before pushing shader changes.
