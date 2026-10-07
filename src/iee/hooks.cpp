@@ -19,6 +19,7 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
+#include "iee/features/world_post.h"
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
 #include "iee/game/animation_interp.h"
@@ -54,6 +55,12 @@ using VidCellAccessorFn = int (*)(void*, void*);
 static core::Hook<VidCellAccessorFn> g_vidCellGetFrameHook;
 static core::Hook<VidCellAccessorFn> g_vidCellCenterPointHook;
 static core::Hook<VidCellAccessorFn> g_vidCellFrameSizeHook;
+// CInfinity::RenderFog(CVidMode*, CVisibilityMap*) and the GL backend's
+// argument-less queue flush, used together by the world post passes.
+using RenderFogFn = void (*)(void*, void*, void*);
+using DrawFlushFn = void (*)();
+static core::Hook<RenderFogFn> g_renderFogHook;
+static DrawFlushFn g_drawFlush = nullptr;
 
 static AppContext* g_ctx = nullptr;
 // Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
@@ -262,6 +269,7 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
     ctx.reset_area_state();
     features::request_tile_render_state_reset();
     g_spriteMotionReset.store(true, std::memory_order_release);
+    features::world_post_on_area_load();
     game::request_texture_configuration_cache_reset();
   } catch (const std::exception& e) {
     LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path: {}", e.what());
@@ -430,6 +438,32 @@ static constexpr std::array<SpriteRenderFn, sizeof...(Slots)> object_render_deto
 }
 static constexpr auto kObjectRenderDetours =
     object_render_detours(std::make_index_sequence<game::kMaxSmoothedObjectRenders>{});
+
+// World post passes (soft fog of war, bloom). The engine queues every draw
+// and submits the queue in DrawFlush_GL at the end of the frame, so the world
+// only exists in the framebuffer once we flush, and the fog only lands in our
+// target if we flush again while it is bound. With both effects off this
+// detour is a plain pass-through: no flush, the frame is the engine's own.
+static void detour_render_fog(void* infinity, void* vidMode, void* visibility) {
+  const auto original = g_renderFogHook.original();
+  if (g_ctx && g_ctx->cfg.enableDebugHotkeys) features::world_post_poll_hotkeys();
+  if (!g_ctx || !g_drawFlush || !features::world_post_active()) {
+    original(infinity, vidMode, visibility);
+    return;
+  }
+  float viewWorldWidth = 0.0f;
+  if (const auto* activeArea = g_ctx->activeArea.load()) {
+    area::ViewTransform view{};
+    if (area::read_view_transform(activeArea, view)) viewWorldWidth = view.viewWorldW;
+  }
+  g_drawFlush();
+  const bool capturing = features::world_post_before_fog(viewWorldWidth);
+  original(infinity, vidMode, visibility);
+  if (capturing) {
+    g_drawFlush();
+    features::world_post_after_fog();
+  }
+}
 
 // CGameStatic::Render hook: while the fpSEAM point effects are active, the
 // authored fire/smoke BAM draws are replaced by our textured effects, so the
@@ -625,6 +659,22 @@ bool install_all(AppContext& ctx) {
       LOG_INFO("Object movement smoothing hooks installed: {}", installed);
     }
 
+    if (ctx.addrs.RenderFog && ctx.addrs.DrawFlush) {
+      try {
+        features::world_post_configure(ctx.cfg);
+        g_drawFlush = reinterpret_cast<DrawFlushFn>(ctx.addrs.DrawFlush);
+        g_renderFogHook.create(reinterpret_cast<void*>(ctx.addrs.RenderFog),
+                               reinterpret_cast<void*>(&detour_render_fog));
+        g_renderFogHook.enable();
+        LOG_INFO("CInfinity::RenderFog hook installed (soft fog of war={}, bloom={})",
+                 ctx.cfg.softFogOfWar, ctx.cfg.bloom);
+      } catch (...) {
+        g_drawFlush = nullptr;
+        (void)g_renderFogHook.remove();
+        LOG_WARN("CInfinity::RenderFog hook failed; fog of war and bloom stay vanilla");
+      }
+    }
+
     g_loadAreaHook.enable();
     LOG_INFO("LoadArea hook enabled");
 
@@ -666,6 +716,9 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_renderFogHook.remove();
+  g_drawFlush = nullptr;
+  features::world_post_forget();
   g_animationInterpActive = false;
   (void)g_vidCellFrameSizeHook.remove();
   (void)g_vidCellCenterPointHook.remove();
@@ -694,6 +747,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_renderFogHook.disable();
   (void)g_vidCellFrameSizeHook.disable();
   (void)g_vidCellCenterPointHook.disable();
   (void)g_vidCellGetFrameHook.disable();

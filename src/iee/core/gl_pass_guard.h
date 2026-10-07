@@ -6,6 +6,7 @@ namespace iee::core {
 // Saves the GL state our own draw passes change and puts it back on scope
 // exit. The engine issues state changes relative to what it believes the
 // hardware state is, so anything left altered corrupts its next draws.
+// Covers program, vertex array, viewport, blending and the per-fragment tests.
 // Framebuffer and texture bindings are not covered: the caller owns the
 // framebuffer hand-over, and GlStateGuard covers texture units.
 // Requires OpenGLFunctions::postProcessAvailable.
@@ -26,6 +27,8 @@ class GlPassGuard {
     scissor_ = gl.glIsEnabled(game::gl::SCISSOR_TEST) != 0;
     depthTest_ = gl.glIsEnabled(game::gl::DEPTH_TEST) != 0;
     cullFace_ = gl.glIsEnabled(game::gl::CULL_FACE) != 0;
+    stencilTest_ = gl.glIsEnabled(game::gl::STENCIL_TEST) != 0;
+    alphaTest_ = gl.glIsEnabled(game::gl::ALPHA_TEST) != 0;
   }
 
   ~GlPassGuard() noexcept {
@@ -41,6 +44,8 @@ class GlPassGuard {
     set(game::gl::SCISSOR_TEST, scissor_);
     set(game::gl::DEPTH_TEST, depthTest_);
     set(game::gl::CULL_FACE, cullFace_);
+    set(game::gl::STENCIL_TEST, stencilTest_);
+    set(game::gl::ALPHA_TEST, alphaTest_);
     gl.glBlendFuncSeparate(
         static_cast<unsigned>(blendSrcRgb_), static_cast<unsigned>(blendDstRgb_),
         static_cast<unsigned>(blendSrcAlpha_), static_cast<unsigned>(blendDstAlpha_));
@@ -71,5 +76,7 @@ class GlPassGuard {
   bool scissor_{};
   bool depthTest_{};
   bool cullFace_{};
+  bool stencilTest_{};
+  bool alphaTest_{};
 };
 }  // namespace iee::core

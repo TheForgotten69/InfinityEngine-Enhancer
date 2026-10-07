@@ -150,6 +150,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/dll_main.cpp
         src/iee/exports.cpp
         src/iee/features/tile_render.cpp
+        src/iee/features/world_post.cpp
         src/iee/frame_hook.cpp
         src/iee/hooks.cpp
         src/iee/shader_diagnostics.cpp
