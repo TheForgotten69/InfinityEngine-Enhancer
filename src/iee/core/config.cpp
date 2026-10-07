@@ -71,6 +71,7 @@ static void normalize(EngineConfig& cfg) noexcept {
   cfg.lightSpill = std::clamp(cfg.lightSpill, 0.0f, 8.0f);
   cfg.heatShimmer = std::clamp(cfg.heatShimmer, 0.0f, 12.0f);
   cfg.spriteSharpness = std::clamp(cfg.spriteSharpness, 0.0f, 1.0f);
+  cfg.spriteFilter = std::clamp(cfg.spriteFilter, 1, 4);
   cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
 
@@ -130,6 +131,13 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.spriteUpscale);
     else if (iequals(key, "SpriteSharpness"))
       assign_float(cfg.spriteSharpness);
+    else if (iequals(key, "SpriteFilter")) {
+      float filter = static_cast<float>(cfg.spriteFilter);
+      assign_float(filter);
+      if (std::isfinite(filter)) {
+        cfg.spriteFilter = static_cast<int>(std::lround(std::clamp(filter, 0.0f, 100.0f)));
+      }
+    }
     else if (iequals(key, "BloomStrength"))
       assign_float(cfg.bloomStrength);
     return;
@@ -238,6 +246,7 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   f << "HeatShimmer = " << cfg.heatShimmer << "\n";
   write_bool(f, "SpriteUpscale", cfg.spriteUpscale);
   f << "SpriteSharpness = " << cfg.spriteSharpness << "\n";
+  f << "SpriteFilter = " << cfg.spriteFilter << "\n";
   f << "BloomStrength = " << cfg.bloomStrength << "\n";
 
   write_section(f, "Detection");

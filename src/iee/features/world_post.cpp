@@ -47,10 +47,10 @@ struct SharpenProgram {
   int sharpness{-1};
 };
 
-// One sprite atlas's upscaled copies: the edge-adaptive 2x image and the
-// sharpened result the engine then draws from.
+// One sprite atlas's upscaled copies: up to two 2x stages, and the sharpened
+// result when sharpening is on. The engine draws from the last one written.
 struct AtlasTargets {
-  Target upscaled{};
+  std::array<Target, 2> stages{};
   Target sharpened{};
 };
 
@@ -90,7 +90,7 @@ struct Settings {
   float fogDrift{};
   float fogSmoothing{};
   float heatShimmer{};
-  bool spriteUpscale{};
+  int spriteFilter{};  // 0 = off; see game::sprite_filter_plan
   float spriteSharpness{};
 };
 
@@ -105,6 +105,7 @@ struct Resources {
   FogTemporalProgram fogTemporal{};
   ShimmerProgram shimmer{};
   unsigned spriteUpscale{};
+  unsigned spriteCatmullRom{};
   SharpenProgram spriteSharpen{};
   std::array<AtlasTargets, 2> atlases{};
   bool atlasDrawnOnce{};
@@ -350,6 +351,36 @@ void main() {
   accumulate(colour, weight, vec2(1.0, 2.0) - pp, dir, len2, lobe, clip, o);
   accumulate(colour, weight, vec2(0.0, 2.0) - pp, dir, len2, lobe, clip, n);
   fragColor = clamp(colour / weight, lowest, highest);
+}
+)glsl";
+
+// Catmull-Rom bicubic at exactly 2x, texel to texel like the pass above. It
+// does not follow edges, but it keeps the sprite's own shading crisp, which
+// makes it a good first stage in front of the edge-adaptive one.
+constexpr const char* kSpriteCatmullRomSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+out vec4 fragColor;
+vec4 weights(float t) {
+  float t2 = t * t;
+  float t3 = t2 * t;
+  return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0,
+              -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+void main() {
+  ivec2 size = textureSize(uTexture, 0);
+  vec2 pp = gl_FragCoord.xy * 0.5 - 0.5;
+  vec2 fp = floor(pp);
+  vec4 wx = weights(pp.x - fp.x);
+  vec4 wy = weights(pp.y - fp.y);
+  ivec2 ip = ivec2(fp);
+  vec4 sum = vec4(0.0);
+  for (int j = 0; j < 4; ++j) {
+    for (int i = 0; i < 4; ++i) {
+      sum += texelFetch(uTexture, clamp(ip + ivec2(i - 1, j - 1), ivec2(0), size - 1), 0) *
+             (wx[i] * wy[j]);
+    }
+  }
+  fragColor = clamp(sum, 0.0, 1.0);
 }
 )glsl";
 
@@ -659,8 +690,10 @@ bool create_shared_resources() noexcept {
   }
   resources.shimmer.id = build_program(kShimmerSource, kValueNoiseSource);
   resources.spriteUpscale = build_program(kSpriteUpscaleSource);
+  resources.spriteCatmullRom = build_program(kSpriteCatmullRomSource);
   resources.spriteSharpen.id = build_program(kSpriteSharpenSource);
-  if (!resources.shimmer.id || !resources.spriteUpscale || !resources.spriteSharpen.id) {
+  if (!resources.shimmer.id || !resources.spriteUpscale || !resources.spriteCatmullRom ||
+      !resources.spriteSharpen.id) {
     return false;
   }
   resources.spriteSharpen.sharpness =
@@ -827,13 +860,13 @@ void draw_bloom() noexcept {
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
   g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
                 cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing, cfg.heatShimmer,
-                cfg.spriteUpscale, cfg.spriteSharpness};
+                cfg.spriteUpscale ? cfg.spriteFilter : 0, cfg.spriteSharpness};
 }
 
 bool world_post_active() noexcept {
   // Sprite upscaling needs the world flushed before the UI is queued, which
   // is what the fog detour does when this is true.
-  return !g_failed && (g_settings.softFog || g_settings.bloom || g_settings.spriteUpscale);
+  return !g_failed && (g_settings.softFog || g_settings.bloom || g_settings.spriteFilter != 0);
 }
 
 void world_post_poll_hotkeys() noexcept {
@@ -852,10 +885,13 @@ void world_post_poll_hotkeys() noexcept {
   if (!fogPressed && !bloomPressed && !spritePressed) return;
   if (fogPressed) g_settings.softFog = !g_settings.softFog;
   if (bloomPressed) g_settings.bloom = !g_settings.bloom;
-  if (spritePressed) g_settings.spriteUpscale = !g_settings.spriteUpscale;
+  if (spritePressed) {
+    g_settings.spriteFilter = (g_settings.spriteFilter + 1) % (game::kSpriteFilterCount + 1);
+  }
   try {
-    LOG_INFO("Hotkey: soft fog of war={}, bloom={}, sprite upscale={}", g_settings.softFog,
-             g_settings.bloom, g_settings.spriteUpscale);
+    LOG_INFO("Hotkey: soft fog of war={}, bloom={}, sprite filter={} ({})", g_settings.softFog,
+             g_settings.bloom, g_settings.spriteFilter,
+             game::sprite_filter_plan(g_settings.spriteFilter).name);
   } catch (...) {
   }
 }
@@ -867,14 +903,15 @@ void world_post_on_frame() noexcept {
 }
 
 bool world_post_wants_atlas_upscale() noexcept {
-  return g_worldPass.open() && g_settings.spriteUpscale && !g_failed;
+  return g_worldPass.open() && g_settings.spriteFilter != 0 && !g_failed;
 }
 
 unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, int height,
                                   int rows) noexcept {
   const auto& fn = gl::get_gl_functions();
-  if (!fn.postProcessAvailable || slot < 0 || slot >= 2 || !sourceTexture || width <= 0 ||
-      height <= 0 || width > 4096 || height > 4096 || rows <= 0) {
+  const auto plan = game::sprite_filter_plan(g_settings.spriteFilter);
+  if (!fn.postProcessAvailable || plan.count <= 0 || slot < 0 || slot >= 2 || !sourceTexture ||
+      width <= 0 || height <= 0 || width > 2048 || height > 2048 || rows <= 0) {
     return 0;
   }
   int drawFramebuffer = 0;
@@ -885,31 +922,52 @@ unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, i
   {
     core::GlStateGuard textures({0});
     core::GlPassGuard pass;
-    const game::Extent doubled{width * 2, height * 2};
     bool ready = ensure_shared_resources();
     if (ready) {
       auto& atlas = g_resources.atlases[static_cast<std::size_t>(slot)];
-      if (!(atlas.sharpened.extent == doubled)) {
+      // Every stage is created at its final size for this filter, once.
+      const auto ensure_target = [&](Target& target, game::Extent extent) {
+        if (target.extent == extent) return true;
         gl::discard_errors();
-        ready = create_target(atlas.upscaled, doubled, gl::RGBA8, gl::UNSIGNED_BYTE) &&
-                create_target(atlas.sharpened, doubled, gl::RGBA8, gl::UNSIGNED_BYTE) &&
-                gl::check_error("sprite atlas targets");
+        return create_target(target, extent, gl::RGBA8, gl::UNSIGNED_BYTE) &&
+               gl::check_error("sprite atlas target");
+      };
+      set_pass_state();
+      unsigned input = sourceTexture;
+      game::Extent size{width, height};
+      int outputRows = rows;
+      for (int stage = 0; stage < plan.count && ready; ++stage) {
+        size = {size.width * 2, size.height * 2};
+        // Only the rows the engine just filled, plus margin for the kernels.
+        outputRows = outputRows * 2 + 4 < size.height ? outputRows * 2 + 4 : size.height;
+        auto& target = atlas.stages[static_cast<std::size_t>(stage)];
+        ready = ensure_target(target, size);
+        if (!ready) break;
+        fn.glActiveTexture(gl::TEXTURE0);
+        fn.glBindFramebuffer(gl::FRAMEBUFFER, target.framebuffer);
+        fn.glViewport(0, 0, size.width, outputRows);
+        fn.glUseProgram(plan.stages[stage] == game::SpriteStage::Easu
+                            ? g_resources.spriteUpscale
+                            : g_resources.spriteCatmullRom);
+        fn.glBindTexture(gl::TEXTURE_2D, input);
+        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+        input = target.texture;
+      }
+      if (ready && g_settings.spriteSharpness > 0.0f) {
+        ready = ensure_target(atlas.sharpened, size);
+        if (ready) {
+          fn.glActiveTexture(gl::TEXTURE0);
+          fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.sharpened.framebuffer);
+          fn.glViewport(0, 0, size.width, outputRows);
+          fn.glUseProgram(g_resources.spriteSharpen.id);
+          fn.glUniform1f(g_resources.spriteSharpen.sharpness, g_settings.spriteSharpness);
+          fn.glBindTexture(gl::TEXTURE_2D, input);
+          fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+          input = atlas.sharpened.texture;
+        }
       }
       if (ready) {
-        // Only the rows the engine just filled; two rows of margin for the kernel.
-        const int outputRows = rows * 2 + 4 < doubled.height ? rows * 2 + 4 : doubled.height;
-        set_pass_state();
-        fn.glViewport(0, 0, doubled.width, outputRows);
-        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.upscaled.framebuffer);
-        fn.glUseProgram(g_resources.spriteUpscale);
-        fn.glBindTexture(gl::TEXTURE_2D, sourceTexture);
-        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
-        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.sharpened.framebuffer);
-        fn.glUseProgram(g_resources.spriteSharpen.id);
-        fn.glUniform1f(g_resources.spriteSharpen.sharpness, g_settings.spriteSharpness);
-        fn.glBindTexture(gl::TEXTURE_2D, atlas.upscaled.texture);
-        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
-        result = atlas.sharpened.texture;
+        result = input;
         ++g_atlasUpscalesSinceArea;
         if (!g_resources.atlasDrawnOnce) {
           g_resources.atlasDrawnOnce = true;
@@ -918,8 +976,8 @@ unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, i
             ready = false;
           } else {
             try {
-              LOG_INFO("World post: first sprite atlas upscaled ({}x{} -> {}x{}, {} rows)", width,
-                       height, doubled.width, doubled.height, rows);
+              LOG_INFO("World post: first sprite atlas upscaled ({}: {}x{} -> {}x{}, {} rows)",
+                       plan.name, width, height, size.width, size.height, rows);
             } catch (...) {
             }
           }
@@ -1022,11 +1080,12 @@ bool world_post_before_fog(const WorldView& view) noexcept {
           LOG_INFO(
               "World post: softFog={} (radius {} world px, blur levels={} offset={:.2f}), "
               "bloom={} (strength {}, light spill {}, {} additive draws this frame), sprite "
-              "upscale={} ({} atlas passes, {} frame boundaries since the last area frame), "
+              "filter={} ({} atlas passes, {} frame boundaries since the last area frame), "
               "viewport {}x{}, {:.3f} px per world px, engine framebuffer draw={} read={}",
               g_settings.softFog, g_settings.fogRadius, plan.levels, plan.offset,
               g_settings.bloom, g_settings.bloomStrength, g_settings.lightSpill,
-              g_emissiveFrame == g_frame ? g_emissiveCommands : 0, g_settings.spriteUpscale,
+              g_emissiveFrame == g_frame ? g_emissiveCommands : 0,
+              game::sprite_filter_plan(g_settings.spriteFilter).name,
               g_atlasUpscalesSinceArea, g_frameTicksSinceArea, viewport[2], viewport[3],
               g_pixelsPerWorldPixel, g_engineDrawFramebuffer, g_engineReadFramebuffer);
         } catch (...) {

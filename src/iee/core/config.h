@@ -21,7 +21,10 @@ struct EngineConfig {
   float heatShimmer = 1.5f;
   // Edge-adaptive 2x upscale (FSR1) of the sprite atlas before it is drawn.
   bool spriteUpscale = false;
-  float spriteSharpness = 0.5f;  // 0 = no sharpening pass effect, 1 = strongest
+  float spriteSharpness = 0.5f;  // 0 = no sharpening pass, 1 = strongest
+  // 1 = FSR1 EASU 2x, 2 = Catmull-Rom 2x, 3 = Catmull-Rom 2x then EASU 2x,
+  // 4 = EASU 2x twice.
+  int spriteFilter = 3;
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;
