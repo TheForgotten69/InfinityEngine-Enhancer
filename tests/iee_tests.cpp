@@ -1276,6 +1276,8 @@ void test_config_world_post() {
   expect_eq(defaults.softFogDrift, 10.0f, "Soft fog drift default");
   expect_eq(defaults.softFogSmoothing, 0.25f, "Soft fog smoothing default");
   expect_eq(defaults.heatShimmer, 1.5f, "Heat shimmer default");
+  expect_true(!defaults.spriteUpscale, "Sprite upscaling defaults off");
+  expect_eq(defaults.spriteSharpness, 0.5f, "Sprite sharpness default");
   expect_eq(defaults.bloomStrength, 0.35f, "Bloom strength default");
 
   const auto tempPath =
@@ -1290,6 +1292,8 @@ void test_config_world_post() {
     out << "SoftFogDrift = 20\n";
     out << "SoftFogSmoothing = 0.5\n";
     out << "HeatShimmer = 4\n";
+    out << "SpriteUpscale = true\n";
+    out << "SpriteSharpness = 0.8\n";
     out << "BloomStrength = 0.5\n";
   }
   iee::core::EngineConfig cfg{};
@@ -1300,6 +1304,8 @@ void test_config_world_post() {
   expect_eq(cfg.softFogDrift, 20.0f, "Soft fog drift should parse");
   expect_eq(cfg.softFogSmoothing, 0.5f, "Soft fog smoothing should parse");
   expect_eq(cfg.heatShimmer, 4.0f, "Heat shimmer should parse");
+  expect_true(cfg.spriteUpscale, "Sprite upscaling should parse");
+  expect_eq(cfg.spriteSharpness, 0.8f, "Sprite sharpness should parse");
   expect_eq(cfg.bloomStrength, 0.5f, "Bloom strength should parse");
 
   {
@@ -1310,6 +1316,7 @@ void test_config_world_post() {
     out << "SoftFogDrift = -4\n";
     out << "SoftFogSmoothing = 99\n";
     out << "HeatShimmer = 500\n";
+    out << "SpriteSharpness = 9\n";
     out << "BloomStrength = -3\n";
   }
   cfg = {};
@@ -1319,6 +1326,7 @@ void test_config_world_post() {
   expect_eq(cfg.softFogDrift, 0.0f, "Soft fog drift is clamped to 0");
   expect_eq(cfg.softFogSmoothing, 2.0f, "Soft fog smoothing is clamped to its maximum");
   expect_eq(cfg.heatShimmer, 12.0f, "Heat shimmer is clamped to its maximum");
+  expect_eq(cfg.spriteSharpness, 1.0f, "Sprite sharpness is clamped to 1");
   expect_eq(cfg.bloomStrength, 0.0f, "Bloom strength is clamped to 0");
 
   {
@@ -1463,6 +1471,74 @@ void test_tick_clock_and_particle_backstep() {
               "A NaN phase draws the logic position");
   expect_true(particle_draw_position(falling, 7.0) == ParticlePoint{1000, 2000, 300},
               "A phase past the end draws the logic position");
+}
+
+void test_sprite_atlas_lookup() {
+  using namespace iee::game;
+  const auto found = find_manifest("BGEE 2.7.3.x");
+  expect_true(found.has_value(), "The 2.7.3 manifest should be registered");
+  if (!found) return;
+  expect_true(found->get().spriteAtlas.valid(), "2.7.3 should describe the sprite atlas");
+  expect_true(!found->get().patterns.textureUpload.empty(), "2.7.3 should carry the upload pattern");
+  expect_eq(found->get().referenceRvas.textureUpload, std::uintptr_t{0x42D190},
+            "TexSubImage_GL reference RVA");
+  expect_true(!current_manifest().spriteAtlas.valid(), "2.6.6 has no sprite atlas layout");
+
+  // A small stand-in for the engine's GL state block, same shape, smaller gaps.
+  SpriteAtlasLayout layout{};
+  layout.userStateBeforeCount = 0x64;
+  layout.texturesBeforeCount = 0x800;
+  layout.textureEntrySize = 0x28;
+  layout.atlasAfterCount = 0x80;
+  layout.atlasStride = 0x30;
+  layout.atlasCount = 2;
+  layout.widthOffset = 0x00;
+  layout.heightOffset = 0x04;
+  layout.texelsOffset = 0x20;
+  layout.textureIndexOffset = 0x28;
+  layout.textureShift = 21;
+  layout.textureMask = 0x1FF;
+  expect_true(layout.valid(), "The stand-in layout is complete");
+
+  std::vector<std::uint8_t> block(0x1000, 0);
+  const auto count = reinterpret_cast<std::uintptr_t>(block.data()) + 0x800;
+  const auto put32 = [&](std::size_t offset, std::uint32_t value) {
+    std::memcpy(block.data() + offset, &value, sizeof(value));
+  };
+  const auto put64 = [&](std::size_t offset, std::uint64_t value) {
+    std::memcpy(block.data() + offset, &value, sizeof(value));
+  };
+  int texelsA = 0;
+  int texelsB = 0;
+  // Atlas 0: 1024x1024, texture index 3. Atlas 1: 1024x512, texture index 4.
+  put32(0x880 + 0x00, 1024);
+  put32(0x880 + 0x04, 1024);
+  put64(0x880 + 0x20, reinterpret_cast<std::uintptr_t>(&texelsA));
+  put32(0x880 + 0x28, 3);
+  put32(0x8B0 + 0x00, 1024);
+  put32(0x8B0 + 0x04, 512);
+  put64(0x8B0 + 0x20, reinterpret_cast<std::uintptr_t>(&texelsB));
+  put32(0x8B0 + 0x28, 4);
+  put32(3 * 0x28, 77);  // GL name of texture 3
+  put32(4 * 0x28, 88);
+
+  put32(0x800 - 0x64, 4u << 21);  // the engine has texture 4 selected
+  expect_eq(atlas_slot_for_upload(layout, count, &texelsB), 1,
+            "An upload of an atlas's own buffer to its own texture is recognised");
+  expect_eq(atlas_slot_for_upload(layout, count, &texelsA), -1,
+            "The other atlas's buffer with the wrong texture selected is not");
+  int other = 0;
+  expect_eq(atlas_slot_for_upload(layout, count, &other), -1, "Any other upload is ignored");
+  expect_eq(atlas_slot_for_upload(layout, count, nullptr), -1, "A null buffer is ignored");
+  expect_eq(atlas_slot_for_upload(layout, 0, &texelsB), -1, "An unresolved state block is ignored");
+
+  const auto atlas = atlas_info(layout, count, 1);
+  expect_eq(atlas.width, 1024, "The atlas width is read from its descriptor");
+  expect_eq(atlas.height, 512, "The atlas height is read from its descriptor");
+  expect_true(atlas.textureName != nullptr && *atlas.textureName == 88u,
+              "The atlas's GL texture name is found in the texture table");
+  expect_true(atlas_info(layout, count, 2).textureName == nullptr, "An out-of-range slot has none");
+  expect_true(atlas_info(layout, count, -1).textureName == nullptr, "A negative slot has none");
 }
 
 void test_world_post_plan() {
@@ -2337,6 +2413,7 @@ int main() {
   test_world_post_plan();
   test_tick_clock_and_particle_backstep();
   test_draw_queue();
+  test_sprite_atlas_lookup();
   test_build_area_effect_points();
   test_config_detection_section();
   test_config_world_post();

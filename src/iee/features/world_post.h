@@ -28,7 +28,7 @@ struct WorldView {
 void world_post_configure(const core::EngineConfig& cfg) noexcept;
 // True when at least one effect is switched on and no pass has failed.
 bool world_post_active() noexcept;
-// Debug A/B: F8 toggles soft fog of war, F9 toggles bloom. Call once per
+// Debug A/B: F7 toggles sprite upscaling, F8 soft fog of war, F9 bloom. Call once per
 // frame, only when debug hotkeys are enabled.
 void world_post_poll_hotkeys() noexcept;
 // Frame boundary: the next world pass starts.
@@ -46,6 +46,17 @@ void world_post_on_frame() noexcept;
 bool world_post_wants_emissive() noexcept;
 bool world_post_begin_emissive() noexcept;
 void world_post_end_emissive(int commands) noexcept;
+// Sprite smoothing. The engine composites sprites on the CPU into a streaming
+// atlas and uploads it at the start of a flush. Right after that upload, in
+// the world pass, the atlas is upscaled 2x with FSR1 (edge-adaptive upsample,
+// then sharpen); the caller makes the engine draw from the returned texture
+// for the rest of that flush and puts the engine's own back afterwards.
+// Normalised texture coordinates are unchanged by the larger texture.
+bool world_post_wants_atlas_upscale() noexcept;
+// Returns the GL name of the upscaled texture, or 0 to leave the atlas alone.
+// `rows` is how many atlas rows the engine just uploaded.
+unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, int height,
+                                  int rows) noexcept;
 bool world_post_before_fog(const WorldView& view) noexcept;
 void world_post_after_fog() noexcept;
 // Any thread. The next frame logs what engaged.

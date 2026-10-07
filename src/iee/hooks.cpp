@@ -69,6 +69,16 @@ static DrawFlushFn g_drawFlush = nullptr;
 static core::Hook<DrawFlushFn> g_drawFlushHook;
 static std::int32_t* g_drawQueueCount = nullptr;
 static game::DrawCommand* g_drawQueueCommands = nullptr;
+// TexSubImage_GL(x, y, width, rows, pixels, secondTexture): the engine's
+// texture upload, hooked for the sprite atlas.
+using TextureUploadFn = void (*)(int, int, int, int, void*, bool);
+static core::Hook<TextureUploadFn> g_textureUploadHook;
+// Atlas textures replaced by their upscaled copies for the current flush.
+struct SwappedAtlas {
+  std::uint32_t* name{};
+  std::uint32_t original{};
+};
+static std::array<SwappedAtlas, 2> g_swappedAtlases{};
 
 // CParticle::AsynchronousUpdate() and CParticle::Render(CPoint&, CRect&, type, n).
 using ParticleUpdateFn = unsigned char (*)(void*);
@@ -510,7 +520,7 @@ static constexpr auto kObjectRenderDetours =
 // holds only those commands, with our black emissive target bound. The vertex
 // data and textures of the first flush are still in place: the engine only
 // overwrites them when new draws are queued. Render thread only.
-static void detour_draw_flush() {
+static void flush_with_emissive_replay() {
   const auto original = g_drawFlushHook.original();
   if (!g_ctx || !g_drawQueueCount || !features::world_post_wants_emissive()) {
     original();
@@ -525,6 +535,41 @@ static void detour_draw_flush() {
   *g_drawQueueCount = static_cast<std::int32_t>(collected);
   original();
   features::world_post_end_emissive(static_cast<int>(collected));
+}
+
+static void detour_draw_flush() {
+  flush_with_emissive_replay();
+  // The engine uploads into, and binds, whatever name its texture table
+  // holds: give it its own atlas textures back before the next upload.
+  for (auto& swapped : g_swappedAtlases) {
+    if (swapped.name) *swapped.name = swapped.original;
+    swapped = {};
+  }
+}
+
+// Sprite smoothing. A flush starts by uploading the CPU-composited sprite
+// atlas, then draws from it. Right after that upload the atlas is upscaled
+// (FSR1) into our own texture, whose name replaces the atlas's in the engine's
+// texture table until the flush is over. The upload has just marked the
+// texture as needing a rebind, so the first draw picks ours up.
+static void detour_texture_upload(int x, int y, int width, int rows, void* pixels, bool second) {
+  g_textureUploadHook.original()(x, y, width, rows, pixels, second);
+  if (!g_ctx || !g_drawQueueCount || second || x != 0 || y != 0 ||
+      !features::world_post_wants_atlas_upscale()) {
+    return;
+  }
+  const auto& layout = g_ctx->manifest->spriteAtlas;
+  const auto count = reinterpret_cast<std::uintptr_t>(g_drawQueueCount);
+  const int slot = game::atlas_slot_for_upload(layout, count, pixels);
+  if (slot < 0 || static_cast<std::size_t>(slot) >= g_swappedAtlases.size()) return;
+  auto& swapped = g_swappedAtlases[static_cast<std::size_t>(slot)];
+  const auto atlas = game::atlas_info(layout, count, slot);
+  if (!atlas.textureName || swapped.name || atlas.width != width) return;
+  const unsigned upscaled = features::world_post_upscale_atlas(slot, *atlas.textureName,
+                                                               atlas.width, atlas.height, rows);
+  if (!upscaled) return;
+  swapped = {atlas.textureName, *atlas.textureName};
+  *atlas.textureName = upscaled;
 }
 
 // World post passes (soft fog of war, bloom). The engine queues every draw
@@ -781,8 +826,16 @@ bool install_all(AppContext& ctx) {
                                  reinterpret_cast<void*>(&detour_draw_flush));
           g_drawFlushHook.enable();
           LOG_INFO("DrawFlush_GL hook installed (bloom from the engine's additive draws)");
+          if (ctx.addrs.TextureUpload) {
+            g_textureUploadHook.create(reinterpret_cast<void*>(ctx.addrs.TextureUpload),
+                                       reinterpret_cast<void*>(&detour_texture_upload));
+            g_textureUploadHook.enable();
+            LOG_INFO("TexSubImage_GL hook installed (sprite upscaling={})",
+                     ctx.cfg.spriteUpscale);
+          }
         }
       } catch (...) {
+        (void)g_textureUploadHook.remove();
         g_drawQueueCount = nullptr;
         g_drawQueueCommands = nullptr;
         (void)g_drawFlushHook.remove();
@@ -833,6 +886,7 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_textureUploadHook.remove();
   (void)g_drawFlushHook.remove();
   g_drawQueueCount = nullptr;
   g_drawQueueCommands = nullptr;
@@ -869,6 +923,7 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_textureUploadHook.disable();
   (void)g_drawFlushHook.disable();
   (void)g_renderFogHook.disable();
   (void)g_vidCellFrameSizeHook.disable();

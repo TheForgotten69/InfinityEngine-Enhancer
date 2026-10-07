@@ -32,4 +32,20 @@ std::uintptr_t draw_queue_count_address(const DrawQueueLayout& layout,
                                         std::uintptr_t drawFlush) noexcept;
 std::uintptr_t draw_queue_commands_address(const DrawQueueLayout& layout,
                                            std::uintptr_t countAddress) noexcept;
+
+// Which sprite atlas the engine is uploading, given the pixel buffer passed
+// to its upload: the buffer must be that atlas's own, and the texture the
+// engine has selected must be that atlas's texture. -1 for any other upload.
+int atlas_slot_for_upload(const SpriteAtlasLayout& layout, std::uintptr_t countAddress,
+                          const void* pixels) noexcept;
+
+struct SpriteAtlasInfo {
+  int width{};
+  int height{};
+  // The atlas's GL texture name inside the engine's texture table; the engine
+  // binds whatever is stored here. Null for an invalid slot.
+  std::uint32_t* textureName{};
+};
+SpriteAtlasInfo atlas_info(const SpriteAtlasLayout& layout, std::uintptr_t countAddress,
+                           int slot) noexcept;
 }  // namespace iee::game

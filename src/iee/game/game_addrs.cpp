@@ -156,7 +156,7 @@ namespace iee::game {
 
         // Optional targets: world post passes. Resolved only when requested
         // (or when debug hotkeys can switch them on), and only as a pair.
-        if (cfg.softFogOfWar || cfg.bloom || cfg.enableDebugHotkeys) {
+        if (cfg.softFogOfWar || cfg.bloom || cfg.spriteUpscale || cfg.enableDebugHotkeys) {
             out.RenderFog = resolveOptional("CInfinity::RenderFog", manifest.patterns.renderFog,
                                             manifest.referenceRvas.renderFog);
             out.DrawFlush = resolveOptional("DrawFlush_GL", manifest.patterns.drawFlush,
@@ -170,6 +170,15 @@ namespace iee::game {
                 if (out.DrawQueueCount && out.DrawQueueCommands) {
                     LOG_INFO("Draw queue resolved: count at RVA 0x{:X}, commands at RVA 0x{:X}",
                              out.DrawQueueCount - moduleBase, out.DrawQueueCommands - moduleBase);
+                    if (manifest.spriteAtlas.valid() &&
+                        (cfg.spriteUpscale || cfg.enableDebugHotkeys)) {
+                        out.TextureUpload =
+                            resolveOptional("TexSubImage_GL", manifest.patterns.textureUpload,
+                                            manifest.referenceRvas.textureUpload);
+                        if (!out.TextureUpload && cfg.spriteUpscale) {
+                            LOG_WARN("Sprite upscaling disabled: TexSubImage_GL did not resolve");
+                        }
+                    }
                 } else {
                     out.DrawQueueCount = out.DrawQueueCommands = 0;
                     if (cfg.bloom) {
@@ -180,8 +189,8 @@ namespace iee::game {
                 const bool known =
                     !manifest.patterns.renderFog.empty() && !manifest.patterns.drawFlush.empty();
                 out.RenderFog = out.DrawFlush = 0;
-                if (cfg.softFogOfWar || cfg.bloom) {
-                    LOG_WARN("Soft fog of war and bloom disabled: {}",
+                if (cfg.softFogOfWar || cfg.bloom || cfg.spriteUpscale) {
+                    LOG_WARN("Soft fog of war, bloom and sprite upscaling disabled: {}",
                              known ? "RenderFog/DrawFlush did not resolve uniquely"
                                    : "this build has no RenderFog/DrawFlush targets");
                 }

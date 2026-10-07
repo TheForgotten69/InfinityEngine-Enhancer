@@ -39,6 +39,9 @@ namespace iee::game {
         // array). 0 leaves the fog and flush hooks working without bloom.
         std::uintptr_t DrawQueueCount = 0;
         std::uintptr_t DrawQueueCommands = 0;
+        // Optional: the sprite atlas upload (TexSubImage_GL), for sprite
+        // upscaling. Needs the draw queue.
+        std::uintptr_t TextureUpload = 0;
         bool initialized = false;
     };
 

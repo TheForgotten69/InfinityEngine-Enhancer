@@ -208,9 +208,12 @@ constexpr BuildManifest kKnownBuilds[] = {
             "85 D2",
             "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 40 "
             "44 0F B7 29 4C 8B F9 66 44 3B 69 02",
+            // TexSubImage_GL (PDB-named, offline-verified unique).
+            "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 50 "
+            "44 8B F1 41 8B F0 44 8B 05 ? ? ? ? 48 8D 0D ? ? ? ? 41 8B C0 8B EA",
         },
         {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x4118A0, 0x411660,
-         0x411780, 0x2A1B60, 0x42B350, 0x423C30, 0x425BE0},
+         0x411780, 0x2A1B60, 0x42B350, 0x423C30, 0x425BE0, 0x42D190},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -254,6 +257,11 @@ constexpr BuildManifest kKnownBuilds[] = {
         // (12 bytes each); DrawBlendFunc_GL packs src<<9 | dst<<13; the
         // factor table at 0x5C12B0 has GL_ONE at index 1.
         {0x24, 0x180A8, 8192, 8, 13, 1},
+        // Disassembly-verified: gl.user.state at 0x2F73F6C, gl.textures at
+        // 0x757040 (0x28-byte entries, GL name first), fx[] at 0x2F74050
+        // (0x30 apart: width +0, height +4, CPU buffer +0x20, texture index
+        // +0x28); the selected texture is bits 21-29 of the state word.
+        {0x64, 0x281CF90, 0x28, 0x80, 0x30, 2, 0x00, 0x04, 0x20, 0x28, 21, 0x1FF},
     },
 };
 
@@ -286,6 +294,8 @@ static_assert([] {
   }
   return true;
 }(), "2.7.3 smoothed object render pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.textureUpload),
+              "2.7.3 texture upload pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.particleUpdate) &&
                   validate_pattern_format(kKnownBuilds[1].patterns.particleRender),
               "2.7.3 particle pattern format is invalid");

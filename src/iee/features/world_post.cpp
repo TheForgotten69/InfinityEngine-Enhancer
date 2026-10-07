@@ -42,6 +42,18 @@ struct FogTemporalProgram {
   int blend{-1};
 };
 
+struct SharpenProgram {
+  unsigned id{};
+  int sharpness{-1};
+};
+
+// One sprite atlas's upscaled copies: the edge-adaptive 2x image and the
+// sharpened result the engine then draws from.
+struct AtlasTargets {
+  Target upscaled{};
+  Target sharpened{};
+};
+
 struct ShimmerProgram {
   unsigned id{};
   int worldOrigin{-1};
@@ -78,6 +90,8 @@ struct Settings {
   float fogDrift{};
   float fogSmoothing{};
   float heatShimmer{};
+  bool spriteUpscale{};
+  float spriteSharpness{};
 };
 
 // Everything that lives and dies with one GL context.
@@ -90,6 +104,10 @@ struct Resources {
   FogProgram fog{};
   FogTemporalProgram fogTemporal{};
   ShimmerProgram shimmer{};
+  unsigned spriteUpscale{};
+  SharpenProgram spriteSharpen{};
+  std::array<AtlasTargets, 2> atlases{};
+  bool atlasDrawnOnce{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
   Target fogCapture{};
@@ -123,6 +141,7 @@ std::atomic<bool> g_dropFogHistory{false};
 unsigned g_frame = 1;
 unsigned g_emissiveFrame = 0;
 bool g_worldPassOpen = false;
+bool g_fogSeenThisFrame = false;
 int g_emissiveCommands = 0;
 int g_savedDrawFramebuffer = 0;
 int g_savedReadFramebuffer = 0;
@@ -226,6 +245,133 @@ void main() {
   vec3 visible = texture(uTexture, uv).rgb;
   float grain = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   fragColor = vec4(visible + (grain - 0.5) / 255.0, 1.0);
+}
+)glsl";
+
+// FSR1 EASU (edge-adaptive spatial upsampling), after AMD's FidelityFX
+// reference (MIT): a 12-tap kernel whose shape follows the local edge
+// direction, so diagonal outlines come out smooth instead of stair-stepped.
+// Runs on the sprite atlas at exactly 2x, texel to texel: output pixel
+// gl_FragCoord maps to input position gl_FragCoord / 2. Alpha is filtered
+// with the colour and counts towards the edge detection, because a sprite's
+// outline is mostly an alpha edge.
+constexpr const char* kSpriteUpscaleSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+out vec4 fragColor;
+ivec2 size;
+vec4 tap(ivec2 p) {
+  return texelFetch(uTexture, clamp(p, ivec2(0), size - 1), 0);
+}
+float luma(vec4 c) {
+  return c.r * 0.5 + c.g + c.b * 0.5 + c.a;
+}
+void accumulate(inout vec4 colour, inout float weight, vec2 offset, vec2 dir, vec2 len, float lobe,
+                float clip, vec4 c) {
+  vec2 v = vec2(offset.x * dir.x + offset.y * dir.y, offset.x * -dir.y + offset.y * dir.x) * len;
+  float d2 = min(dot(v, v), clip);
+  float wB = 0.4 * d2 - 1.0;
+  float wA = lobe * d2 - 1.0;
+  wB *= wB;
+  wA *= wA;
+  wB = 1.5625 * wB - 0.5625;
+  float w = wB * wA;
+  colour += c * w;
+  weight += w;
+}
+void edge(inout vec2 dir, inout float len, float w, float lA, float lB, float lC, float lD,
+          float lE) {
+  float lenX = max(abs(lD - lC), abs(lC - lB));
+  float dirX = lD - lB;
+  dir.x += dirX * w;
+  lenX = clamp(abs(dirX) / max(lenX, 1e-5), 0.0, 1.0);
+  len += lenX * lenX * w;
+  float lenY = max(abs(lE - lC), abs(lC - lA));
+  float dirY = lE - lA;
+  dir.y += dirY * w;
+  lenY = clamp(abs(dirY) / max(lenY, 1e-5), 0.0, 1.0);
+  len += lenY * lenY * w;
+}
+void main() {
+  size = textureSize(uTexture, 0);
+  vec2 pp = gl_FragCoord.xy * 0.5 - 0.5;
+  vec2 fp = floor(pp);
+  pp -= fp;
+  ivec2 ip = ivec2(fp);
+  //    b c
+  //  e f g h
+  //  i j k l
+  //    n o
+  vec4 b = tap(ip + ivec2(0, -1));
+  vec4 c = tap(ip + ivec2(1, -1));
+  vec4 e = tap(ip + ivec2(-1, 0));
+  vec4 f = tap(ip);
+  vec4 g = tap(ip + ivec2(1, 0));
+  vec4 h = tap(ip + ivec2(2, 0));
+  vec4 i = tap(ip + ivec2(-1, 1));
+  vec4 j = tap(ip + ivec2(0, 1));
+  vec4 k = tap(ip + ivec2(1, 1));
+  vec4 l = tap(ip + ivec2(2, 1));
+  vec4 n = tap(ip + ivec2(0, 2));
+  vec4 o = tap(ip + ivec2(1, 2));
+  float bL = luma(b), cL = luma(c), eL = luma(e), fL = luma(f), gL = luma(g), hL = luma(h);
+  float iL = luma(i), jL = luma(j), kL = luma(k), lL = luma(l), nL = luma(n), oL = luma(o);
+  vec2 dir = vec2(0.0);
+  float len = 0.0;
+  edge(dir, len, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL);
+  edge(dir, len, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL);
+  edge(dir, len, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL);
+  edge(dir, len, pp.x * pp.y, gL, jL, kL, lL, oL);
+  float dirR = dot(dir, dir);
+  bool flat_ = dirR < 1.0 / 32768.0;
+  dir = flat_ ? vec2(1.0, 0.0) : dir * inversesqrt(dirR);
+  len = len * 0.5;
+  len *= len;
+  float stretch = dot(dir, dir) / max(abs(dir.x), abs(dir.y));
+  vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 - 0.5 * len);
+  float lobe = 0.5 + (0.21 - 0.5) * len;
+  float clip = 1.0 / lobe;
+  vec4 lowest = min(min(f, g), min(j, k));
+  vec4 highest = max(max(f, g), max(j, k));
+  vec4 colour = vec4(0.0);
+  float weight = 0.0;
+  accumulate(colour, weight, vec2(0.0, -1.0) - pp, dir, len2, lobe, clip, b);
+  accumulate(colour, weight, vec2(1.0, -1.0) - pp, dir, len2, lobe, clip, c);
+  accumulate(colour, weight, vec2(-1.0, 1.0) - pp, dir, len2, lobe, clip, i);
+  accumulate(colour, weight, vec2(0.0, 1.0) - pp, dir, len2, lobe, clip, j);
+  accumulate(colour, weight, vec2(0.0, 0.0) - pp, dir, len2, lobe, clip, f);
+  accumulate(colour, weight, vec2(-1.0, 0.0) - pp, dir, len2, lobe, clip, e);
+  accumulate(colour, weight, vec2(1.0, 1.0) - pp, dir, len2, lobe, clip, k);
+  accumulate(colour, weight, vec2(2.0, 1.0) - pp, dir, len2, lobe, clip, l);
+  accumulate(colour, weight, vec2(2.0, 0.0) - pp, dir, len2, lobe, clip, h);
+  accumulate(colour, weight, vec2(1.0, 0.0) - pp, dir, len2, lobe, clip, g);
+  accumulate(colour, weight, vec2(1.0, 2.0) - pp, dir, len2, lobe, clip, o);
+  accumulate(colour, weight, vec2(0.0, 2.0) - pp, dir, len2, lobe, clip, n);
+  fragColor = clamp(colour / weight, lowest, highest);
+}
+)glsl";
+
+// FSR1 RCAS (robust contrast-adaptive sharpening), same source: sharpens as
+// far as it can without pushing any channel outside its neighbourhood's range.
+constexpr const char* kSpriteSharpenSource = R"glsl(#version 330
+uniform sampler2D uTexture;
+uniform float uSharpness;
+out vec4 fragColor;
+void main() {
+  ivec2 size = textureSize(uTexture, 0);
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  vec4 b = texelFetch(uTexture, clamp(p + ivec2(0, -1), ivec2(0), size - 1), 0);
+  vec4 d = texelFetch(uTexture, clamp(p + ivec2(-1, 0), ivec2(0), size - 1), 0);
+  vec4 e = texelFetch(uTexture, p, 0);
+  vec4 f = texelFetch(uTexture, clamp(p + ivec2(1, 0), ivec2(0), size - 1), 0);
+  vec4 h = texelFetch(uTexture, clamp(p + ivec2(0, 1), ivec2(0), size - 1), 0);
+  vec4 lowest = min(min(b, d), min(f, h));
+  vec4 highest = max(max(b, d), max(f, h));
+  vec4 hitMin = min(lowest, e) / max(4.0 * highest, vec4(1e-4));
+  vec4 hitMax = (vec4(1.0) - max(highest, e)) / min(4.0 * lowest - 4.0, vec4(-1e-4));
+  vec4 lobes = max(-hitMin, hitMax);
+  float lobe = max(-0.1875, min(max(max(lobes.r, lobes.g), max(lobes.b, lobes.a)), 0.0)) *
+               uSharpness;
+  fragColor = clamp((lobe * (b + d + f + h) + e) / (4.0 * lobe + 1.0), 0.0, 1.0);
 }
 )glsl";
 
@@ -509,7 +655,13 @@ bool create_shared_resources() noexcept {
     return false;
   }
   resources.shimmer.id = build_program(kShimmerSource, kValueNoiseSource);
-  if (!resources.shimmer.id) return false;
+  resources.spriteUpscale = build_program(kSpriteUpscaleSource);
+  resources.spriteSharpen.id = build_program(kSpriteSharpenSource);
+  if (!resources.shimmer.id || !resources.spriteUpscale || !resources.spriteSharpen.id) {
+    return false;
+  }
+  resources.spriteSharpen.sharpness =
+      fn.glGetUniformLocation(resources.spriteSharpen.id, "uSharpness");
   auto& shimmer = resources.shimmer;
   shimmer.worldOrigin = fn.glGetUniformLocation(shimmer.id, "uWorldOrigin");
   shimmer.worldSize = fn.glGetUniformLocation(shimmer.id, "uWorldSize");
@@ -554,8 +706,9 @@ bool create_sized_resources(game::Extent viewport) noexcept {
   return true;
 }
 
-// Called inside the guards' scope: creation changes bindings.
-bool ensure_resources(game::Extent viewport) noexcept {
+// Programs and the triangle, per GL context. Called inside the guards' scope:
+// creation changes bindings.
+bool ensure_shared_resources() noexcept {
   const auto context = gl::current_context();
   // Creation binds textures; keep that on unit 0, which the caller's guard restores.
   gl::get_gl_functions().glActiveTexture(gl::TEXTURE0);
@@ -568,6 +721,12 @@ bool ensure_resources(game::Extent viewport) noexcept {
       return false;
     }
   }
+  return true;
+}
+
+// Called inside the guards' scope: creation changes bindings.
+bool ensure_resources(game::Extent viewport) noexcept {
+  if (!ensure_shared_resources()) return false;
   if (!(viewport == g_resources.viewport)) {
     gl::discard_errors();
     if (!create_sized_resources(viewport) || !gl::check_error("world post targets")) return false;
@@ -664,34 +823,112 @@ void draw_bloom() noexcept {
 
 void world_post_configure(const core::EngineConfig& cfg) noexcept {
   g_settings = {cfg.softFogOfWar, cfg.bloom, cfg.softFogRadius, cfg.bloomStrength,
-                cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing, cfg.heatShimmer};
+                cfg.lightSpill, cfg.softFogDrift, cfg.softFogSmoothing, cfg.heatShimmer,
+                cfg.spriteUpscale, cfg.spriteSharpness};
 }
 
 bool world_post_active() noexcept {
-  return !g_failed && (g_settings.softFog || g_settings.bloom);
+  // Sprite upscaling needs the world flushed before the UI is queued, which
+  // is what the fog detour does when this is true.
+  return !g_failed && (g_settings.softFog || g_settings.bloom || g_settings.spriteUpscale);
 }
 
 void world_post_poll_hotkeys() noexcept {
   static bool fogKeyWasDown = false;
   static bool bloomKeyWasDown = false;
+  static bool spriteKeyWasDown = false;
   const bool fogKeyDown = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
   const bool bloomKeyDown = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+  const bool spriteKeyDown = (GetAsyncKeyState(VK_F7) & 0x8000) != 0;
   const bool fogPressed = fogKeyDown && !fogKeyWasDown;
   const bool bloomPressed = bloomKeyDown && !bloomKeyWasDown;
+  const bool spritePressed = spriteKeyDown && !spriteKeyWasDown;
   fogKeyWasDown = fogKeyDown;
   bloomKeyWasDown = bloomKeyDown;
-  if (!fogPressed && !bloomPressed) return;
+  spriteKeyWasDown = spriteKeyDown;
+  if (!fogPressed && !bloomPressed && !spritePressed) return;
   if (fogPressed) g_settings.softFog = !g_settings.softFog;
   if (bloomPressed) g_settings.bloom = !g_settings.bloom;
+  if (spritePressed) g_settings.spriteUpscale = !g_settings.spriteUpscale;
   try {
-    LOG_INFO("Hotkey: soft fog of war={}, bloom={}", g_settings.softFog, g_settings.bloom);
+    LOG_INFO("Hotkey: soft fog of war={}, bloom={}, sprite upscale={}", g_settings.softFog,
+             g_settings.bloom, g_settings.spriteUpscale);
   } catch (...) {
   }
 }
 
 void world_post_on_frame() noexcept {
   ++g_frame;
-  g_worldPassOpen = true;
+  // The world pass is only open on frames that follow a frame which drew an
+  // area: in menus and full-screen panels every draw is UI.
+  g_worldPassOpen = g_fogSeenThisFrame;
+  g_fogSeenThisFrame = false;
+}
+
+bool world_post_wants_atlas_upscale() noexcept {
+  return g_worldPassOpen && g_settings.spriteUpscale && !g_failed;
+}
+
+unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, int height,
+                                  int rows) noexcept {
+  const auto& fn = gl::get_gl_functions();
+  if (!fn.postProcessAvailable || slot < 0 || slot >= 2 || !sourceTexture || width <= 0 ||
+      height <= 0 || width > 4096 || height > 4096 || rows <= 0) {
+    return 0;
+  }
+  int drawFramebuffer = 0;
+  int readFramebuffer = 0;
+  fn.glGetIntegerv(gl::DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+  fn.glGetIntegerv(gl::READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+  unsigned result = 0;
+  {
+    core::GlStateGuard textures({0});
+    core::GlPassGuard pass;
+    const game::Extent doubled{width * 2, height * 2};
+    bool ready = ensure_shared_resources();
+    if (ready) {
+      auto& atlas = g_resources.atlases[static_cast<std::size_t>(slot)];
+      if (!(atlas.sharpened.extent == doubled)) {
+        gl::discard_errors();
+        ready = create_target(atlas.upscaled, doubled, gl::RGBA8, gl::UNSIGNED_BYTE) &&
+                create_target(atlas.sharpened, doubled, gl::RGBA8, gl::UNSIGNED_BYTE) &&
+                gl::check_error("sprite atlas targets");
+      }
+      if (ready) {
+        // Only the rows the engine just filled; two rows of margin for the kernel.
+        const int outputRows = rows * 2 + 4 < doubled.height ? rows * 2 + 4 : doubled.height;
+        set_pass_state();
+        fn.glViewport(0, 0, doubled.width, outputRows);
+        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.upscaled.framebuffer);
+        fn.glUseProgram(g_resources.spriteUpscale);
+        fn.glBindTexture(gl::TEXTURE_2D, sourceTexture);
+        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.sharpened.framebuffer);
+        fn.glUseProgram(g_resources.spriteSharpen.id);
+        fn.glUniform1f(g_resources.spriteSharpen.sharpness, g_settings.spriteSharpness);
+        fn.glBindTexture(gl::TEXTURE_2D, atlas.upscaled.texture);
+        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+        result = atlas.sharpened.texture;
+        if (!g_resources.atlasDrawnOnce) {
+          g_resources.atlasDrawnOnce = true;
+          if (!gl::check_error("sprite atlas upscale")) {
+            result = 0;
+            ready = false;
+          } else {
+            try {
+              LOG_INFO("World post: first sprite atlas upscaled ({}x{} -> {}x{}, {} rows)", width,
+                       height, doubled.width, doubled.height, rows);
+            } catch (...) {
+            }
+          }
+        }
+      }
+    }
+    fn.glBindFramebuffer(gl::DRAW_FRAMEBUFFER, static_cast<unsigned>(drawFramebuffer));
+    fn.glBindFramebuffer(gl::READ_FRAMEBUFFER, static_cast<unsigned>(readFramebuffer));
+    if (!ready) fail("the sprite atlas upscale could not run");
+  }
+  return result;
 }
 
 bool world_post_wants_emissive() noexcept {
@@ -744,6 +981,7 @@ bool world_post_before_fog(const WorldView& view) noexcept {
   g_view = view;
   const auto& fn = gl::get_gl_functions();
   g_worldPassOpen = false;
+  g_fogSeenThisFrame = true;
   if (!fn.postProcessAvailable) {
     fail("the GL context lacks framebuffer or vertex-array support");
     return false;

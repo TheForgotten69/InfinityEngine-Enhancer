@@ -367,3 +367,45 @@ table, so it slides with its creature.
 Both ride on `SmoothSpriteMovement`. Known gap: the tick clock is global, so
 if some particles keep updating while others are frozen (time stop during
 rain), the frozen ones jitter by one step.
+
+## 16. Revision 2026-10-08: sprite smoothing with FSR1
+
+Owner's goal after rejecting every detail-adding upscaler (offline comparison
+sheets in the workspace's `interp-preview/`): sprites "don't need to be that
+much better, just smoother". Chosen filter: FSR1.
+
+Evidence (2.7.3):
+
+- Sprites are composited on the CPU into a streaming atlas (`fx[0]` nearest,
+  `fx[1]` linear; 1024x1024). `DrawFlush_GL` begins by uploading each atlas's
+  used rows through `TexSubImage` -> `TexSubImage_GL` (`0x42D190`), then draws
+  the queue. `TexSubImage_GL` binds `gl.textures[selected].name` and marks the
+  texture for rebinding.
+- `gl.textures` (`0x757040`, 0x28-byte entries, GL name first), `gl.user.state`
+  (`0x2F73F6C`, selected texture in bits 21-29) and `fx[]` (`0x2F74050`, 0x30
+  apart) sit at fixed distances from `gl.n` (`BuildManifest::spriteAtlas`).
+- `CVidCell::Blt8To32` writes only non-transparent pixels; the atlas buffer is
+  cleared to zero, so transparent texels are `(0,0,0,0)`.
+
+Design:
+
+- `TexSubImage_GL` is detoured. After the engine's upload of an atlas, during
+  the world pass, the atlas is upscaled 2x into our own texture with EASU
+  (12-tap edge-adaptive kernel; alpha is filtered with colour and counts
+  towards edge detection) and sharpened with RCAS. The texture's name in the
+  engine's table is replaced by ours until the flush ends; the flush detour
+  restores it. Texture coordinates are normalised by the table's stored size,
+  so they address the larger texture unchanged.
+- The world pass is now "open" only on frames following a frame that drew an
+  area, so menus and full-screen panels are never touched.
+- INI: `SpriteUpscale` (default false), `SpriteSharpness` (0..1, default 0.5);
+  F7 toggles with debug hotkeys on.
+- The shaders' maths was checked offline with a NumPy transcription
+  (`interp-prototype/sr/easu_check.py`) against the reference FSR1 port.
+
+Known limits: 2x only (the remaining magnification is the engine's bilinear);
+neighbouring sprites on the atlas can bleed up to two texels into each other's
+edges; the dark fringe from blending non-premultiplied alpha is unchanged
+(fixing it needs the blend mode swapped for alpha-blended sprites only, since
+additive sprites share the atlas); BAM v2 (PVRZ) sprites bypass the atlas and
+are not filtered.

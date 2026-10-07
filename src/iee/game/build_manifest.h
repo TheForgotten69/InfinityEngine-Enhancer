@@ -58,6 +58,9 @@ struct PatternSet {
   // fog of war, bloom); either empty or non-unique leaves both off.
   std::string_view renderFog{};
   std::string_view drawFlush{};
+  // Optional: TexSubImage_GL, the upload of the streaming sprite atlas at the
+  // start of a flush. Hooked to upscale the atlas before it is drawn from.
+  std::string_view textureUpload{};
   // Optional pair: CParticle::AsynchronousUpdate and CParticle::Render (rain,
   // snow, sparkles). The update marks the logic tick; the render is wrapped
   // to draw each particle part of the way through its step.
@@ -81,6 +84,7 @@ struct ReferenceRvas {
   std::uintptr_t drawFlush{};
   std::uintptr_t particleUpdate{};
   std::uintptr_t particleRender{};
+  std::uintptr_t textureUpload{};
 };
 
 struct RuntimeOffsets {
@@ -111,6 +115,30 @@ struct ExecutableVersion {
 // One per-object render (virtual Render(CGameArea*, CVidMode*) of a
 // CGameObject subclass) that draws from CGameObject::m_pos and can therefore
 // be movement-smoothed with the position swap. Each resolves independently.
+// The streaming sprite atlases (fx[0], fx[1]) and the texture table, all in
+// the same GL state block as the draw queue and addressed relative to gl.n.
+// Sprites are composited on the CPU into an atlas's buffer, uploaded at the
+// start of each flush, and drawn from the atlas's texture.
+struct SpriteAtlasLayout {
+  std::uintptr_t userStateBeforeCount{};  // gl.user.state: selected texture in its bits
+  std::uintptr_t texturesBeforeCount{};   // gl.textures[0]
+  std::size_t textureEntrySize{};         // GL name is the first field of an entry
+  std::uintptr_t atlasAfterCount{};       // fx[0]
+  std::size_t atlasStride{};
+  std::size_t atlasCount{};
+  std::size_t widthOffset{};
+  std::size_t heightOffset{};
+  std::size_t texelsOffset{};
+  std::size_t textureIndexOffset{};
+  std::uint32_t textureShift{};
+  std::uint32_t textureMask{};
+
+  [[nodiscard]] constexpr bool valid() const noexcept {
+    return texturesBeforeCount != 0 && textureEntrySize != 0 && atlasStride != 0 &&
+           atlasCount != 0 && textureMask != 0;
+  }
+};
+
 struct ObjectRenderTarget {
   const char* name{};
   std::string_view pattern{};
@@ -150,6 +178,8 @@ struct BuildManifest {
   std::array<ObjectRenderTarget, kMaxSmoothedObjectRenders> smoothedObjectRenders{};
   // Optional; an invalid (empty) layout leaves emissive bloom off.
   DrawQueueLayout drawQueue{};
+  // Optional; an invalid (empty) layout leaves sprite upscaling off.
+  SpriteAtlasLayout spriteAtlas{};
 
   [[nodiscard]] constexpr bool validate() const noexcept {
     if (buildId.empty() || supportedProductNames[0].empty() || executableVersion.major == 0 ||

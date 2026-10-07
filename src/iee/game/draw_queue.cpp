@@ -37,4 +37,46 @@ std::uintptr_t draw_queue_commands_address(const DrawQueueLayout& layout,
   if (!countAddress || !layout.valid()) return 0;
   return countAddress - layout.commandsBeforeCount;
 }
+
+namespace {
+template <typename T>
+T read_at(std::uintptr_t address) noexcept {
+  T value{};
+  std::memcpy(&value, reinterpret_cast<const void*>(address), sizeof(T));
+  return value;
+}
+}  // namespace
+
+int atlas_slot_for_upload(const SpriteAtlasLayout& layout, std::uintptr_t countAddress,
+                          const void* pixels) noexcept {
+  if (!countAddress || !pixels || !layout.valid()) return -1;
+  const auto state = read_at<std::uint32_t>(countAddress - layout.userStateBeforeCount);
+  const auto selected = (state >> layout.textureShift) & layout.textureMask;
+  for (std::size_t slot = 0; slot < layout.atlasCount; ++slot) {
+    const auto atlas = countAddress + layout.atlasAfterCount + slot * layout.atlasStride;
+    if (read_at<std::uintptr_t>(atlas + layout.texelsOffset) !=
+        reinterpret_cast<std::uintptr_t>(pixels)) {
+      continue;
+    }
+    return read_at<std::uint32_t>(atlas + layout.textureIndexOffset) == selected
+               ? static_cast<int>(slot)
+               : -1;
+  }
+  return -1;
+}
+
+SpriteAtlasInfo atlas_info(const SpriteAtlasLayout& layout, std::uintptr_t countAddress,
+                           int slot) noexcept {
+  if (!countAddress || !layout.valid() || slot < 0 ||
+      static_cast<std::size_t>(slot) >= layout.atlasCount) {
+    return {};
+  }
+  const auto atlas =
+      countAddress + layout.atlasAfterCount + static_cast<std::size_t>(slot) * layout.atlasStride;
+  const auto index = read_at<std::uint32_t>(atlas + layout.textureIndexOffset) & layout.textureMask;
+  return {read_at<std::int32_t>(atlas + layout.widthOffset),
+          read_at<std::int32_t>(atlas + layout.heightOffset),
+          reinterpret_cast<std::uint32_t*>(countAddress - layout.texturesBeforeCount +
+                                           index * layout.textureEntrySize)};
+}
 }  // namespace iee::game

@@ -19,6 +19,9 @@ struct EngineConfig {
   float lightSpill = 1.5f;
   // World pixels the air above warm light sources ripples by; 0 = off.
   float heatShimmer = 1.5f;
+  // Edge-adaptive 2x upscale (FSR1) of the sprite atlas before it is drawn.
+  bool spriteUpscale = false;
+  float spriteSharpness = 0.5f;  // 0 = no sharpening pass effect, 1 = strongest
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;
