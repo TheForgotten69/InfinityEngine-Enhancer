@@ -310,6 +310,9 @@ New infrastructure:
 
 ### Phase 4 — Fog (P3)
 
+> Superseded by `2026-10-07-soft-fog-and-bloom-design.md`: the engine queues
+> its draws, so an FBO bracket around `RenderFog` captures nothing.
+
 - Bracket architecture: pre-`RenderFog` bind an R8 FBO sized to the viewport;
   call the original untouched (`BltFogOWar3d`/`DrawVisible` render into our
   target); post: separable blur (radius scaled by `m_fZoom`), composite over the

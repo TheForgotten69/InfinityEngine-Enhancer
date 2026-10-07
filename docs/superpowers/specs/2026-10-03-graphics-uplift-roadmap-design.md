@@ -191,6 +191,12 @@ Owner decision 2026-10-03: stay in `fpSEAM` for now and fix placement there.
 
 ### D. Offscreen world pass
 
+D1 and D2 are implemented (2026-10-07) behind `[Rendering] SoftFogOfWar` and
+`Bloom`, default off, 2.7.3 only; in-game validation pending. Design and the
+engine draw-queue evidence: `2026-10-07-soft-fog-and-bloom-design.md`. The
+description below predates that evidence: the engine queues its draws, so
+D1 flushes the queue and captures the fog rather than bracketing it.
+
 - D1 soft fog of war: render `RenderFog` into an offscreen target, blur
   (radius scaled by zoom), composite.
 - D2 bloom on the world pass only.
@@ -276,13 +282,14 @@ Revised 2026-10-04 after A and F's engine side were confirmed in game.
 
 | Phase | Items | Why here |
 |---|---|---|
-| 1 | F: in-betweens-only pack with source fingerprints, in-memory merge, standalone generator, vanilla pack as its own mod; narrow the all-cells rule to frame-synced cells | The owner's favourite feature currently depends on hand-generated whole files |
+| paused | F: in-betweens-only pack with source fingerprints, in-memory merge, standalone generator, vanilla pack as its own mod; narrow the all-cells rule to frame-synced cells | The owner's favourite feature currently depends on hand-generated whole files |
 | 2 | B1, B2 | Sprites are the most visible mismatch against 4x maps |
 | 3 | C1 confirmation, C2 (blood first), C3 | Effects plus the light they cast |
-| 4 | D1, D2 | Shared offscreen plumbing |
+| done (unvalidated) | D1, D2 | Built first by owner decision 2026-10-07: larger visual gain than the F pack |
 | Later | B3, B4, E1 -> E2 -> E3, C4, D3, G | Polish and the large asset-driven items |
 
-Done: A (movement smoothing), F's draw-time swap.
+Done: A (movement smoothing), F's draw-time swap. Owner decision 2026-10-07:
+the F pack work is paused; effect-cast light (C3) follows D1/D2.
 
 ## 4. Reversed decisions
 

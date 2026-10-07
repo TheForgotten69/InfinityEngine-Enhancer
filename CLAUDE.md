@@ -44,6 +44,8 @@ Operational instructions for AI coding agents working in this repository.
 - The engine compiles nine named GLSL programs (`fpSEAM`, `fpSprite`, `fpSELECT`, `fpCatRom`, ...). The verified slot table and shader-replacement strategy live in the graphics roadmap spec (see Docs).
 - The engine does **zero** lighting work. Day/night is a swap of authored assets. `CGameArea` holds authored per-area bitmaps (`m_bmLum` +0x260, `m_pbmLumNight` +0x380, `m_bmHeight` +0x388) usable as static lookup data only.
 - Prefer `SDL_GL_SwapWindow` (SDL2.dll export) over `DrawFlip` patterns for the frame boundary.
+- The engine queues every draw (`DrawEnd_GL` only appends to `gl.cmds`) and submits the whole frame in `DrawFlush_GL` (2.7.3 RVA `0x42B350`), normally once at flip, and earlier whenever its 1024x1024 sprite atlas fills. Binding a framebuffer around an engine render function captures nothing, and an immediate GL draw of ours lands under the still-queued world. Flush first (see `features/world_post.*`), and restore every GL state touched: the flush issues changes relative to the engine's cached `gl.hwState`.
+- `gl.pp.enabled` is forced false in 2.7.3 (`DrawInit_GL`): the engine's own offscreen target and `fpCatRom` are dead.
 
 ## Runtime Facts — Hooking Safety
 
