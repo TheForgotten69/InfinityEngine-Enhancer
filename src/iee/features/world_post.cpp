@@ -140,8 +140,10 @@ void main() {
 }
 )glsl";
 
-// Keeps what is brighter than uThreshold, with a soft knee so the cut-off
-// does not flicker.
+// Keeps what is brighter than uThreshold at full strength, with a soft knee
+// so the cut-off does not flicker. The image is 8-bit, so nothing is brighter
+// than white: subtracting the threshold (as HDR bloom does) would leave at
+// most a few percent to glow with.
 constexpr const char* kBrightSource = R"glsl(#version 330
 uniform sampler2D uTexture;
 uniform float uThreshold;
@@ -151,9 +153,7 @@ void main() {
   vec3 color = texture(uTexture, vUv).rgb;
   float level = max(color.r, max(color.g, color.b));
   const float knee = 0.1;
-  float soft = clamp(level - uThreshold + knee, 0.0, 2.0 * knee);
-  soft = soft * soft / (4.0 * knee);
-  float weight = max(soft, level - uThreshold) / max(level, 1e-4);
+  float weight = smoothstep(uThreshold - knee, uThreshold + knee, level);
   fragColor = vec4(color * weight, 1.0);
 }
 )glsl";
