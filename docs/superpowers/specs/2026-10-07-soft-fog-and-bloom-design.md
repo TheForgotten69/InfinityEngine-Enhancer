@@ -441,5 +441,4 @@ Fix: after the uploaded rows, the same two passes redraw the corner of atlas
 first time it is upscaled.
 
 Rule for any later change to the atlas swap: whatever replaces atlas 0 must
-keep its last corner white. Derived from the decompile; not yet confirmed in
-game.
+keep its last corner white. Owner confirmed the fix in game the same day.
