@@ -92,17 +92,23 @@ add_library(iee_common STATIC
     src/iee/core/config.cpp
     src/iee/core/logger.cpp
     src/iee/core/pattern_scanner.cpp
+    src/iee/game/animation_interp.cpp
+    src/iee/game/are_animations.cpp
     src/iee/game/area_texture.cpp
     src/iee/game/build_manifest.cpp
     src/iee/game/dds_texture.cpp
+    src/iee/game/draw_queue.cpp
     src/iee/game/game_addrs.cpp
+    src/iee/game/object_statics.cpp
     src/iee/game/resref_runtime.cpp
     src/iee/game/shader_override.cpp
+    src/iee/game/sprite_motion.cpp
     src/iee/game/tile_liquid.cpp
     src/iee/game/tile_upscale.cpp
     src/iee/game/tis_palette.cpp
     src/iee/game/tis_runtime.cpp
     src/iee/game/wed_runtime.cpp
+    src/iee/game/world_post_plan.cpp
 )
 
 target_include_directories(iee_common
@@ -145,6 +151,7 @@ if(IEE_BUILD_WINDOWS_DLL)
         src/iee/dll_main.cpp
         src/iee/exports.cpp
         src/iee/features/tile_render.cpp
+        src/iee/features/world_post.cpp
         src/iee/frame_hook.cpp
         src/iee/hooks.cpp
         src/iee/shader_diagnostics.cpp
@@ -189,17 +196,26 @@ if(IEE_BUILD_WINDOWS_DLL)
 
     set(IEE_RELEASE_BUNDLE_DIR "${CMAKE_BINARY_DIR}/release-bundle")
     set(IEE_SYMBOLS_DIR "${CMAKE_BINARY_DIR}/symbols")
-    add_custom_target(release_bundle
+    set(IEE_BUNDLE_COMMANDS
         COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_RELEASE_BUNDLE_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_RELEASE_BUNDLE_DIR}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_SYMBOLS_DIR}"
         COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:InfinityEngine-Enhancer>" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.dll"
-        COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_PDB_FILE:InfinityEngine-Enhancer>" "${IEE_SYMBOLS_DIR}/InfinityEngine-Enhancer.pdb"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/InfinityEngine-Enhancer.sample.ini" "${IEE_RELEASE_BUNDLE_DIR}/InfinityEngine-Enhancer.sample.ini"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/override" "${IEE_RELEASE_BUNDLE_DIR}/override"
         COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/tools/M_IEEE.lua" "${IEE_RELEASE_BUNDLE_DIR}/override/M_IEEE.lua"
         COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/assets/game-textures" "${IEE_RELEASE_BUNDLE_DIR}/iee-textures"
+    )
+    if(MSVC)
+        # TARGET_PDB_FILE only resolves for linkers that emit a PDB. mingw-w64
+        # cross builds have no equivalent, so keep symbol export MSVC-only.
+        list(APPEND IEE_BUNDLE_COMMANDS
+            COMMAND "${CMAKE_COMMAND}" -E rm -rf "${IEE_SYMBOLS_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${IEE_SYMBOLS_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_PDB_FILE:InfinityEngine-Enhancer>" "${IEE_SYMBOLS_DIR}/InfinityEngine-Enhancer.pdb"
+        )
+    endif()
+    add_custom_target(release_bundle
+        ${IEE_BUNDLE_COMMANDS}
         DEPENDS InfinityEngine-Enhancer
         VERBATIM
     )

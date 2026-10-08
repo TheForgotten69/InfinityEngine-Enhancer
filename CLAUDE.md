@@ -33,7 +33,9 @@ Operational instructions for AI coding agents working in this repository.
   and `8x`. Other values fail closed to the existing fallback path.
 - `CResTileSet::h` is optional. Standard tilesets can have `header == null` while still exposing a valid 12-byte PVR entry table through `pData`. A null header does not imply missing deterministic metadata.
 - Deterministic detection order for this build is:
-  `TIS header -> PVR entry table coordinate-grid GCD -> legacy heuristic fallback`
+  `TIS header -> PVR entry table coordinate-grid GCD -> fail closed to 1x`
+  (the legacy UV/texture-id heuristic produced false 4x detections on vanilla
+  areas and was removed — do not reintroduce it).
 - `+0x1DC` is only the current linear-tiles tone flag for this build.
 
 ## Runtime Facts — Renderer / GL
@@ -42,6 +44,9 @@ Operational instructions for AI coding agents working in this repository.
 - The engine compiles nine named GLSL programs (`fpSEAM`, `fpSprite`, `fpSELECT`, `fpCatRom`, ...). The verified slot table and shader-replacement strategy live in the graphics roadmap spec (see Docs).
 - The engine does **zero** lighting work. Day/night is a swap of authored assets. `CGameArea` holds authored per-area bitmaps (`m_bmLum` +0x260, `m_pbmLumNight` +0x380, `m_bmHeight` +0x388) usable as static lookup data only.
 - Prefer `SDL_GL_SwapWindow` (SDL2.dll export) over `DrawFlip` patterns for the frame boundary.
+- The engine queues every draw (`DrawEnd_GL` only appends to `gl.cmds`) and submits the whole frame in `DrawFlush_GL` (2.7.3 RVA `0x42B350`), normally once at flip, and earlier whenever its 1024x1024 sprite atlas fills. Binding a framebuffer around an engine render function captures nothing, and an immediate GL draw of ours lands under the still-queued world. Flush first (see `features/world_post.*`), and restore every GL state touched: the flush issues changes relative to the engine's cached `gl.hwState`.
+- Each queued draw command is 12 bytes (state, first vertex, count) in `gl.cmds`, counted by `gl.n`. The state word carries the blend factors (source bits 9-12, destination bits 13-16, index 1 = `GL_ONE`). The engine draws its light-emitting art (sprite render flags `0x8` / `0x200`: fires, spell effects, glows) with destination `GL_ONE`, so "additive command" is a reliable "this emits light" signal; bloom is fed from it (`game/draw_queue.*`, `detour_draw_flush`).
+- `gl.pp.enabled` is forced false in 2.7.3 (`DrawInit_GL`): the engine's own offscreen target and `fpCatRom` are dead.
 
 ## Runtime Facts — Hooking Safety
 
@@ -59,6 +64,10 @@ Operational instructions for AI coding agents working in this repository.
 - `src/iee/game/build_manifest.*` holds build-specific offsets, patterns, and callsites.
 - `src/iee/game/tis_runtime.*` holds explicit runtime views.
 - `src/iee/game/tile_upscale.*` holds scale selection logic.
+- `src/iee/game/are_animations.*` + `src/iee/game/object_statics.*` classify
+  the active area's authored ARE ambient animations (fire/smoke/fountain/light
+  point sources) from the live CGameStatic objects; see
+  `docs/are-animation-detection.md`. Water bodies stay on the WED overlay path.
 - `docs/` contains the architecture and reverse-engineering notes future agents should read first.
 - `docs/threading-model.md` defines callback ownership, GL-thread rules, and ABI exception boundaries.
 - `docs/superpowers/specs/2026-06-10-graphics-enhancement-roadmap-design.md` is the graphics roadmap: four feature pillars, validation gates (V1-V6), and the full evaluated/dropped/rejected idea ledger. Read it before proposing any rendering feature — most ideas have already been evaluated there.

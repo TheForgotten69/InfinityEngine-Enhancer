@@ -58,6 +58,20 @@ static void normalize(EngineConfig& cfg) noexcept {
   if (!std::isfinite(cfg.lodBias)) cfg.lodBias = -0.25f;
   cfg.maxAnisotropy = std::clamp(cfg.maxAnisotropy, 1.0f, 64.0f);
   cfg.lodBias = std::clamp(cfg.lodBias, -4.0f, 4.0f);
+  if (!std::isfinite(cfg.softFogRadius)) cfg.softFogRadius = 24.0f;
+  if (!std::isfinite(cfg.softFogDrift)) cfg.softFogDrift = 10.0f;
+  if (!std::isfinite(cfg.softFogSmoothing)) cfg.softFogSmoothing = 0.25f;
+  if (!std::isfinite(cfg.lightSpill)) cfg.lightSpill = 1.5f;
+  if (!std::isfinite(cfg.heatShimmer)) cfg.heatShimmer = 1.5f;
+  if (!std::isfinite(cfg.spriteSharpness)) cfg.spriteSharpness = 0.5f;
+  if (!std::isfinite(cfg.bloomStrength)) cfg.bloomStrength = 0.35f;
+  cfg.softFogRadius = std::clamp(cfg.softFogRadius, 0.0f, 256.0f);
+  cfg.softFogDrift = std::clamp(cfg.softFogDrift, 0.0f, 64.0f);
+  cfg.softFogSmoothing = std::clamp(cfg.softFogSmoothing, 0.0f, 2.0f);
+  cfg.lightSpill = std::clamp(cfg.lightSpill, 0.0f, 8.0f);
+  cfg.heatShimmer = std::clamp(cfg.heatShimmer, 0.0f, 12.0f);
+  cfg.spriteSharpness = std::clamp(cfg.spriteSharpness, 0.0f, 1.0f);
+  cfg.bloomStrength = std::clamp(cfg.bloomStrength, 0.0f, 2.0f);
 }
 
 static void apply_kv(EngineConfig& cfg, const std::string& section, const std::string& key,
@@ -94,6 +108,36 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_float(cfg.maxAnisotropy);
     else if (iequals(key, "LODBias"))
       assign_float(cfg.lodBias);
+    else if (iequals(key, "SmoothSpriteMovement"))
+      assign_bool(cfg.smoothSpriteMovement);
+    else if (iequals(key, "InterpolateAnimations"))
+      assign_bool(cfg.interpolateAnimations);
+    else if (iequals(key, "SoftFogOfWar"))
+      assign_bool(cfg.softFogOfWar);
+    else if (iequals(key, "SoftFogRadius"))
+      assign_float(cfg.softFogRadius);
+    else if (iequals(key, "SoftFogDrift"))
+      assign_float(cfg.softFogDrift);
+    else if (iequals(key, "SoftFogSmoothing"))
+      assign_float(cfg.softFogSmoothing);
+    else if (iequals(key, "Bloom"))
+      assign_bool(cfg.bloom);
+    else if (iequals(key, "LightSpill"))
+      assign_float(cfg.lightSpill);
+    else if (iequals(key, "HeatShimmer"))
+      assign_float(cfg.heatShimmer);
+    else if (iequals(key, "SpriteUpscale"))
+      assign_bool(cfg.spriteUpscale);
+    else if (iequals(key, "SpriteSharpness"))
+      assign_float(cfg.spriteSharpness);
+    else if (iequals(key, "BloomStrength"))
+      assign_float(cfg.bloomStrength);
+    return;
+  }
+
+  // [Detection]
+  if (iequals(section, "detection")) {
+    if (iequals(key, "AreaAnimationScan")) assign_bool(cfg.enableAreaAnimationScan);
     return;
   }
 
@@ -105,6 +149,8 @@ static void apply_kv(EngineConfig& cfg, const std::string& section, const std::s
       assign_bool(cfg.enableDebugHotkeys);
     else if (iequals(key, "EnableWaterEffect"))
       assign_bool(cfg.enableWaterEffect);
+    else if (iequals(key, "EnablePointEffects"))
+      assign_bool(cfg.enablePointEffects);
     return;
   }
 }
@@ -181,11 +227,27 @@ bool ConfigManager::save(const std::filesystem::path& path, const EngineConfig& 
   write_bool(f, "EnableAnisotropicFiltering", cfg.enableAnisotropicFiltering);
   f << "MaxAnisotropy = " << cfg.maxAnisotropy << "\n";
   f << "LODBias = " << cfg.lodBias << "\n";
+  write_bool(f, "SmoothSpriteMovement", cfg.smoothSpriteMovement);
+  write_bool(f, "InterpolateAnimations", cfg.interpolateAnimations);
+  write_bool(f, "SoftFogOfWar", cfg.softFogOfWar);
+  f << "SoftFogRadius = " << cfg.softFogRadius << "\n";
+  f << "SoftFogDrift = " << cfg.softFogDrift << "\n";
+  f << "SoftFogSmoothing = " << cfg.softFogSmoothing << "\n";
+  write_bool(f, "Bloom", cfg.bloom);
+  f << "LightSpill = " << cfg.lightSpill << "\n";
+  f << "HeatShimmer = " << cfg.heatShimmer << "\n";
+  write_bool(f, "SpriteUpscale", cfg.spriteUpscale);
+  f << "SpriteSharpness = " << cfg.spriteSharpness << "\n";
+  f << "BloomStrength = " << cfg.bloomStrength << "\n";
+
+  write_section(f, "Detection");
+  write_bool(f, "AreaAnimationScan", cfg.enableAreaAnimationScan);
 
   write_section(f, "Shaders");
   write_bool(f, "DumpEngineShaders", cfg.dumpEngineShaders);
   write_bool(f, "EnableDebugHotkeys", cfg.enableDebugHotkeys);
   write_bool(f, "EnableWaterEffect", cfg.enableWaterEffect);
+  write_bool(f, "EnablePointEffects", cfg.enablePointEffects);
 
   return true;
 }

@@ -1,0 +1,314 @@
+# Graphics Uplift Roadmap — Feasibility and Order
+
+Date: 2026-10-03
+Status: Feasibility record and ordering. Each item still needs its own spec
+before implementation.
+Target: BGEE 2.7.3.x (x64, Proton), EEex-loaded DLL, EEex Uncap FPS enabled.
+
+This document supersedes the *scope decisions* of
+[2026-06-10-graphics-enhancement-roadmap-design.md](2026-06-10-graphics-enhancement-roadmap-design.md)
+where they conflict (see [Reversed decisions](#reversed-decisions)). The
+architecture rules in that document and in `docs/architecture.md` still hold:
+manifest-only addresses, GL state guard, fail closed, shader delivery through
+the game `override/` directory plus DLL uniform feeding.
+
+## 1. Evidence base
+
+All RVAs below are for the installed Steam `Baldur.exe` 2.7.3. Its CodeView
+record (GUID `B671EED8-BE5E-4979-A639-3E707E611587`, age 75) matches
+`IE_2.7.3.0_Win64_debug/Baldur.pdb`, so PDB symbols are authoritative for this
+build. Decompiles came from a headless Ghidra project with the PDB applied
+(location recorded in the workspace `AGENTS.md`). Everything here is static
+analysis; items marked **gate** need DLL-side logging before they are relied on.
+
+### 1.1 Timing
+
+| Fact | Source |
+|---|---|
+| Logic ticks at 30 Hz | `CChitin::TIMER_UPDATES_PER_SECOND` (RVA `0x65CC5C`) = 30 |
+| VEF/VVC frame pacing is derived from 30 | `CVisualEffect::MAX_FRAME_RATE` (RVA `0x59EC20`) = 30, used in `CVEFVidCell::FrameAdvance` `0x254440` |
+| Rendering runs faster than logic | EEex Uncap FPS (`CChitin::Override_Update`), limit 240 in the local config |
+| EEex smooths only the viewport | `EEex_UncapFPS_Patch.lua` hooks scroll, zoom, screen shake, tooltips; no sprite hooks. `EEex.dll` exports no tick-progress value |
+| EEex also detours `CVidTile::RenderTexture` | `Hook-CVidTile::RenderTexture()-FirstInstruction` — same function this mod hooks |
+
+### 1.2 Sprite and effect draw path
+
+Every paletted BAM frame is rebuilt on the CPU on every rendered frame:
+
+```
+CVidCell::Render3d (0x424780 / 0x424AE0)
+  GetFrame (vtable, 0x4118A0)            m_nCurrentSequence/m_nCurrentFrame -> m_pFrame
+  CVidPalette::Realize -> rgbTempPal     live palette (tints, range affects) applied here
+  DrawLockSurface (GL: 0x42CAF0)         slot in the streaming atlas fx[0] nearest / fx[1] linear
+  CVidCell::Blt8To32 (0x426C00)          8-bit -> RGBA into the atlas texels
+  CVidCell::RenderTexture (0x425530)     blend mode from flags, DrawQuad
+```
+
+Characters and effects composite several cells into one surface first:
+
+```
+CInfinity::FXPrep 0x29E1B0 -> FXLock 0x29E190
+  FXRender 0x29E260 per cell             body, helmet, shield, weapon (order by facing)
+  FXRenderClippingPolys 0x29E4C0         wall polygons rasterised into the surface
+FXUnlock 0x29EA40 -> FXBltFromClipped 0x29DFF0 -> CVidMode::FXBltToBack
+```
+
+Consequences:
+
+- The GPU receives one RGBA image per sprite with the live palette already
+  applied. Runtime palette mutation is therefore **not** an obstacle for
+  anything done at or after `Blt8To32`.
+- Sprites share a streaming atlas. Any shader kernel that samples neighbours
+  must clamp to the quad's own rectangle.
+- BAM v2 (PVRZ-backed) frames take `CVidCell::RenderPVR` (`0x4250D0`) instead
+  and skip the CPU composite.
+- The sprite shadow is one palette index (`CVidPalette::SHADOW_ENTRY`),
+  resolved in `Render3d` before the blit.
+- Wall occlusion can use dithered spans
+  (`CVidPoly::DrawHLineDithered32` `0x42DB50`, "Always Dither" option).
+
+Per-object render entry points that route into the path above:
+
+| Object | Function | RVA |
+|---|---|---|
+| Creature | `CGameSprite::Render` | `0x36BA50` |
+| Character animation | `CGameAnimationTypeCharacter::Render` (+16 sibling types) | `0x32C240` |
+| VEF/VVC effect cell | `CVEFVidCell::Render` | `0x254B00` |
+| Effect animation | `CGameAnimationTypeEffect::Render` | `0x32D020` |
+| Projectile | `CProjectileBAM::Render` | `0x233F20` |
+| Fireball | `CGameFireball3d::Render` | `0x1EAF90` |
+| Ambient static | `CGameStatic::Render` (already hooked) | `0x1F27D0` |
+| Particles (GL points) | `CParticle::Render` | `0x425BE0` |
+| Rain / snow | `CRainStorm::Render` / `CSnowStorm::Render` | `0x25CD20` / `0x25CDD0` |
+
+### 1.3 Frame composition order
+
+`CGameArea::Render` (`0x189360`): `CInfinity::Render` (tiles) →
+`RenderEdgeFade` → object lists (virtual `Render`) → `RenderTransitions` →
+`RenderAOE` → `RenderFog` → `PostRender`. UI draws afterwards, so a bracket
+around this function excludes the UI by construction.
+
+`CInfinity::RenderFog` (`0x2A1B60`) draws fog as untextured, alpha-blended
+triangles per 64 px tile inside one `DrawBegin`/`DrawEnd`. It is safe to
+bracket; `CVisibilityMap::BltFogOWar3d` (`0x257520`) must still never be
+detoured.
+
+### 1.4 Engine light value
+
+`CInfinity::Render` multiplies every tile by `m_rgbGlobalLighting`
+(`GetGlobalLighting` `0x29F890`: time-of-day, overcast and lightning colours
+combined) and hands the same colour to sprites via `CVidMode::rgbGlobalTint`.
+`CGameArea::GetTintColor` (`0x182ED0`) adds the per-position lightmap tint for
+sprites. This is a flat colour, not a light simulation.
+
+### 1.5 Engine shaders
+
+`chitin.key` lists `FPSPRITE`, `FPCRSPRT`, `fpDraw`, `fpSeam`, `FPSELECT`,
+`FPFONT`, `fpTone`, `fpYUV`, `FPYUVGRY`, `fpCatRom`, `vpDraw`, `vpBlit`,
+`vpYUV` (and `FPIT1L/M/S`). Originals are extractable from the BIFs for
+interface contracts. Extracted sources are Beamdog content and stay out of
+this repository.
+
+## 2. Items
+
+Each item lists what it does, where it attaches, and the main risk.
+
+### A. Position smoothing
+
+Sprites move in 30 Hz steps while the camera scrolls at display rate. Lerp
+each sprite's draw position between ticks inside a `CGameSprite::Render` hook
+(swap position in, call original, restore).
+
+- Implemented 2026-10-03 behind `[Rendering] SmoothSpriteMovement` (default
+  off, 2.7.3 only); in-game validation pending.
+- No engine "previous position" is used: `SpriteMotionTracker` observes each
+  sprite's `m_pos` at render time, treats a change as a logic tick, and slides
+  from the last shown position over the interval between the last two
+  changes (30 Hz assumed until observed). No tick hook is needed.
+- `CGameSprite::RenderMarkers` (`0x36F170`) and `RenderHealthBar`
+  (`0x36E820`) are wrapped with the same swap and share one per-frame
+  timestamp, so circles and bars stay glued to the sprite.
+- In-game result 2026-10-03 (owner): works, visibly smoother. The field log
+  shows sprite renders and `LoadArea` on the same thread, so the position
+  swap cannot race the logic tick.
+- Moving non-creature objects use the same swap through a manifest table
+  (`BuildManifest::smoothedObjectRenders`), with their own tracker and a
+  larger snap limit: `CProjectileBAM`, `CProjectileScorcher`,
+  `CProjectileNewScorcher`, `CProjectileSkyStrike`, `CGameFireball3d`,
+  `CGameTemporal`, `CGameChunk`, `CVEFVidCell`. Each was confirmed to draw
+  from `CGameObject::m_pos`; `CProjectileSkyStrikeBAM` does not and is left
+  out. The tracker also starts over for a key not sampled for 0.5 s.
+- Known limits: positions are whole world pixels; animation frames
+  themselves are not interpolated (item F); anything else that reads `m_pos`
+  during
+  render (floating text, action icons drawn outside the three hooks) is not
+  smoothed.
+
+### B. `fpSprite` replacement
+
+One override shader that covers every character and effect quad.
+
+- B1 sharpening kernel. Owner decision 2026-10-04: an FSR-family filter.
+  Only the spatial part applies (FSR1: edge-adaptive upscale plus
+  sharpening). FSR2/3 and other temporal upscalers do not fit, because a
+  pre-rendered sprite frame yields no new samples over time. The aim is clean
+  edges when the game magnifies sprites, not added detail.
+- B2 premultiplied-alpha halo fix (all three parts together, per the 2026-06-10
+  design §4.8).
+- B3 soft shadows: tag `SHADOW_ENTRY` pixels at blit time, blur in shader.
+- B4 smooth wall occlusion: replace the dithered stipple with alpha.
+- Risk: atlas neighbour bleed; **gate** on per-quad UV rectangle availability.
+- Rejected 2026-10-04: offline AI upscaling of sprites. Real-ESRGAN (general,
+  anime and anime-video models) and SeedVR 7B (owner's test) smooth the
+  sprites without adding real detail; a 25-pixel-wide figure does not hold
+  enough to reconstruct.
+
+### C. Effect replacement framework
+
+Hook the per-object render, look the resref up in a table, then pass through
+or suppress and draw the replacement. The hook seam is the shipped
+`CGameStatic::Render` pattern, generalised.
+
+Where the replacement is drawn is a separate choice. Today fire and smoke are
+painted inside `fpSEAM` (the tile pass), which has structural limits: they
+sit under every object, are multiplied by the global light colour, and cost
+a per-pixel loop over the point set. Drawing them with our own program at
+the engine's final blit (`CVidMode::FXBltToBack` `0x41D540`) would remove
+those limits, but needs the engine's internal batch flush pinned first.
+Owner decision 2026-10-03: stay in `fpSEAM` for now and fix placement there.
+
+- C1 fix placement and size of the existing smoke / fire replacements
+  (current branch): geometry now comes from the BAM frame table, see
+  `docs/are-animation-detection.md`.
+- C2 extend to VEF/VVC, projectiles, fireballs; first batch is the
+  highest-frequency effects, the table grows from logs of unreplaced resrefs.
+- C3 effect-cast light: publish active effect positions into the existing
+  point set so effects light tiles and sprites.
+- C4 particles and weather (`CParticle`, rain, snow) as shader passes.
+- **Gate:** resref and world-position field offsets per class (PDB types /
+  EEex docs → `build_manifest`).
+- Risk: "all effects" is content work; it is never finished, only prioritised.
+
+### D. Offscreen world pass
+
+D1 and D2 are implemented (2026-10-07) behind `[Rendering] SoftFogOfWar` and
+`Bloom`, default off, 2.7.3 only; in-game validation pending. Design and the
+engine draw-queue evidence: `2026-10-07-soft-fog-and-bloom-design.md`. The
+description below predates that evidence: the engine queues its draws, so
+D1 flushes the queue and captures the fog rather than bracketing it.
+
+- D1 soft fog of war: render `RenderFog` into an offscreen target, blur
+  (radius scaled by zoom), composite.
+- D2 bloom on the world pass only.
+- D3 water reflections of sprites and effects.
+- Precondition already met: the engine binds no FBOs (gate V5, 2026-06-11).
+
+### E. Companion textures per tile page
+
+A sibling texture per PVRZ page, generated offline alongside the upscale.
+
+- E1 normal maps → per-pixel relighting from the point set (C3).
+- E2 wall-polygon occlusion for those lights, and light-directed sprite
+  shadows. The polygons are the ones `FXRenderClippingPolys` consumes.
+- E3 "living maps": foliage sway and window/banner flicker from offline masks.
+- Risk: quality of colour-derived normals and segmentation masks on painted
+  art. Prototype offline on a few areas before any loader work.
+
+### F. Animation frame in-betweening
+
+Owner decision 2026-10-03: in-between frames are generated ahead of drawing
+with RIFE and stored as expanded BAMs; the engine keeps drawing them itself,
+so palettes, recolouring, wall clipping and layering are untouched.
+
+**Expanded BAM** (`iee-interp/<RESREF>.bam` in the game folder): an
+uncompressed BAM V1 with the original palette and cycle count. For an
+original cycle `[f0 .. f(L-1)]` the expanded cycle is
+`[f0, m(0,1), f1, m(1,2), ..., f(L-1), m(L-1,0)]`: original frame k at 2k,
+the in-between leading to k+1 at 2k+1. A slot with no usable in-between
+repeats frame k.
+
+**Draw-time swap** (implemented, `game::AnimationInterpolator`; in-game
+validation pending). Logic must keep the original BAM, because it counts
+frames from it (`CVidCell::IsEndOfSequence`, one frame per creature update).
+So only while `CGameSprite::Render` runs, each `CVidCell` the engine resolves
+a frame for is pointed at a private `CResCell` over the expanded image and at
+the frame for the current instant; both are restored when the draw returns.
+
+- Hooks: `CVidCell::GetFrame` (`0x4118A0`), `GetCurrentCenterPoint`
+  (`0x411660`), `GetCurrentFrameSize` (`0x411780`) — every path that first
+  reads a cell's frame during a draw goes through one of them.
+- Why a private `CResCell` is safe: `CRes::Demand` (`0x3F6D50`) returns
+  `pData` immediately when `bLoaded` is set, and
+  `CResCell::GetFrameData` (`0x3F79E0`) only adds the frame offset to
+  `m_pBamHeader`. The private cell is never in the engine's resource table,
+  so nothing evicts or frees it.
+- Timing: for the first half of the observed animation step after logic
+  moves k-1 -> k the in-between is shown, then frame k. Half a step of lag,
+  no guessing ahead.
+- A creature is interpolated only if every cell it drew last time has an
+  expanded BAM (body, weapon, shield and helmet are separate, frame-synced
+  BAMs; a partial swap would draw the body behind its weapon).
+- Gated by `[Rendering] InterpolateAnimations` (default off, 2.7.3 only).
+  The log names each expanded BAM loaded and each resref that has none.
+
+**Generation** (prototype only so far, Linux Python in a scratch folder):
+RIFE v4.25-heavy through `rife-ncnn-vulkan` in batch mode, colour and
+silhouette side by side at 4x, result mapped back to palette indices
+restricted to the entries the two source frames use (an unrestricted match
+put 17% of pixels on entries from other recolour ranges). Pairs whose
+silhouettes overlap too little, and in-betweens whose area drifts from the
+pair's mean, are dropped. Measured: about 40 frame pairs per second on an
+RTX 4090 including PNG I/O.
+
+Tested alternatives: RIFE v4.6/v4.25/v4.26 variants (v4.25-heavy best),
+IFRNet (worse), plain crossfade (ghosting). GIMM-VFI, FILM and GMFSS need a
+PyTorch stack and were not tested. No model handled a limb that crosses its
+own length in one step.
+
+Still to build: the generator as our own Windows program (runs natively and
+under Proton, calls the RIFE executable), invoked for the animations an area
+needs with a status line on the loading screen; equipment overlay families;
+non-creature animations.
+
+### G. Small polish
+
+Anti-aliased selection rings / AOE markers / path lines (`fpSELECT`), cutscene
+scaling kernel (`fpYUV`), offline upscaling of palette-stable portraits and
+item icons.
+
+## 3. Order
+
+Revised 2026-10-04 after A and F's engine side were confirmed in game.
+
+| Phase | Items | Why here |
+|---|---|---|
+| paused | F: in-betweens-only pack with source fingerprints, in-memory merge, standalone generator, vanilla pack as its own mod; narrow the all-cells rule to frame-synced cells | The owner's favourite feature currently depends on hand-generated whole files |
+| 2 | B1, B2 | Sprites are the most visible mismatch against 4x maps |
+| 3 | C1 confirmation, C2 (blood first), C3 | Effects plus the light they cast |
+| done (unvalidated) | D1, D2 | Built first by owner decision 2026-10-07: larger visual gain than the F pack |
+| Later | B3, B4, E1 -> E2 -> E3, C4, D3, G | Polish and the large asset-driven items |
+
+Done: A (movement smoothing), F's draw-time swap. Owner decision 2026-10-07:
+the F pack work is paused; effect-cast light (C3) follows D1/D2.
+
+## 4. Reversed decisions
+
+| 2026-06-10 decision | Now | Reason |
+|---|---|---|
+| Frame interpolation rejected as a content-mod problem (§10.8) | Item F, spike first | Frames are composited on the CPU with the live palette; the palette-mutation objection does not apply at the blit |
+| Per-VFX work dropped as disproportionate (§3, §10.7) | Item C | Per-object `Render` hooks give resref + position directly; the pattern already ships for statics |
+| Weather polish dropped (§10.7) | Item C4, low priority | Same framework, little extra plumbing |
+| Offline ESRGAN rejected for creature sprites (§10.8) | Still rejected | Runtime kernel in `fpSprite` (B1) instead |
+
+Day/night map blending stays out of scope: the engine holds one tileset at a
+time.
+
+## 5. Standing constraints
+
+- Every new address or offset goes through `build_manifest`; unresolved →
+  feature disabled, game untouched.
+- Every item is INI-gated and A/B-toggleable at runtime.
+- New hooks must coexist with EEex's detours (notably
+  `CVidTile::RenderTexture` and `CInfinity::Render` screen-shake hooks).
+- Validation is CI build + in-game check under Proton; host tests cover the
+  parsing and packing logic.

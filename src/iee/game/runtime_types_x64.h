@@ -71,6 +71,27 @@ namespace iee::game {
         std::array<char, 8> m_resRef{};
     };
 
+    // Parsed BAM resource (EEex docs, 176 bytes). The table pointers are set
+    // by CResCell::Parse on Demand and are only meaningful while the base
+    // resource is loaded.
+    struct CResCell {
+        CRes baseclass_0{};
+        void *pUncompressedData{};
+        std::uint32_t nUncompressedSize{};
+        std::byte _pad0[4]{};
+        bamHeader_st *m_pBamHeader{};
+        BAMHEADERV2 *m_pBamHeaderV2{};
+        void *m_pQuads{};
+        frameTableEntry_st *m_pFrames{};
+        sequenceTableEntry_st *m_pSequences{};
+        std::uint16_t *m_pFrameList{};
+        std::uint16_t m_nFrameList{};  // not set by CResCell::Parse; do not rely on it
+        std::byte _pad1[6]{};
+        void *m_pPalette{};
+        std::int32_t m_bParsing{};
+        std::byte _pad2[4]{};
+    };
+
     struct CResPVR {
         CRes baseclass_0{};
         std::int32_t texture{};
@@ -145,7 +166,9 @@ namespace iee::game {
     struct CVidCell {
         void *vfptr{};
         CVidImage baseclass_0{};
-        std::array<std::byte, 16> baseclass_1{};
+        // CResHelper<CResCell, 1000>: the resource pointer, then its resref.
+        CResCell *pRes{};
+        CResRef cResRef{};
         std::int16_t m_nCurrentFrame{};
         std::uint16_t m_nCurrentSequence{};
         std::int32_t m_nAnimType{};
@@ -395,6 +418,66 @@ namespace iee::game {
         std::array<std::byte, 0x1A0> _tail{};
     };
 
+    // Shared CGameObject header prefix of every area game object. Verified
+    // against the 2.6.6 decompilation (PDB-named); the full base is 0x60
+    // bytes. See docs/are-animation-detection.md for the evidence trail.
+    struct CGameObject {
+        void *_vtable{};
+        std::uint8_t m_objectType{};
+        std::byte _pad0[3]{};
+        CPoint m_pos{};
+        std::int32_t m_posZ{};
+        CGameArea *m_pArea{};
+        std::array<std::byte, 0x40> _tail{};
+    };
+
+    // CParticle: a rain drop, snow flake or sparkle. Positions and velocities
+    // are fixed point; CParticle::AsynchronousUpdate adds the velocity to the
+    // position once per logic tick. Offsets from that function's 2.7.3
+    // disassembly; only the leading fields are described.
+    struct CParticle {
+        std::int16_t m_nTimeStamp{};
+        std::int16_t m_nTailLength{};
+        std::byte _pad0[8]{};
+        std::uint8_t m_wType{};  // bit 0: gravity only, no vertical velocity
+        std::byte _pad1[3]{};
+        std::int32_t m_nLifeSpan{};
+        std::byte _pad2[4]{};
+        std::int32_t m_posX{};
+        std::int32_t m_posY{};
+        std::int32_t m_posZ{};
+        std::int32_t m_velX{};
+        std::int32_t m_velY{};
+        std::int32_t m_velZ{};
+        std::int32_t m_nGravity{};
+    };
+
+    // CGameObject::m_objectType for ARE "static" ambient animations
+    // (script share type '0'; CGameStatic).
+    inline constexpr std::uint8_t kGameObjectTypeStatic = 0x30;
+
+    // Runtime object created from each ARE animation record. The engine keeps
+    // the raw authored 76-byte record (CAreaFileStaticObject in the PDB, our
+    // ARE_Animation_st) embedded at +0x60; script state (e.g. the shown flag
+    // toggled by StaticStart) mutates it in place. m_vidCell::m_pFrame is
+    // only non-null during a draw (Render3d clears it on exit), so authored
+    // geometry is read from the BAM frame table behind m_vidCell::pRes.
+    struct CGameStatic {
+        CGameObject baseclass_0{};
+        ARE_Animation_st m_header{};
+        std::byte _pad0[4]{};
+        CVidCell m_vidCell{};
+        std::array<std::byte, 0x180> _tail{};
+    };
+
+    // CGameObjectArray's static entry table: object id in the low word,
+    // object pointer at +0x8, stride 16 (CGameObjectArray::GetShare).
+    struct CGameObjectArrayEntry {
+        std::int16_t m_objectId{};
+        std::byte _pad0[6]{};
+        CGameObject *m_objectPtr{};
+    };
+
     struct CGameSprite {
         std::array<std::byte, 0x540> _pad0{};
         CResRef m_resref{};
@@ -453,6 +536,11 @@ namespace iee::game {
     static_assert(sizeof(CSize) == 0x8);
     static_assert(sizeof(CRect) == 0x10);
     static_assert(sizeof(CRes) == 0x58);
+    static_assert(sizeof(CResCell) == 0xB0);
+    static_assert(offsetof(CResCell, m_pBamHeader) == 0x68);
+    static_assert(offsetof(CResCell, m_pFrames) == 0x80);
+    static_assert(offsetof(CResCell, m_nFrameList) == 0x98);
+    static_assert(offsetof(CVidCell, pRes) == 0x108);
     static_assert(sizeof(CResRef) == 0x8);
     static_assert(sizeof(CResPVR) == 0x70);
     static_assert(sizeof(CResTileSet) == 0x60);
@@ -498,6 +586,21 @@ namespace iee::game {
     static_assert(offsetof(CGameArea, m_visibility) == 0xBB0);
     static_assert(offsetof(CGameArea, m_lTiledObjects) == 0xED0);
     static_assert(offsetof(CGameArea, m_ptOldViewPos) == 0xF78);
+    static_assert(offsetof(CParticle, m_wType) == 0xC);
+    static_assert(offsetof(CParticle, m_posX) == 0x18);
+    static_assert(offsetof(CParticle, m_velX) == 0x24);
+    static_assert(offsetof(CParticle, m_nGravity) == 0x30);
+    static_assert(offsetof(CGameObject, m_objectType) == 0x8);
+    static_assert(offsetof(CGameObject, m_pos) == 0xC);
+    static_assert(offsetof(CGameObject, m_pArea) == 0x18);
+    static_assert(sizeof(CGameObject) == 0x60);
+    static_assert(offsetof(CGameStatic, m_header) == 0x60);
+    static_assert(offsetof(CGameStatic, m_vidCell) == 0xB0);
+    static_assert(offsetof(CVidCell, m_pFrame) == 0x128);
+    static_assert(sizeof(CVidCell) == 0x138);
+    static_assert(sizeof(CGameStatic) == 0x368);
+    static_assert(sizeof(CGameObjectArrayEntry) == 0x10);
+    static_assert(offsetof(CGameObjectArrayEntry, m_objectPtr) == 0x8);
     static_assert(offsetof(CGameSprite, m_resref) == 0x540);
     static_assert(offsetof(CGameSprite, m_currentArea) == 0x3A20);
     static_assert(offsetof(CGameSprite, m_spriteEffectVidCell) == 0x3C70);

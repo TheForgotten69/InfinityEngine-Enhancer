@@ -2,18 +2,24 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "app_context.h"
 #include "iee/core/gl_state_guard.h"
 #include "iee/core/logger.h"
 #include "iee/core/pattern_scanner.h"
+#include "iee/game/are_animations.h"
 #include "iee/game/area_texture.h"
+#include "iee/game/object_statics.h"
 #include "iee/game/opengl_types.h"
 #include "iee/game/resref_runtime.h"
 #include "iee/game/texture_units.h"
@@ -40,6 +46,17 @@ std::atomic<std::uint64_t> g_nextAreaGpuGeneration{1};
 std::mutex g_areaRefreshCommitMutex;
 std::atomic<std::uint64_t> g_areaRefreshGeneration{0};
 
+// Authored BAM draw boxes of the current area's replaced statics, keyed by
+// the live CGameStatic. Captured on the render thread once the engine has
+// loaded each BAM; kept because the engine may release the resource again
+// while we suppress its draws. Cleared at every LoadArea (object addresses
+// are reused across areas).
+std::mutex g_staticEnvelopeMutex;
+std::unordered_map<const void*, game::BamEnvelope> g_staticEnvelopes;
+std::atomic<bool> g_staticEnvelopesDirty{false};
+constexpr std::size_t kMaxStaticEnvelopes = game::kMaxAreaAnimationRecords;
+constexpr auto kEnvelopeRepublishInterval = std::chrono::milliseconds(100);
+
 // Render-thread-owned GL state.
 unsigned g_areaTexture{};
 HGLRC g_areaTextureContext{};
@@ -62,6 +79,194 @@ void queue_area_gpu_snapshot(game::AreaCellTexture texture, std::array<float, 3>
 void queue_no_liquid_snapshot() {
   game::AreaCellTexture noLiquid{.width = 1, .height = 1, .texels = {0}};
   queue_area_gpu_snapshot(std::move(noLiquid), {0.5f, 0.5f, 0.5f});
+}
+
+constexpr std::size_t kMaxUnclassifiedResrefsLogged = 12;
+
+// Per-area log dedupe across the LoadArea and render-thread refresh paths.
+std::mutex g_areAnimationsLogMutex;
+game::ResrefBuffer g_lastLoggedAreResref{};
+
+bool read_area_resref(const game::CGameArea* area, game::ResrefBuffer& out) {
+  game::CResRef runtimeResref{};
+  const auto* resrefAddress =
+      reinterpret_cast<const std::byte*>(area) + offsetof(game::CGameArea, m_resref);
+  return core::safe_read(resrefAddress, runtimeResref) &&
+         game::read_runtime_resref(runtimeResref.m_resRef.data(), out);
+}
+
+void log_area_animation_summary(const game::AreaAnimationsInfo& info) {
+  std::size_t shown = 0;
+  for (const auto& animation : info.animations) {
+    if (animation.isShown()) ++shown;
+  }
+  LOG_INFO(
+      "ARE animations {}: total={}, shown={}, fire={}, smoke={}, fountain={}, light={}, "
+      "water={}, lava={}, wildlife={}, unclassified={}",
+      info.areaResrefView(), info.animations.size(), shown,
+      info.count_of(game::AreaAnimationKind::Fire), info.count_of(game::AreaAnimationKind::Smoke),
+      info.count_of(game::AreaAnimationKind::Fountain),
+      info.count_of(game::AreaAnimationKind::Light), info.count_of(game::AreaAnimationKind::Water),
+      info.count_of(game::AreaAnimationKind::Lava),
+      info.count_of(game::AreaAnimationKind::Wildlife),
+      info.count_of(game::AreaAnimationKind::None));
+
+  std::string unclassified;
+  std::size_t unclassifiedListed = 0;
+  for (const auto& animation : info.animations) {
+    if (animation.kind != game::AreaAnimationKind::None) {
+      LOG_DEBUG("ARE animation {}: kind={}, resref={}, name=\"{}\", pos=({}, {}), objPos=({}, "
+                "{}, z={}), box=({},{} .. {},{} valid={}), shown={}, lightSource={}",
+                info.areaResrefView(), game::area_animation_kind_name(animation.kind),
+                animation.resrefView(), animation.nameView(), animation.x, animation.y,
+                animation.objX, animation.objY, animation.objZ, animation.envelope.left,
+                animation.envelope.top, animation.envelope.right, animation.envelope.bottom,
+                animation.envelope.valid, animation.isShown(), animation.isLightSource());
+      continue;
+    }
+    if (unclassifiedListed < kMaxUnclassifiedResrefsLogged && !animation.resrefView().empty() &&
+        unclassified.find(animation.resrefView()) == std::string::npos) {
+      if (!unclassified.empty()) unclassified += ", ";
+      unclassified += animation.resrefView();
+      ++unclassifiedListed;
+    }
+  }
+  if (!unclassified.empty()) {
+    // The visibility that grows the classification table from real data.
+    LOG_INFO("ARE unclassified animation resrefs for {}: {}", info.areaResrefView(), unclassified);
+  }
+}
+
+// Resolves the CGameObjectArray globals once per process from the manifest's
+// GetShare pattern. Any ambiguity fails closed and latches, disabling the
+// scan for the session.
+const game::ObjectArrayGlobals& resolved_object_array(const game::BuildManifest& manifest) {
+  static const game::ObjectArrayGlobals globals = [&manifest] {
+    game::ObjectArrayGlobals resolved{};
+    if (manifest.patterns.objectArrayGetShare.empty()) {
+      return resolved;
+    }
+    std::size_t matchCount = 0;
+    auto* function = core::find_unique_in_module(
+        nullptr, manifest.patterns.objectArrayGetShare, &matchCount);
+    if (!function) {
+      LOG_WARN("ARE animation scan disabled: GetShare pattern matched {} times", matchCount);
+      return resolved;
+    }
+    if (!game::decode_object_array_globals(static_cast<const std::byte*>(function), 0x60,
+                                           resolved)) {
+      LOG_WARN("ARE animation scan disabled: GetShare RIP operands did not decode");
+      resolved = {};
+      return resolved;
+    }
+    const auto moduleBase = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    LOG_INFO("CGameObjectArray resolved: GetShare RVA=0x{:X} (reference 0x{:X}), entries RVA=0x{:X}, "
+             "maxIndex RVA=0x{:X}",
+             reinterpret_cast<std::uintptr_t>(function) - moduleBase,
+             manifest.referenceRvas.objectArrayGetShare,
+             reinterpret_cast<std::uintptr_t>(resolved.entries) - moduleBase,
+             reinterpret_cast<std::uintptr_t>(resolved.maxArrayIndex) - moduleBase);
+    return resolved;
+  }();
+  return globals;
+}
+
+// Collects and classifies the active area's authored ARE ambient animations
+// from the live CGameStatic objects in the engine's object array — fresh on
+// every refresh (cheap, reflects script toggles and save state). Publication
+// reuses the WED refresh generation so a stale result can never overwrite a
+// newer area's snapshot.
+void refresh_area_animations(AppContext& ctx, const game::CGameArea* area,
+                             std::uint64_t refreshGeneration) noexcept {
+  if (!ctx.cfg.enableAreaAnimationScan || !area) {
+    return;
+  }
+  try {
+    game::ResrefBuffer areaResref{};
+    if (!read_area_resref(area, areaResref) || game::resref_view(areaResref).empty()) {
+      LOG_DEBUG("ARE animation scan: active area resref unavailable");
+      return;
+    }
+
+    const auto& objectArray = resolved_object_array(*ctx.manifest);
+    if (!objectArray.valid()) {
+      return;  // Already logged once at resolution time.
+    }
+
+    game::AreaAnimationsInfo info{};
+    if (!game::collect_area_static_animations(objectArray, area, info)) {
+      LOG_DEBUG("ARE animation walk failed for {}", game::resref_view(areaResref));
+      return;
+    }
+    info.areaResref = areaResref;
+    // Merge with the render-thread envelope cache in both directions: a
+    // direct read seeds the cache, a cached box covers a released resource.
+    std::size_t replaced = 0;
+    std::size_t boxed = 0;
+    {
+      std::lock_guard envelopeLock(g_staticEnvelopeMutex);
+      for (auto& animation : info.animations) {
+        if (!animation.object ||
+            !game::should_replace_animation_draw(animation.resrefView(), animation.kind)) {
+          continue;
+        }
+        ++replaced;
+        if (animation.envelope.valid) {
+          if (g_staticEnvelopes.size() < kMaxStaticEnvelopes) {
+            g_staticEnvelopes.insert_or_assign(animation.object, animation.envelope);
+          }
+        } else if (const auto cached = g_staticEnvelopes.find(animation.object);
+                   cached != g_staticEnvelopes.end()) {
+          animation.envelope = cached->second;
+        }
+        if (animation.envelope.valid) ++boxed;
+      }
+    }
+    auto snapshot = std::make_shared<const game::AreaAnimationsInfo>(std::move(info));
+
+    // Pack the shader point set outside the commit lock; publish it together
+    // with the snapshot under the same generation gate.
+    std::vector<game::AreaEffectPoint> effectPoints;
+    if (ctx.cfg.enablePointEffects) {
+      effectPoints = game::build_area_effect_points(*snapshot);
+    }
+
+    {
+      std::lock_guard commitLock(g_areaRefreshCommitMutex);
+      if (g_areaRefreshGeneration.load(std::memory_order_acquire) != refreshGeneration) {
+        LOG_DEBUG("Discarding stale ARE animation refresh generation {}", refreshGeneration);
+        return;
+      }
+      ctx.areaAnimations.store(snapshot);
+      static_assert(sizeof(game::AreaEffectPoint) == 8 * sizeof(float));
+      probe::set_area_effect_points(
+          effectPoints.empty() ? nullptr : &effectPoints.front().x, effectPoints.size());
+    }
+
+    // The walk reruns every refresh; log the summary once per area resref.
+    bool logSummary = false;
+    {
+      std::lock_guard logLock(g_areAnimationsLogMutex);
+      logSummary = g_lastLoggedAreResref != areaResref;
+      if (logSummary) g_lastLoggedAreResref = areaResref;
+    }
+    LOG_DEBUG("ARE effect points: {} published, {} of {} replaced statics use their authored "
+              "BAM box",
+              effectPoints.size(), boxed, replaced);
+    if (logSummary) {
+      log_area_animation_summary(*snapshot);
+      LOG_INFO("ARE effect points published: {} (pointEffects={})", effectPoints.size(),
+               ctx.cfg.enablePointEffects);
+      for (const auto& point : effectPoints) {
+        LOG_DEBUG("ARE effect point: kind={}, palette={}, pos=({}, {}), height={}, halfWidth={}",
+                  point.kind, point.reserved1, point.x, point.y, point.height, point.halfWidth);
+      }
+    }
+  } catch (const std::exception& e) {
+    LOG_ERROR("ARE animation refresh failed: {}", e.what());
+  } catch (...) {
+    LOG_ERROR("ARE animation refresh failed with an unknown exception");
+  }
 }
 
 const game::CGameArea* read_loaded_area_candidate(const game::CGameArea* candidate) {
@@ -175,6 +380,7 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
     std::lock_guard commitLock(g_areaRefreshCommitMutex);
     refreshGeneration = g_areaRefreshGeneration.fetch_add(1, std::memory_order_acq_rel) + 1;
     queue_no_liquid_snapshot();
+    probe::set_area_effect_points(nullptr, 0);
     ctx.activeArea.store(nullptr);
     ctx.wed.store(std::shared_ptr<const game::WedAreaInfo>{});
   }
@@ -197,6 +403,10 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
       LOG_DEBUG("LoadArea: could not resolve active CGameArea for WED caching");
       return;
     }
+
+    // Independent of WED parsing: a WED failure must not cost the authored
+    // ARE animation classification, and vice versa.
+    refresh_area_animations(ctx, area, refreshGeneration);
 
     const auto* areaBytes = reinterpret_cast<const std::byte*>(area);
     game::CResWED* wedPointer = nullptr;
@@ -371,11 +581,47 @@ void refresh_wed_cache(AppContext& ctx, void* infGame) {
   }
 }
 
+bool static_envelope_ready(const void* staticObject) noexcept {
+  if (!staticObject) return false;
+  try {
+    std::lock_guard envelopeLock(g_staticEnvelopeMutex);
+    if (g_staticEnvelopes.contains(staticObject)) return true;
+    game::BamEnvelope envelope{};
+    if (g_staticEnvelopes.size() >= kMaxStaticEnvelopes ||
+        !game::read_static_bam_envelope(staticObject, envelope)) {
+      return false;
+    }
+    g_staticEnvelopes.emplace(staticObject, envelope);
+    g_staticEnvelopesDirty.store(true, std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void republish_area_animations_if_dirty(AppContext& ctx) noexcept {
+  if (!g_staticEnvelopesDirty.load(std::memory_order_acquire)) return;
+  // Statics come into view in bursts; coalesce them into one object walk.
+  static std::chrono::steady_clock::time_point lastRepublish{};
+  const auto now = std::chrono::steady_clock::now();
+  if (now - lastRepublish < kEnvelopeRepublishInterval) return;
+  lastRepublish = now;
+  g_staticEnvelopesDirty.store(false, std::memory_order_release);
+  refresh_area_animations(ctx, ctx.activeArea.load(),
+                          g_areaRefreshGeneration.load(std::memory_order_acquire));
+}
+
 void reset_gpu_area_state() noexcept {
   try {
+    {
+      std::lock_guard envelopeLock(g_staticEnvelopeMutex);
+      g_staticEnvelopes.clear();
+      g_staticEnvelopesDirty.store(false, std::memory_order_release);
+    }
     std::lock_guard commitLock(g_areaRefreshCommitMutex);
     g_areaRefreshGeneration.fetch_add(1, std::memory_order_acq_rel);
     queue_no_liquid_snapshot();
+    probe::set_area_effect_points(nullptr, 0);
   } catch (...) {
     // The previous immutable GPU snapshot remains valid until another
     // transition or refresh can publish a complete generation.

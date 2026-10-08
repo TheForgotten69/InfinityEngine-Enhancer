@@ -81,29 +81,15 @@ std::optional<ScaleDetectionResult> infer_scale_from_tile_table(const TileInfo& 
   return std::nullopt;
 }
 
-bool is_upscaled_by_heuristics(const TileInfo& tileInfo, int textureId) {
-  if (!tileInfo.table || tileInfo.index < 0 ||
-      static_cast<std::uint32_t>(tileInfo.index) >= tileInfo.tileCount) {
-    return false;
-  }
-
-  const auto& entry = tileInfo.entry;
-  return entry.u > UpscaleThresholds::UV_THRESHOLD || entry.v > UpscaleThresholds::UV_THRESHOLD ||
-         textureId > UpscaleThresholds::TEXTURE_ID_THRESHOLD;
-}
-
 std::optional<ScaleDetectionResult> detect_scale(const TileInfo& tileInfo, int textureId,
                                                  const BuildManifest& manifest) {
+  (void)textureId;
   if (auto headerDetection = detect_scale_from_tis_header(tileInfo, manifest)) {
     return headerDetection;
   }
 
   if (auto tableDetection = infer_scale_from_tile_table(tileInfo)) {
     return tableDetection;
-  }
-
-  if (is_upscaled_by_heuristics(tileInfo, textureId)) {
-    return ScaleDetectionResult{4, ScaleDetectionSource::Heuristic, 0};
   }
 
   return std::nullopt;

@@ -9,5 +9,6 @@ inline constexpr unsigned AreaMask = 2;
 inline constexpr unsigned WaterNormal = 3;
 inline constexpr unsigned WaterDudv = 4;
 inline constexpr unsigned WaterFoam = 5;
+inline constexpr unsigned EffectsNoise = 6;
 
 }  // namespace iee::game::texture_units

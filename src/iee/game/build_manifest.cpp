@@ -143,8 +143,15 @@ constexpr BuildManifest kKnownBuilds[] = {
         {
             "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 48 FD FF FF",
             "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
+            // CGameObjectArray::GetShare (EEex InfinityLoader.db, version-
+            // independent section). Verified unique on 2.6.6.0 at 0x276490.
+            "48 C7 02 00 00 00 00 83 F9 FF",
+            // CGameStatic::Render prologue (offline-verified unique on both
+            // supported builds; PDB-named decompilation evidence).
+            "40 55 56 57 48 83 EC 50 48 8B 05 ? ? ? ? 48 33 C4 48 89 44 24 30 "
+            "48 8B 05 ? ? ? ? 49 8B F0 48 8B EA 48 8B F9",
         },
-        {0x27E710, 0x4247E0},
+        {0x27E710, 0x4247E0, 0x276490, 0x1F2570},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -171,8 +178,42 @@ constexpr BuildManifest kKnownBuilds[] = {
         {
             "40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 48 FD FF FF",
             "48 8B C4 44 89 48 20 48 83 EC 48 48 89 58 08 8B DA 48 89 68 10",
+            // Same EEex version-independent pattern. Offline-verified on the
+            // 2.7.3.0 binary: unique match, identical body shape, globals at
+            // 0x68F8F4 (max index) / 0x68F910 (entry table).
+            "48 C7 02 00 00 00 00 83 F9 FF",
+            // CGameStatic::Render (offline-verified unique at 0x1F27D0).
+            "40 55 56 57 48 83 EC 50 48 8B 05 ? ? ? ? 48 33 C4 48 89 44 24 30 "
+            "48 8B 05 ? ? ? ? 49 8B F0 48 8B EA 48 8B F9",
+            // CGameSprite::Render / RenderMarkers / RenderHealthBar. PDB-named
+            // on the Steam 2.7.3.0 binary; each offline-verified unique.
+            "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 A0 48 81 EC 60 01 00 00 "
+            "48 8B 05 ? ? ? ? 48 33 C4 48 89 45 20 45 33 E4",
+            "40 55 53 56 57 41 56 48 8B EC 48 83 EC 60 48 8B 41 18 4C 8B F2 48 8B F1",
+            "4C 8B DC 55 57 49 8D AB 48 FF FF FF 48 81 EC A8 01 00 00",
+            // CVidCell::GetFrame, then the shared GetCurrentCenterPoint /
+            // GetCurrentFrameSize body (PDB-named, offline-verified).
+            "40 53 48 83 EC 20 48 8B D9 48 8B 89 08 01 00 00 48 85 C9 0F",
+            "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B F9 33 DB 48 8B 89 08 01 00 00 "
+            "48 8B F2 48 85 C9 75 15 48 89 1A 33 C0",
+            // CInfinity::RenderFog and DrawFlush_GL (PDB-named, each
+            // offline-verified unique on the Steam 2.7.3.0 binary).
+            "48 89 5C 24 10 4C 89 44 24 18 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 "
+            "48 8B D9 E8 ? ? ? ? B9 FF FF FF FF E8 ? ? ? ? B9 E1 0D 00 00",
+            "4C 8B DC 55 41 56 41 57 49 8D 6B D8 48 81 EC 10 01 00 00 48 8B 05 ? ? ? ? "
+            "48 33 C4 48 89 45 90 45 33 F6 44 39 35 ? ? ? ? 45 8B FE 0F 84",
+            // CParticle::AsynchronousUpdate and CParticle::Render (PDB-named,
+            // each offline-verified unique).
+            "48 89 5C 24 18 57 48 83 EC 20 8B 51 10 45 33 C0 48 8B D9 41 8B F8 8D 42 FF 89 41 10 "
+            "85 D2",
+            "48 89 5C 24 18 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 40 "
+            "44 0F B7 29 4C 8B F9 66 44 3B 69 02",
+            // TexSubImage_GL (PDB-named, offline-verified unique).
+            "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 50 "
+            "44 8B F1 41 8B F0 44 8B 05 ? ? ? ? 48 8D 0D ? ? ? ? 41 8B C0 8B EA",
         },
-        {0x27EBD0, 0x4257C0},
+        {0x27EBD0, 0x4257C0, 0x276700, 0x1F27D0, 0x36BA50, 0x36F170, 0x36E820, 0x4118A0, 0x411660,
+         0x411780, 0x2A1B60, 0x42B350, 0x423C30, 0x425BE0, 0x42D190},
         {0x100, 0x1DC, 0x14, 0x6590, 0x6598, 0x65F8},
         {{
             {"CRes_Demand", 0x36, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
@@ -187,6 +228,40 @@ constexpr BuildManifest kKnownBuilds[] = {
             {"DrawEnd", 0x17A, BranchInstructionKind::CallRel32, 0xE8, 1, 5, true},
             {"DrawPopState", 0x1AD, BranchInstructionKind::JmpRel32, 0xE9, 1, 5, true},
         }},
+        // PDB-named on the Steam 2.7.3.0 binary; each pattern offline-verified
+        // unique, each function confirmed to draw from CGameObject::m_pos.
+        {{
+            {"CProjectileBAM::Render", "4C 8B DC 55 41 54 41 56 49 8D 6B A1 48 81 EC C0 00 00 00",
+             0x233F20},
+            {"CProjectileScorcher::Render",
+             "4C 8B DC 55 57 49 8D 6B A1 48 81 EC C8 00 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 45 27",
+             0x234A20},
+            {"CProjectileNewScorcher::Render", "4C 8B DC 55 53 49 8D 6B A1 48 81 EC C8 00 00 00",
+             0x234520},
+            {"CProjectileSkyStrike::Render", "4C 8B DC 55 41 56 49 8D 6B A1 48 81 EC C8 00 00 00",
+             0x234F50},
+            {"CGameFireball3d::Render",
+             "48 89 5C 24 18 48 89 74 24 20 55 57 41 54 41 55 41 56 48 8D 6C 24 C9", 0x1EAF90},
+            {"CGameTemporal::Render", "4C 8B DC 55 56 57 41 57 49 8D 6B A1 48 81 EC", 0x36CD80},
+            {"CGameChunk::Render", "4C 8B DC 55 56 57 41 55 41 57 49 8D 6B A1", 0x36B7A0},
+            {"CVEFVidCell::Render", "4C 8B DC 55 56 41 57 49 8D 6B A1 48 81 EC D0", 0x254B00},
+            // Floating text over a creature: each tick it copies its target's
+            // m_pos into its own and draws from there.
+            {"CGameText::Render",
+             "40 57 48 81 EC B0 00 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 44 24 78 48 8B C2 "
+             "48 8B F9 4D 85 C0 74 15 48 63 51 48",
+             0x1F39A0},
+        }},
+        // Disassembly-verified on the Steam 2.7.3.0 binary: DrawFlush_GL+0x24
+        // compares gl.n (0x2F73FD0); DrawEnd_GL writes gl.cmds at 0x2F5BF28
+        // (12 bytes each); DrawBlendFunc_GL packs src<<9 | dst<<13; the
+        // factor table at 0x5C12B0 has GL_ONE at index 1.
+        {0x24, 0x180A8, 8192, 8, 13, 1},
+        // Disassembly-verified: gl.user.state at 0x2F73F6C, gl.textures at
+        // 0x757040 (0x28-byte entries, GL name first), fx[] at 0x2F74050
+        // (0x30 apart: width +0, height +4, CPU buffer +0x20, texture index
+        // +0x28); the selected texture is bits 21-29 of the state word.
+        {0x64, 0x281CF90, 0x28, 0x80, 0x30, 2, 0x00, 0x04, 0x20, 0x28, 21, 0x1FF},
     },
 };
 
@@ -194,11 +269,49 @@ static_assert(validate_pattern_format(kKnownBuilds[0].patterns.loadArea),
               "LoadArea pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[0].patterns.renderTexture),
               "RenderTexture pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[0].patterns.objectArrayGetShare),
+              "GetShare pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[0].patterns.staticRender),
+              "StaticRender pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.staticRender),
+              "2.7.3 StaticRender pattern format is invalid");
 static_assert(kKnownBuilds[0].validate(), "Known build manifest is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.loadArea),
               "2.7.3 LoadArea pattern format is invalid");
 static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderTexture),
               "2.7.3 RenderTexture pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.objectArrayGetShare),
+              "2.7.3 GetShare pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.spriteRender) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderMarkers) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.spriteRenderHealthBar) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.vidCellGetFrame) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.vidCellFrameAccessor),
+              "2.7.3 sprite render pattern format is invalid");
+static_assert([] {
+  for (const auto& target : kKnownBuilds[1].smoothedObjectRenders) {
+    if (target.name && !validate_pattern_format(target.pattern)) return false;
+  }
+  return true;
+}(), "2.7.3 smoothed object render pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.textureUpload),
+              "2.7.3 texture upload pattern format is invalid");
+// Positional initialisation guard: each slot must hold its own function's bytes.
+static_assert(kKnownBuilds[1].patterns.renderFog.starts_with("48 89 5C 24 10 4C 89 44 24 18") &&
+                  kKnownBuilds[1].patterns.drawFlush.starts_with("4C 8B DC 55 41 56 41 57") &&
+                  kKnownBuilds[1].patterns.particleUpdate.starts_with(
+                      "48 89 5C 24 18 57 48 83 EC 20 8B 51 10") &&
+                  kKnownBuilds[1].patterns.particleRender.starts_with(
+                      "48 89 5C 24 18 48 89 54 24 10 55 56 57") &&
+                  kKnownBuilds[1].patterns.textureUpload.starts_with(
+                      "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18"),
+              "a 2.7.3 hook pattern is in the wrong PatternSet slot");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.particleUpdate) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.particleRender),
+              "2.7.3 particle pattern format is invalid");
+static_assert(validate_pattern_format(kKnownBuilds[1].patterns.renderFog) &&
+                  validate_pattern_format(kKnownBuilds[1].patterns.drawFlush),
+              "2.7.3 world post pattern format is invalid");
 static_assert(kKnownBuilds[1].validate(), "2.7.3 build manifest is invalid");
 }  // namespace
 

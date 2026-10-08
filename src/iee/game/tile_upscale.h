@@ -7,8 +7,6 @@
 
 namespace iee::game {
 namespace UpscaleThresholds {
-constexpr int UV_THRESHOLD = 1024;
-constexpr int TEXTURE_ID_THRESHOLD = 10000;
 constexpr int DETECTION_SAMPLE_COUNT = 10;
 }  // namespace UpscaleThresholds
 
@@ -22,7 +20,6 @@ constexpr std::uint32_t Upscaled8x = 0x200;
 enum class ScaleDetectionSource : std::uint8_t {
   TisHeader,
   TileTable,
-  Heuristic,
 };
 
 struct ScaleDetectionResult {
@@ -43,9 +40,13 @@ struct ScaleDetectionResult {
 [[nodiscard]] std::optional<ScaleDetectionResult> infer_scale_from_tile_table(
     const TileInfo& tileInfo);
 
-[[nodiscard]] bool is_upscaled_by_heuristics(const TileInfo& tileInfo, int textureId);
-
-// Production scale selection: deterministic metadata first, heuristic last.
+// Production scale selection: deterministic metadata only (TIS header, then
+// PVR entry-table coordinate grid). When neither resolves, nullopt fails
+// closed into the caller's sampling path, which delegates the tileset to the
+// engine as standard 1x. Raw UV magnitudes and GL texture ids are not valid
+// scale signals (atlas origins are arbitrary; texture ids grow with session
+// allocations) — the former heuristic built on them produced false 4x
+// detections on vanilla areas and was removed.
 [[nodiscard]] std::optional<ScaleDetectionResult> detect_scale(const TileInfo& tileInfo,
                                                                int textureId,
                                                                const BuildManifest& manifest);

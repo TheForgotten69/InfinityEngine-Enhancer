@@ -3,9 +3,15 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
+#include <filesystem>
+#include <stdexcept>
+#include <utility>
 
 #include "app_context.h"
 #include "area_state.h"
@@ -14,15 +20,21 @@
 #include "iee/core/pattern_scanner.h"
 #include "iee/core/performance_samples.h"
 #include "iee/features/tile_render.h"
+#include "iee/features/world_post.h"
 #include "iee/frame_hook.h"
 #include "iee/game/game_types.h"
+#include "iee/game/animation_interp.h"
+#include "iee/game/draw_queue.h"
 #include "iee/game/renderer.h"
+#include "iee/game/runtime_types_x64.h"
+#include "iee/game/sprite_motion.h"
 #include "iee/shader_probe.h"
 
 namespace iee::hooks {
 using LoadAreaFn = void* (*)(void*, void*, unsigned char, unsigned char, unsigned char);
 using RenderTextureFn = void (*)(void*, int, void*, int, int, unsigned long);
 using DrawColorToneFn = void (*)(int);
+using StaticRenderFn = void (*)(void*, void*, void*);
 
 // Hook management - initialize MinHook
 // Intentionally explicit lifetime: a static smart-pointer destructor would
@@ -31,8 +43,52 @@ static core::HookInit* g_hookInit = nullptr;
 static core::Hook<LoadAreaFn> g_loadAreaHook;
 static core::Hook<RenderTextureFn> g_renderTextureHook;
 static core::Hook<DrawColorToneFn> g_drawColorToneHook;
+static core::Hook<StaticRenderFn> g_staticRenderHook;
+// CGameSprite::Render(area, vidMode) and the (vidMode) overlay renders share
+// one pass-through signature; the unused third argument is harmless on x64.
+using SpriteRenderFn = void (*)(void*, void*, void*);
+static core::Hook<SpriteRenderFn> g_spriteRenderHook;
+static core::Hook<SpriteRenderFn> g_spriteMarkersHook;
+static core::Hook<SpriteRenderFn> g_spriteHealthBarHook;
+static std::array<core::Hook<SpriteRenderFn>, game::kMaxSmoothedObjectRenders> g_objectRenderHooks;
+// CVidCell::GetFrame(), GetCurrentCenterPoint(CPoint&), GetCurrentFrameSize(CSize&):
+// one pass-through signature, the unused argument is harmless on x64.
+using VidCellAccessorFn = int (*)(void*, void*);
+static core::Hook<VidCellAccessorFn> g_vidCellGetFrameHook;
+static core::Hook<VidCellAccessorFn> g_vidCellCenterPointHook;
+static core::Hook<VidCellAccessorFn> g_vidCellFrameSizeHook;
+// CInfinity::RenderFog(CVidMode*, CVisibilityMap*) and the GL backend's
+// argument-less queue flush, used together by the world post passes.
+using RenderFogFn = void (*)(void*, void*, void*);
+using DrawFlushFn = void (*)();
+static core::Hook<RenderFogFn> g_renderFogHook;
+static DrawFlushFn g_drawFlush = nullptr;
+// DrawFlush_GL is also detoured, to replay the queue's additive draws into
+// the bloom's emissive target. g_drawFlush stays the engine's entry point, so
+// our own flushes go through the detour too.
+static core::Hook<DrawFlushFn> g_drawFlushHook;
+static std::int32_t* g_drawQueueCount = nullptr;
+static game::DrawCommand* g_drawQueueCommands = nullptr;
+// TexSubImage_GL(x, y, width, rows, pixels, secondTexture): the engine's
+// texture upload, hooked for the sprite atlas.
+using TextureUploadFn = void (*)(int, int, int, int, void*, bool);
+static core::Hook<TextureUploadFn> g_textureUploadHook;
+// Atlas textures replaced by their upscaled copies for the current flush.
+struct SwappedAtlas {
+  std::uint32_t* name{};
+  std::uint32_t original{};
+};
+static std::array<SwappedAtlas, 2> g_swappedAtlases{};
+
+// CParticle::AsynchronousUpdate() and CParticle::Render(CPoint&, CRect&, type, n).
+using ParticleUpdateFn = unsigned char (*)(void*);
+using ParticleRenderFn = void (*)(void*, void*, void*, unsigned short, unsigned short);
+static core::Hook<ParticleUpdateFn> g_particleUpdateHook;
+static core::Hook<ParticleRenderFn> g_particleRenderHook;
 
 static AppContext* g_ctx = nullptr;
+// Raised by LoadArea; the sprite-smoothing tracker clears itself on its own thread.
+static std::atomic<bool> g_spriteMotionReset{false};
 
 namespace {
 void record_render_performance(bool enabled, bool handled, long long elapsedTicks) noexcept {
@@ -207,6 +263,7 @@ void publish_view_state(bool force = false, bool flushGpuUpload = true) {
       area::refresh_wed_cache(*g_ctx, infGame);
     }
   }
+  area::republish_area_animations_if_dirty(*g_ctx);
   if (!g_ctx->wed.load()) {
     return;
   }
@@ -228,12 +285,15 @@ static void* detour_load_area(void* thisPtr, void* pAreaNameString, unsigned cha
   auto& ctx = *g_ctx;
   try {
     core::advance_readability_cache_epoch();
-    LOG_DEBUG("LoadArea called - resetting scale detection for new area");
+    LOG_INFO("LoadArea called on thread {} - resetting scale detection for new area",
+              GetCurrentThreadId());
     ctx.infGame.store(thisPtr, std::memory_order_relaxed);
     // Invalidate any older refresh before clearing its published CPU state.
     area::reset_gpu_area_state();
     ctx.reset_area_state();
     features::request_tile_render_state_reset();
+    g_spriteMotionReset.store(true, std::memory_order_release);
+    features::world_post_on_area_load();
     game::request_texture_configuration_cache_reset();
   } catch (const std::exception& e) {
     LOG_ERROR("LoadArea pre-dispatch failed; continuing with the engine path: {}", e.what());
@@ -273,6 +333,299 @@ static void detour_draw_color_tone(int mode) {
     // Rendering must never depend on IEE diagnostics or uniform state.
   }
   g_drawColorToneHook.original()(mode);
+}
+
+// Sprite movement smoothing. The engine moves creatures on its logic tick
+// (30 Hz) while EEex's uncapped renderer draws many frames per tick, so every
+// render that reads the sprite position is wrapped: the smoothed position is
+// written into CGameObject::m_pos for the duration of the engine call and the
+// logic position is restored afterwards. All of it runs on the engine's main
+// thread; LoadArea only raises the reset flag.
+static game::SpriteMotionTracker g_spriteMotion;
+// Projectiles and effects cover far more ground per tick than creatures.
+static game::SpriteMotionTracker g_objectMotion{192};
+// Draw-time animation interpolation state (see detour_sprite_render).
+static game::AnimationInterpolator g_animationInterp;
+static bool g_animationInterpActive = false;
+static int g_spritePositionSwapDepth = 0;
+
+// One timestamp per presented frame, so a sprite, its selection circle and
+// its health bar are all placed at the same smoothed position.
+static double sprite_motion_frame_seconds() noexcept {
+  static unsigned long long lastFrame = ~0ull;
+  static double seconds = 0.0;
+  const auto frameNumber = frame::frame_count();
+  if (frameNumber != lastFrame || frameNumber == 0) {
+    lastFrame = frameNumber;
+    static const double frequency = [] {
+      LARGE_INTEGER value{};
+      QueryPerformanceFrequency(&value);
+      return static_cast<double>(value.QuadPart);
+    }();
+    LARGE_INTEGER counter{};
+    QueryPerformanceCounter(&counter);
+    seconds = static_cast<double>(counter.QuadPart) / frequency;
+  }
+  return seconds;
+}
+
+static void call_with_smoothed_position(core::Hook<SpriteRenderFn>& hook,
+                                        game::SpriteMotionTracker& tracker, void* sprite,
+                                        void* a, void* b) {
+  const auto original = hook.original();
+  // Nested sprite renders already see the smoothed position.
+  if (!sprite || !g_ctx || g_spritePositionSwapDepth > 0 || !g_ctx->cfg.smoothSpriteMovement) {
+    original(sprite, a, b);
+    return;
+  }
+  auto* position = reinterpret_cast<game::CPoint*>(static_cast<std::byte*>(sprite) +
+                                                   offsetof(game::CGameObject, m_pos));
+  game::CPoint logic{};
+  std::int32_t shownX = 0;
+  std::int32_t shownY = 0;
+  bool swapped = false;
+  try {
+    static bool threadLogged = false;
+    if (!threadLogged) {
+      threadLogged = true;
+      LOG_INFO("Sprite smoothing: first sprite render on thread {}", GetCurrentThreadId());
+    }
+    if (g_spriteMotionReset.exchange(false, std::memory_order_acq_rel)) {
+      g_spriteMotion.clear();
+      g_objectMotion.clear();
+      g_animationInterp.reset_timing();
+    }
+    if (core::safe_read(position, logic)) {
+      const auto shown =
+          tracker.sample(sprite, {logic.x, logic.y}, sprite_motion_frame_seconds());
+      if (shown.x != logic.x || shown.y != logic.y) {
+        shownX = shown.x;
+        shownY = shown.y;
+        position->x = shownX;
+        position->y = shownY;
+        swapped = true;
+      }
+    }
+  } catch (...) {
+    // Smoothing is cosmetic; any doubt draws at the logic position.
+  }
+  ++g_spritePositionSwapDepth;
+  original(sprite, a, b);
+  --g_spritePositionSwapDepth;
+  // Restore only our own write: if the engine moved the sprite meanwhile, its
+  // value is the newer logic position and must win.
+  if (swapped && position->x == shownX && position->y == shownY) *position = logic;
+}
+
+// Animation interpolation. While a creature is being drawn, every CVidCell the
+// engine resolves a frame for is pointed at its expanded BAM and the in-between
+// frame for this instant (see game::AnimationInterpolator); the logic's
+// resource and frame are restored when the draw returns. Main thread only.
+
+static void detour_sprite_render(void* sprite, void* a, void* b) {
+  if (!g_animationInterpActive) {
+    call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
+    return;
+  }
+  g_animationInterp.begin_scope(sprite);
+  call_with_smoothed_position(g_spriteRenderHook, g_spriteMotion, sprite, a, b);
+  g_animationInterp.end_scope();
+}
+static int detour_vid_cell_get_frame(void* cell, void* unused) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellGetFrameHook.original()(cell, unused);
+}
+static int detour_vid_cell_center_point(void* cell, void* out) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellCenterPointHook.original()(cell, out);
+}
+static int detour_vid_cell_frame_size(void* cell, void* out) {
+  g_animationInterp.touch(static_cast<game::CVidCell*>(cell), sprite_motion_frame_seconds());
+  return g_vidCellFrameSizeHook.original()(cell, out);
+}
+// Particle smoothing (rain, snow, sparkles). The engine adds each particle's
+// velocity to its position once per logic tick, so between ticks its previous
+// position is known exactly. Drawing it part of the way from there removes
+// the stepping. The update may run on another thread: the tick clock is
+// atomic, and the position is only put back if the engine has not moved the
+// particle in the meantime.
+static game::TickClock g_particleTick;
+
+static double monotonic_seconds() noexcept {
+  static const double frequency = [] {
+    LARGE_INTEGER value{};
+    QueryPerformanceFrequency(&value);
+    return static_cast<double>(value.QuadPart);
+  }();
+  LARGE_INTEGER counter{};
+  QueryPerformanceCounter(&counter);
+  return static_cast<double>(counter.QuadPart) / frequency;
+}
+
+static unsigned char detour_particle_update(void* particle) {
+  g_particleTick.on_update(monotonic_seconds());
+  return g_particleUpdateHook.original()(particle);
+}
+
+static void detour_particle_render(void* self, void* origin, void* clip, unsigned short type,
+                                   unsigned short count) {
+  const auto original = g_particleRenderHook.original();
+  auto* particle = static_cast<game::CParticle*>(self);
+  const double phase = g_particleTick.phase(sprite_motion_frame_seconds());
+  if (!particle || phase >= 1.0) {
+    original(self, origin, clip, type, count);
+    return;
+  }
+  const game::ParticlePoint logic{particle->m_posX, particle->m_posY, particle->m_posZ};
+  const auto shown = game::particle_draw_position(
+      {logic,
+       {particle->m_velX, particle->m_velY, particle->m_velZ},
+       particle->m_nGravity,
+       (particle->m_wType & 1) != 0},
+      phase);
+  particle->m_posX = shown.x;
+  particle->m_posY = shown.y;
+  particle->m_posZ = shown.z;
+  original(self, origin, clip, type, count);
+  if (particle->m_posX == shown.x && particle->m_posY == shown.y && particle->m_posZ == shown.z) {
+    particle->m_posX = logic.x;
+    particle->m_posY = logic.y;
+    particle->m_posZ = logic.z;
+  }
+}
+
+static void detour_sprite_markers(void* sprite, void* a, void* b) {
+  call_with_smoothed_position(g_spriteMarkersHook, g_spriteMotion, sprite, a, b);
+}
+static void detour_sprite_health_bar(void* sprite, void* a, void* b) {
+  call_with_smoothed_position(g_spriteHealthBarHook, g_spriteMotion, sprite, a, b);
+}
+
+// One detour per manifest slot, so each knows which original to call.
+template <std::size_t Slot>
+static void detour_object_render(void* object, void* a, void* b) {
+  call_with_smoothed_position(g_objectRenderHooks[Slot], g_objectMotion, object, a, b);
+}
+template <std::size_t... Slots>
+static constexpr std::array<SpriteRenderFn, sizeof...(Slots)> object_render_detours(
+    std::index_sequence<Slots...>) {
+  return {&detour_object_render<Slots>...};
+}
+static constexpr auto kObjectRenderDetours =
+    object_render_detours(std::make_index_sequence<game::kMaxSmoothedObjectRenders>{});
+
+// Bloom source. The engine draws its light-emitting art (fires, spell
+// effects, glows) additively, and every queued command records its blend
+// mode. During the world pass each flush is followed by a second one that
+// holds only those commands, with our black emissive target bound. The vertex
+// data and textures of the first flush are still in place: the engine only
+// overwrites them when new draws are queued. Render thread only.
+static void flush_with_emissive_replay() {
+  const auto original = g_drawFlushHook.original();
+  if (!g_ctx || !g_drawQueueCount || !features::world_post_wants_emissive()) {
+    original();
+    return;
+  }
+  static std::array<game::DrawCommand, 1024> additive;
+  const auto collected = game::collect_additive(g_ctx->manifest->drawQueue, g_drawQueueCommands,
+                                                *g_drawQueueCount, additive);
+  original();
+  if (collected == 0 || !features::world_post_begin_emissive()) return;
+  std::memcpy(g_drawQueueCommands, additive.data(), collected * sizeof(game::DrawCommand));
+  *g_drawQueueCount = static_cast<std::int32_t>(collected);
+  original();
+  features::world_post_end_emissive(static_cast<int>(collected));
+}
+
+static void detour_draw_flush() {
+  flush_with_emissive_replay();
+  // The engine uploads into, and binds, whatever name its texture table
+  // holds: give it its own atlas textures back before the next upload.
+  for (auto& swapped : g_swappedAtlases) {
+    if (swapped.name) *swapped.name = swapped.original;
+    swapped = {};
+  }
+}
+
+// Sprite smoothing. A flush starts by uploading the CPU-composited sprite
+// atlas, then draws from it. Right after that upload the atlas is upscaled
+// (FSR1) into our own texture, whose name replaces the atlas's in the engine's
+// texture table until the flush is over. The upload has just marked the
+// texture as needing a rebind, so the first draw picks ours up.
+static void detour_texture_upload(int x, int y, int width, int rows, void* pixels, bool second) {
+  g_textureUploadHook.original()(x, y, width, rows, pixels, second);
+  if (!g_ctx || !g_drawQueueCount) return;
+  const auto& layout = g_ctx->manifest->spriteAtlas;
+  const auto count = reinterpret_cast<std::uintptr_t>(g_drawQueueCount);
+  if (second || x != 0 || y != 0 || !features::world_post_wants_atlas_upscale()) return;
+  const int slot = game::atlas_slot_for_upload(layout, count, pixels);
+  if (slot < 0 || static_cast<std::size_t>(slot) >= g_swappedAtlases.size()) return;
+  auto& swapped = g_swappedAtlases[static_cast<std::size_t>(slot)];
+  const auto atlas = game::atlas_info(layout, count, slot);
+  if (!atlas.textureName || swapped.name || atlas.width != width) return;
+  const unsigned upscaled = features::world_post_upscale_atlas(slot, *atlas.textureName,
+                                                               atlas.width, atlas.height, rows);
+  if (!upscaled) return;
+  swapped = {atlas.textureName, *atlas.textureName};
+  *atlas.textureName = upscaled;
+}
+
+// World post passes (soft fog of war, bloom). The engine queues every draw
+// and submits the queue in DrawFlush_GL at the end of the frame, so the world
+// only exists in the framebuffer once we flush, and the fog only lands in our
+// target if we flush again while it is bound. With both effects off this
+// detour is a plain pass-through: no flush, the frame is the engine's own.
+static void detour_render_fog(void* infinity, void* vidMode, void* visibility) {
+  const auto original = g_renderFogHook.original();
+  if (g_ctx && g_ctx->cfg.enableDebugHotkeys) features::world_post_poll_hotkeys();
+  if (!g_ctx || !g_drawFlush || !features::world_post_active()) {
+    original(infinity, vidMode, visibility);
+    return;
+  }
+  features::WorldView worldView{};
+  if (const auto* activeArea = g_ctx->activeArea.load()) {
+    area::ViewTransform view{};
+    if (area::read_view_transform(activeArea, view)) {
+      worldView = {view.scrollX, view.scrollY, view.viewWorldW, view.viewWorldH};
+    }
+  }
+  g_drawFlush();
+  const bool capturing = features::world_post_before_fog(worldView);
+  original(infinity, vidMode, visibility);
+  if (capturing) {
+    g_drawFlush();
+    features::world_post_after_fog();
+  }
+}
+
+// CGameStatic::Render hook: while the fpSEAM point effects are active, the
+// authored fire/smoke BAM draws are replaced by our textured effects, so the
+// engine's own little flame/puff loops are skipped. Everything else (lights,
+// wildlife, WBM/PVRZ setpieces, unclassified overlays) renders vanilla.
+static void detour_static_render(void* thisPtr, void* area, void* vidMode) {
+  try {
+    if (g_ctx && g_ctx->cfg.enablePointEffects && g_ctx->cfg.enableWaterEffect &&
+        probe::override_effect_replacement_enabled() && thisPtr) {
+      game::ARE_Animation_st header{};
+      const auto* headerAddress =
+          reinterpret_cast<const std::byte*>(thisPtr) + offsetof(game::CGameStatic, m_header);
+      if (core::safe_read(headerAddress, header) &&
+          (header.nFlags &
+           (game::kAreAnimationFlagUseWbm | game::kAreAnimationFlagUsePvrz)) == 0) {
+        const auto info = game::make_area_animation_info(header);
+        // Suppress only once the authored draw box is known: the engine's
+        // first draw loads the BAM that box is read from, and the point then
+        // lands exactly where RenderBam would have drawn.
+        if (game::should_replace_animation_draw(info.resrefView(), info.kind) &&
+            area::static_envelope_ready(thisPtr)) {
+          return;  // replaced by the shader's point effects
+        }
+      }
+    }
+  } catch (...) {
+    // Suppression is cosmetic; any doubt falls through to the engine draw.
+  }
+  g_staticRenderHook.original()(thisPtr, area, vidMode);
 }
 
 // RenderTexture hook - thin dispatch into the tile upscale feature
@@ -350,6 +703,146 @@ bool install_all(AppContext& ctx) {
           "transform cannot be published safely. Tile upscaling remains enabled.");
     }
 
+    if (ctx.addrs.StaticRender) {
+      try {
+        g_staticRenderHook.create(reinterpret_cast<void*>(ctx.addrs.StaticRender),
+                                  reinterpret_cast<void*>(&detour_static_render));
+        g_staticRenderHook.enable();
+        LOG_INFO("CGameStatic::Render hook installed (fire/smoke BAM replacement)");
+      } catch (const std::exception& e) {
+        LOG_WARN("CGameStatic::Render hook failed ({}); authored fire/smoke draws stay vanilla",
+                 e.what());
+      } catch (...) {
+        LOG_WARN("CGameStatic::Render hook failed; authored fire/smoke draws stay vanilla");
+      }
+    }
+
+    if ((ctx.cfg.smoothSpriteMovement || ctx.cfg.interpolateAnimations) &&
+        ctx.addrs.SpriteRender && ctx.addrs.SpriteRenderMarkers &&
+        ctx.addrs.SpriteRenderHealthBar) {
+      try {
+        g_spriteRenderHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRender),
+                                  reinterpret_cast<void*>(&detour_sprite_render));
+        g_spriteMarkersHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRenderMarkers),
+                                   reinterpret_cast<void*>(&detour_sprite_markers));
+        g_spriteHealthBarHook.create(reinterpret_cast<void*>(ctx.addrs.SpriteRenderHealthBar),
+                                     reinterpret_cast<void*>(&detour_sprite_health_bar));
+        g_spriteRenderHook.enable();
+        g_spriteMarkersHook.enable();
+        g_spriteHealthBarHook.enable();
+        LOG_INFO("Sprite render hooks installed (movement smoothing={})",
+                 ctx.cfg.smoothSpriteMovement);
+        if (ctx.cfg.interpolateAnimations && ctx.addrs.VidCellGetFrame &&
+            ctx.addrs.VidCellGetCurrentCenterPoint && ctx.addrs.VidCellGetCurrentFrameSize) {
+          try {
+            wchar_t executablePath[MAX_PATH]{};
+            const auto length = GetModuleFileNameW(nullptr, executablePath, MAX_PATH);
+            if (length == 0 || length >= MAX_PATH) throw std::runtime_error("no game path");
+            const auto directory =
+                std::filesystem::path(executablePath).parent_path() / "iee-interp";
+            g_animationInterp.set_directory(directory);
+            g_vidCellGetFrameHook.create(reinterpret_cast<void*>(ctx.addrs.VidCellGetFrame),
+                                         reinterpret_cast<void*>(&detour_vid_cell_get_frame));
+            g_vidCellCenterPointHook.create(
+                reinterpret_cast<void*>(ctx.addrs.VidCellGetCurrentCenterPoint),
+                reinterpret_cast<void*>(&detour_vid_cell_center_point));
+            g_vidCellFrameSizeHook.create(
+                reinterpret_cast<void*>(ctx.addrs.VidCellGetCurrentFrameSize),
+                reinterpret_cast<void*>(&detour_vid_cell_frame_size));
+            g_vidCellGetFrameHook.enable();
+            g_vidCellCenterPointHook.enable();
+            g_vidCellFrameSizeHook.enable();
+            g_animationInterpActive = true;
+            LOG_INFO("Animation interpolation hooks installed (expanded BAMs from {})",
+                     directory.string());
+          } catch (...) {
+            g_animationInterpActive = false;
+            (void)g_vidCellFrameSizeHook.remove();
+            (void)g_vidCellCenterPointHook.remove();
+            (void)g_vidCellGetFrameHook.remove();
+            LOG_WARN("Animation interpolation hooks failed; animations play their original "
+                     "frames");
+          }
+        }
+      } catch (...) {
+        (void)g_spriteHealthBarHook.remove();
+        (void)g_spriteMarkersHook.remove();
+        (void)g_spriteRenderHook.remove();
+        LOG_WARN("Sprite movement smoothing hooks failed; creatures move at the logic rate");
+      }
+    }
+
+    if (ctx.cfg.smoothSpriteMovement) {
+      std::size_t installed = 0;
+      for (std::size_t slot = 0; slot < g_objectRenderHooks.size(); ++slot) {
+        const auto target = ctx.addrs.SmoothedObjectRenders[slot];
+        if (!target) continue;
+        try {
+          g_objectRenderHooks[slot].create(reinterpret_cast<void*>(target),
+                                           reinterpret_cast<void*>(kObjectRenderDetours[slot]));
+          g_objectRenderHooks[slot].enable();
+          ++installed;
+        } catch (...) {
+          (void)g_objectRenderHooks[slot].remove();
+          LOG_WARN("Object movement smoothing hook {} failed; that object type moves at the "
+                   "logic rate",
+                   ctx.manifest->smoothedObjectRenders[slot].name);
+        }
+      }
+      LOG_INFO("Object movement smoothing hooks installed: {}", installed);
+
+      if (ctx.addrs.ParticleUpdate && ctx.addrs.ParticleRender) {
+        try {
+          g_particleUpdateHook.create(reinterpret_cast<void*>(ctx.addrs.ParticleUpdate),
+                                      reinterpret_cast<void*>(&detour_particle_update));
+          g_particleRenderHook.create(reinterpret_cast<void*>(ctx.addrs.ParticleRender),
+                                      reinterpret_cast<void*>(&detour_particle_render));
+          g_particleUpdateHook.enable();
+          g_particleRenderHook.enable();
+          LOG_INFO("Particle movement smoothing hooks installed (rain, snow, sparkles)");
+        } catch (...) {
+          (void)g_particleRenderHook.remove();
+          (void)g_particleUpdateHook.remove();
+          LOG_WARN("Particle movement smoothing hooks failed; particles move at the logic rate");
+        }
+      }
+    }
+
+    if (ctx.addrs.RenderFog && ctx.addrs.DrawFlush) {
+      try {
+        features::world_post_configure(ctx.cfg);
+        g_drawFlush = reinterpret_cast<DrawFlushFn>(ctx.addrs.DrawFlush);
+        g_renderFogHook.create(reinterpret_cast<void*>(ctx.addrs.RenderFog),
+                               reinterpret_cast<void*>(&detour_render_fog));
+        g_renderFogHook.enable();
+        LOG_INFO("CInfinity::RenderFog hook installed (soft fog of war={}, bloom={})",
+                 ctx.cfg.softFogOfWar, ctx.cfg.bloom);
+        if (ctx.addrs.DrawQueueCount && ctx.addrs.DrawQueueCommands) {
+          g_drawQueueCount = reinterpret_cast<std::int32_t*>(ctx.addrs.DrawQueueCount);
+          g_drawQueueCommands = reinterpret_cast<game::DrawCommand*>(ctx.addrs.DrawQueueCommands);
+          g_drawFlushHook.create(reinterpret_cast<void*>(ctx.addrs.DrawFlush),
+                                 reinterpret_cast<void*>(&detour_draw_flush));
+          g_drawFlushHook.enable();
+          LOG_INFO("DrawFlush_GL hook installed (bloom from the engine's additive draws)");
+          if (ctx.addrs.TextureUpload) {
+            g_textureUploadHook.create(reinterpret_cast<void*>(ctx.addrs.TextureUpload),
+                                       reinterpret_cast<void*>(&detour_texture_upload));
+            g_textureUploadHook.enable();
+            LOG_INFO("TexSubImage_GL hook installed at 0x{:X} (sprite upscaling={})",
+                     ctx.addrs.TextureUpload, ctx.cfg.spriteUpscale);
+          }
+        }
+      } catch (...) {
+        (void)g_textureUploadHook.remove();
+        g_drawQueueCount = nullptr;
+        g_drawQueueCommands = nullptr;
+        (void)g_drawFlushHook.remove();
+        g_drawFlush = nullptr;
+        (void)g_renderFogHook.remove();
+        LOG_WARN("CInfinity::RenderFog hook failed; fog of war and bloom stay vanilla");
+      }
+    }
+
     g_loadAreaHook.enable();
     LOG_INFO("LoadArea hook enabled");
 
@@ -364,6 +857,7 @@ bool install_all(AppContext& ctx) {
     return true;
   } catch (const std::exception& e) {
     LOG_ERROR("Exception during hook installation: {}", e.what());
+    (void)g_staticRenderHook.remove();
     (void)g_drawColorToneHook.remove();
     (void)g_renderTextureHook.remove();
     (void)g_loadAreaHook.remove();
@@ -373,6 +867,7 @@ bool install_all(AppContext& ctx) {
     return false;
   } catch (...) {
     LOG_ERROR("Unknown exception during hook installation");
+    (void)g_staticRenderHook.remove();
     (void)g_drawColorToneHook.remove();
     (void)g_renderTextureHook.remove();
     (void)g_loadAreaHook.remove();
@@ -389,6 +884,24 @@ void uninstall_all() noexcept {
   } catch (...) {
   }
 
+  (void)g_textureUploadHook.remove();
+  (void)g_drawFlushHook.remove();
+  g_drawQueueCount = nullptr;
+  g_drawQueueCommands = nullptr;
+  (void)g_renderFogHook.remove();
+  g_drawFlush = nullptr;
+  features::world_post_forget();
+  g_animationInterpActive = false;
+  (void)g_vidCellFrameSizeHook.remove();
+  (void)g_vidCellCenterPointHook.remove();
+  (void)g_vidCellGetFrameHook.remove();
+  (void)g_particleRenderHook.remove();
+  (void)g_particleUpdateHook.remove();
+  for (auto& hook : g_objectRenderHooks) (void)hook.remove();
+  (void)g_spriteHealthBarHook.remove();
+  (void)g_spriteMarkersHook.remove();
+  (void)g_spriteRenderHook.remove();
+  (void)g_staticRenderHook.remove();
   (void)g_drawColorToneHook.remove();
   (void)g_renderTextureHook.remove();
   (void)g_loadAreaHook.remove();
@@ -408,6 +921,19 @@ void prepare_for_shutdown() noexcept {
   // state are torn down. MinHook itself stays initialized until
   // uninstall_all(), after every MinHook-backed subsystem has removed its
   // hooks.
+  (void)g_textureUploadHook.disable();
+  (void)g_drawFlushHook.disable();
+  (void)g_renderFogHook.disable();
+  (void)g_vidCellFrameSizeHook.disable();
+  (void)g_vidCellCenterPointHook.disable();
+  (void)g_vidCellGetFrameHook.disable();
+  (void)g_particleRenderHook.disable();
+  (void)g_particleUpdateHook.disable();
+  for (auto& hook : g_objectRenderHooks) (void)hook.disable();
+  (void)g_spriteHealthBarHook.disable();
+  (void)g_spriteMarkersHook.disable();
+  (void)g_spriteRenderHook.disable();
+  (void)g_staticRenderHook.disable();
   (void)g_drawColorToneHook.disable();
   (void)g_renderTextureHook.disable();
   (void)g_loadAreaHook.disable();
