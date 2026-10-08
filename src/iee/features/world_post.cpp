@@ -107,7 +107,7 @@ struct Resources {
   unsigned spriteUpscale{};
   SharpenProgram spriteSharpen{};
   std::array<AtlasTargets, 2> atlases{};
-  bool atlasDrawnOnce{};
+  std::array<bool, 2> atlasDrawnOnce{};
   BlurProgram blurDown{};
   BlurProgram blurUp{};
   Target fogCapture{};
@@ -896,30 +896,40 @@ unsigned world_post_upscale_atlas(int slot, unsigned sourceTexture, int width, i
                 gl::check_error("sprite atlas targets");
       }
       if (ready) {
+        // Both shaders address texels by gl_FragCoord, so a viewport selects
+        // which part of the copy is redrawn.
+        const auto filter = [&](game::Region region) {
+          fn.glViewport(region.x, region.y, region.width, region.height);
+          fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.upscaled.framebuffer);
+          fn.glUseProgram(g_resources.spriteUpscale);
+          fn.glBindTexture(gl::TEXTURE_2D, sourceTexture);
+          fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+          fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.sharpened.framebuffer);
+          fn.glUseProgram(g_resources.spriteSharpen.id);
+          fn.glUniform1f(g_resources.spriteSharpen.sharpness, g_settings.spriteSharpness);
+          fn.glBindTexture(gl::TEXTURE_2D, atlas.upscaled.texture);
+          fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+        };
         // Only the rows the engine just filled; two rows of margin for the kernel.
         const int outputRows = rows * 2 + 4 < doubled.height ? rows * 2 + 4 : doubled.height;
         set_pass_state();
-        fn.glViewport(0, 0, doubled.width, outputRows);
-        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.upscaled.framebuffer);
-        fn.glUseProgram(g_resources.spriteUpscale);
-        fn.glBindTexture(gl::TEXTURE_2D, sourceTexture);
-        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
-        fn.glBindFramebuffer(gl::FRAMEBUFFER, atlas.sharpened.framebuffer);
-        fn.glUseProgram(g_resources.spriteSharpen.id);
-        fn.glUniform1f(g_resources.spriteSharpen.sharpness, g_settings.spriteSharpness);
-        fn.glBindTexture(gl::TEXTURE_2D, atlas.upscaled.texture);
-        fn.glDrawArrays(gl::TRIANGLES, 0, 3);
+        filter({0, 0, doubled.width, outputRows});
+        // Untextured shapes drawn in this flush sample the last corner of
+        // atlas 0, which those rows rarely reach: without it they come out
+        // transparent.
+        if (slot == 0 && outputRows < doubled.height) filter(game::untextured_corner(doubled));
         result = atlas.sharpened.texture;
         ++g_atlasUpscalesSinceArea;
-        if (!g_resources.atlasDrawnOnce) {
-          g_resources.atlasDrawnOnce = true;
+        auto& drawnOnce = g_resources.atlasDrawnOnce[static_cast<std::size_t>(slot)];
+        if (!drawnOnce) {
+          drawnOnce = true;
           if (!gl::check_error("sprite atlas upscale")) {
             result = 0;
             ready = false;
           } else {
             try {
-              LOG_INFO("World post: first sprite atlas upscaled ({}x{} -> {}x{}, {} rows)", width,
-                       height, doubled.width, doubled.height, rows);
+              LOG_INFO("World post: sprite atlas {} first upscaled ({}x{} -> {}x{}, {} rows)", slot,
+                       width, height, doubled.width, doubled.height, rows);
             } catch (...) {
             }
           }

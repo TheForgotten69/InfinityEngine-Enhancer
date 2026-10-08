@@ -1593,6 +1593,11 @@ void test_world_post_plan() {
   expect_eq(available_blur_levels({10, 10}), 0, "A tiny image supports no blur levels");
   expect_eq(available_blur_levels({0, 0}), 0, "A degenerate image supports no blur levels");
 
+  expect_true(untextured_corner({2048, 2048}) == Region{2040, 2040, 8, 8},
+              "The untextured-draw texels sit in the last corner of the atlas copy");
+  expect_true(untextured_corner({4, 2}) == Region{0, 0, 4, 2},
+              "The corner region never leaves a small atlas");
+
   const auto none = blur_plan_for_radius(0.0f, {1920, 1080});
   expect_eq(none.levels, 0, "Radius 0 means no blur");
   expect_eq(blur_plan_for_radius(std::numeric_limits<float>::quiet_NaN(), {1920, 1080}).levels, 0,

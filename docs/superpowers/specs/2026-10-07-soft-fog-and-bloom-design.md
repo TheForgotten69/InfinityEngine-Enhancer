@@ -421,3 +421,25 @@ three are "pure shite". That build was reverted, so the sprite pass is section
 
 Lesson for this owner: offline comparison sheets did not predict their in-game
 opinion in either direction. Give them a runtime toggle and let them judge.
+
+## 18. Revision 2026-10-08 (later): selection circles vanishing with sprite smoothing
+
+Owner report: with `SpriteUpscale` on, selection circles sometimes disappear.
+
+Cause (2.7.3, decompiled): the engine has no untextured draw.
+`DrawDisable_GL(DRAW_TEXTURE_2D)` (`0x42B050`) selects atlas 0's texture
+(`fx[0]`) and sets the texture coordinate to the atlas's size, i.e. (1, 1).
+`DrawInit_GL` uploads a 2x2 white block once at `(texW-2, texH-2)` of that
+atlas, so selection circles (`CVidMode::DrawEllipseArc`), health bars and every
+other plain-coloured shape are white texels times the vertex colour. The 2x
+copy only redrew the rows the engine had just uploaded, so its last corner was
+never filled and those shapes came out transparent in every flush that swapped
+atlas 0.
+
+Fix: after the uploaded rows, the same two passes redraw the corner of atlas
+0's copy (`game::untextured_corner`). The log now names each atlas slot the
+first time it is upscaled.
+
+Rule for any later change to the atlas swap: whatever replaces atlas 0 must
+keep its last corner white. Derived from the decompile; not yet confirmed in
+game.

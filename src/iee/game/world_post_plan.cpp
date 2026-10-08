@@ -13,6 +13,15 @@ Extent half_extent(Extent extent) noexcept {
   return {std::max(1, extent.width / 2), std::max(1, extent.height / 2)};
 }
 
+Region untextured_corner(Extent upscaled) noexcept {
+  // The 2x2 block doubled, plus two source texels of kernel reach.
+  constexpr int kSide = 8;
+  const int width = std::clamp(upscaled.width, 0, kSide);
+  const int height = std::clamp(upscaled.height, 0, kSide);
+  return {std::max(0, upscaled.width) - width, std::max(0, upscaled.height) - height, width,
+          height};
+}
+
 int available_blur_levels(Extent base) noexcept {
   int levels = 0;
   Extent extent = base;

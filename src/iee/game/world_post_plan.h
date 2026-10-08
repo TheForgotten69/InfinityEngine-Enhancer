@@ -10,6 +10,14 @@ struct Extent {
   friend bool operator==(const Extent&, const Extent&) = default;
 };
 
+struct Region {
+  int x{};
+  int y{};
+  int width{};
+  int height{};
+  friend bool operator==(const Region&, const Region&) = default;
+};
+
 inline constexpr int kMaxBlurLevels = 6;
 
 // A dual-filter blur: `levels` successive half-size images below the source,
@@ -25,6 +33,12 @@ int available_blur_levels(Extent base) noexcept;
 // The plan whose blur reaches about `radiusPixels` on an image of `base` size.
 BlurPlan blur_plan_for_radius(float radiusPixels, Extent base) noexcept;
 int bloom_levels(Extent base) noexcept;
+// The engine has no untextured draw: selection circles, health bars and other
+// plain-coloured shapes sample a 2x2 white block it keeps in the last rows and
+// columns of sprite atlas 0 (written once in DrawInit_GL, addressed at
+// coordinate (1, 1)). This is that block, with room for the filter kernels,
+// in a 2x copy of the atlas.
+Region untextured_corner(Extent upscaled) noexcept;
 // Tells world draws from UI draws by where a frame is. Within a frame that
 // shows an area, everything queued up to the fog of war is world and everything
 // after it is UI; a frame that shows no area (menus, full-screen panels) is
