@@ -17,6 +17,15 @@ Runbook: [new-build-validation.md](../new-build-validation.md)
 |---|---|---|---|---|---|
 | `CInfGame::LoadArea` | unchanged 2.6.6 pattern | exactly 1 | `0x27EBD0` | `0x27E710` | `+0x4C0` |
 | `CVidTile::RenderTexture` | unchanged 2.6.6 pattern | exactly 1 | `0x4257C0` | `0x4247E0` | `+0xFE0` |
+| `CGameObjectArray::GetShare` | `48 C7 02 00 00 00 00 83 F9 FF` | exactly 1 | `0x276700` | `0x276490` | `+0x270` |
+
+GetShare's body is byte-identical in shape on both builds (RIP operands at
++0x1B/+0x35): 2.7.3 globals decode to `m_maxArrayIndex = 0x68F8F4` and the
+entry table at `0x68F910` (2.6.6: `0x68D434`/`0x68D450`). Both binaries hold
+exactly one `operator new(0x368)` + `imul ..., 0x4C` CGameStatic allocation
+site, so the static object size and ARE record stride are unchanged
+(2026-07-17, ARE-animation memory path; see
+[are-animation-detection.md](../are-animation-detection.md)).
 
 Both prologues are byte-identical to 2.6.6 (24-byte dumps recorded in the
 validation session log).

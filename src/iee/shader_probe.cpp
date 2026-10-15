@@ -618,10 +618,20 @@ void use_program(unsigned program, std::uintptr_t caller, bool isArb) {
   }
 }
 
+// _ReturnAddress() is an MSVC intrinsic; mingw-w64 declares it in intrin.h
+// for source compatibility but never defines it, so cross builds hit an
+// unresolved symbol at link time. GCC/Clang expose the same value via the
+// __builtin_return_address() builtin instead.
+#if defined(_MSC_VER) && !defined(__clang__)
+static inline void* caller_return_address() noexcept { return _ReturnAddress(); }
+#else
+static inline void* caller_return_address() noexcept { return __builtin_return_address(0); }
+#endif
+
 static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
   bool forwarded = false;
   try {
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    const auto caller = reinterpret_cast<std::uintptr_t>(caller_return_address());
     forwarded = true;
     g_glUseProgramHook.original()(program);
     use_program(program, caller, false);
@@ -633,7 +643,7 @@ static void APIENTRY detour_glUseProgram(unsigned program) noexcept {
 static void APIENTRY detour_glUseProgramObjectARB(unsigned program) noexcept {
   bool forwarded = false;
   try {
-    const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
+    const auto caller = reinterpret_cast<std::uintptr_t>(caller_return_address());
     forwarded = true;
     g_glUseProgramObjectARBHook.original()(program);
     use_program(program, caller, true);
@@ -1080,11 +1090,19 @@ void set_override_effect_enabled(bool enabled) noexcept { uniforms::set_effect_e
 
 bool override_effect_enabled() noexcept { return uniforms::effect_enabled(); }
 
+bool override_effect_replacement_enabled() noexcept {
+  return uniforms::effect_replacement_enabled();
+}
+
 void set_area_world_size(float widthPx, float heightPx) noexcept {
   uniforms::set_world_size(widthPx, heightPx);
 }
 
 void set_area_water_tint(float r, float g, float b) noexcept { uniforms::set_water_tint(r, g, b); }
+
+void set_area_effect_points(const float* xyzw, std::size_t count) noexcept {
+  uniforms::set_effect_points(xyzw, count);
+}
 
 void set_area_view(float scrollX, float scrollY, float viewWorldW, float viewWorldH) noexcept {
   uniforms::set_view(scrollX, scrollY, viewWorldW, viewWorldH);

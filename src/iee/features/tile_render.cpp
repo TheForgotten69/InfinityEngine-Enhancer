@@ -103,17 +103,24 @@ bool render_tile(AppContext& ctx, void* vidTile, int texId, void* unused, int x,
                    detection->scaleFactor, reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
                    detection->detectedTileDimension);
           break;
-        case game::ScaleDetectionSource::Heuristic:
-          LOG_INFO("Detected {}x tileset 0x{:X} via heuristic fallback (texId={}, UV=({}, {}))",
-                   detection->scaleFactor, reinterpret_cast<std::uintptr_t>(tileInfo.tileset),
-                   texId, entry.u, entry.v);
-          break;
       }
 
       if (detection->scaleFactor == 1) {
         state.lastTexId.store(-1, std::memory_order_relaxed);
         return false;
       }
+    } else if (tileInfo.table && tileInfo.tileCount > 0) {
+      // The resource is resident and readable yet exposes no deterministic
+      // scale metadata (classic paletted tilesets, door tiles): that cannot
+      // change with more draws, so latch standard immediately instead of
+      // burning the sampling window. Sampling below remains only for
+      // resources still streaming in.
+      tilesetState->scaleFactor = 1;
+      tilesetState->scaleDetected = true;
+      LOG_INFO("Tileset 0x{:X} has no deterministic scale metadata; delegated as standard",
+               reinterpret_cast<std::uintptr_t>(tileInfo.tileset));
+      state.lastTexId.store(-1, std::memory_order_relaxed);
+      return false;
     } else if (tilesetState->detectionCount < game::UpscaleThresholds::DETECTION_SAMPLE_COUNT) {
       const int sampleCount = ++tilesetState->detectionCount;
       if (sampleCount == 1) {

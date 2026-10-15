@@ -25,6 +25,9 @@ void on_frame_tick(float secondsSinceStart) noexcept;
 // Hotkey cycle target: uIeeEnabled value 0=off / 1=effect on / 2=alignment debug.
 void set_override_effect_enabled(bool enabled) noexcept;
 [[nodiscard]] bool override_effect_enabled() noexcept;
+// Normal ON state only; false in ALIGN so authored BAMs remain visible under
+// placement markers.
+[[nodiscard]] bool override_effect_replacement_enabled() noexcept;
 
 // Published by area_state at area load; consumed by the uniform feed.
 void set_area_world_size(float widthPx, float heightPx) noexcept;
@@ -32,6 +35,10 @@ void set_area_world_size(float widthPx, float heightPx) noexcept;
 // Authored liquid color of the current area (average opaque RGB from decoded
 // liquid overlay tiles, linear 0..1). Neutral 0.5 grey = unknown.
 void set_area_water_tint(float r, float g, float b) noexcept;
+
+// Classified ambient-animation point effects of the current area:
+// `count` vec4 records (world x, world y, kind, strength). nullptr/0 clears.
+void set_area_effect_points(const float* xyzw, std::size_t count) noexcept;
 
 // Published once per world frame from DrawColorTone(Seam); consumed by the
 // uniform feed.

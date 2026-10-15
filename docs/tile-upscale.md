@@ -17,12 +17,15 @@ engine's 64x64 screen-space quad and leaving ARE/WED coordinates untouched.
 4. If the header is missing, inspect up to 32 entries from the 12-byte PVR table.
    Validate page/coordinate bounds, then take the GCD of non-zero `u`/`v`
    deltas between entries on the same atlas page.
-5. Only if both deterministic paths fail, fall back to the legacy UV / texture-id heuristic path and log that fallback.
+5. If both deterministic paths fail, detection returns nothing and the render
+   path samples up to 10 draws before delegating the tileset to the engine as
+   standard 1x.
 
 The header is authoritative when present. Standard tilesets can legitimately have `header == null`,
 so table-based detection is also an expected deterministic path. Raw `u`/`v` origins are never tile
-dimensions; only their translation-invariant grid deltas are considered. Heuristics are a final
-safety net.
+dimensions; only their translation-invariant grid deltas are considered. The former UV / texture-id
+heuristic tier was removed after producing false 4x detections on vanilla areas in-game (raw UV
+magnitude is atlas-origin noise and GL texture ids grow with session allocations).
 
 The value at `+0x14` is TIS metadata. The PVRZ header describes the atlas page
 and does not replace this logical tile-size field. Header and table inference
@@ -80,5 +83,6 @@ The current build still uses the TIS `+0x1DC` linear-tiles switch for the seam/l
 ## Failure Model
 
 - Missing manifest or incompatible callsites abort initialization.
-- Missing tile metadata falls back to heuristics.
+- Missing tile metadata fails closed: after the sampling window the tileset is
+  delegated to the engine as standard 1x.
 - Unknown builds should stop during initialization rather than silently running with invalid hooks.

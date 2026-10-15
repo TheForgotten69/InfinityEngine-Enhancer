@@ -1,3 +1,4 @@
+#include "iee/game/draw_queue.h"
 #include "game_addrs.h"
 
 #include <array>
@@ -13,7 +14,6 @@
 
 namespace iee::game {
     bool resolve_addresses(GameAddresses &out, const core::EngineConfig &cfg, const BuildManifest &manifest) {
-        (void) cfg;
         out = {};
         auto moduleInfo = core::get_module_span(nullptr);
         if (!moduleInfo || !moduleInfo->base || !moduleInfo->size) {
@@ -61,6 +61,141 @@ namespace iee::game {
                 manifest.patterns.loadArea);
         recover("RenderTexture", out.RenderTexture, renderTextureMatches,
                 manifest.referenceRvas.renderTexture, manifest.patterns.renderTexture);
+
+        // Optional target: point-effect BAM replacement. Failure only keeps
+        // the engine's authored draws; never blocks initialization.
+        if (!manifest.patterns.staticRender.empty()) {
+            std::size_t staticRenderMatches = 0;
+            out.StaticRender = reinterpret_cast<std::uintptr_t>(core::find_unique_in_module(
+                nullptr, manifest.patterns.staticRender, &staticRenderMatches));
+            recover("StaticRender", out.StaticRender, staticRenderMatches,
+                    manifest.referenceRvas.staticRender, manifest.patterns.staticRender);
+            if (out.StaticRender) {
+                LOG_INFO("CGameStatic::Render resolved at RVA 0x{:X} (reference 0x{:X})",
+                         out.StaticRender - moduleBase, manifest.referenceRvas.staticRender);
+            } else {
+                LOG_WARN("CGameStatic::Render pattern matched {} times; authored fire/smoke "
+                         "draws will not be replaced",
+                         staticRenderMatches);
+            }
+        }
+
+        const auto resolveOptional = [&](const char *name, std::string_view pattern,
+                                         std::uintptr_t referenceRva) -> std::uintptr_t {
+            if (pattern.empty()) return 0;
+            std::size_t matches = 0;
+            auto target = reinterpret_cast<std::uintptr_t>(
+                core::find_unique_in_module(nullptr, pattern, &matches));
+            recover(name, target, matches, referenceRva, pattern);
+            if (!target) LOG_WARN("{} pattern matched {} times", name, matches);
+            return target;
+        };
+
+        // Optional targets: sprite movement smoothing. Resolved only when
+        // requested, and only as a complete set.
+        if (cfg.smoothSpriteMovement || cfg.interpolateAnimations) {
+            const auto &patterns = manifest.patterns;
+            const auto &rvas = manifest.referenceRvas;
+            out.SpriteRender =
+                resolveOptional("CGameSprite::Render", patterns.spriteRender, rvas.spriteRender);
+            out.SpriteRenderMarkers = resolveOptional(
+                "CGameSprite::RenderMarkers", patterns.spriteRenderMarkers, rvas.spriteRenderMarkers);
+            out.SpriteRenderHealthBar =
+                resolveOptional("CGameSprite::RenderHealthBar", patterns.spriteRenderHealthBar,
+                                rvas.spriteRenderHealthBar);
+            if (cfg.interpolateAnimations) {
+                // The twin accessors cannot be told apart by signature, so each
+                // is confirmed in full at its reference RVA on this
+                // identity-checked build.
+                const auto confirmTwin = [&](std::uintptr_t rva) -> std::uintptr_t {
+                    if (!rva || patterns.vidCellFrameAccessor.empty()) return 0;
+                    return reinterpret_cast<std::uintptr_t>(
+                        core::confirm_pattern_with_patched_prologue(
+                            nullptr, rva, patterns.vidCellFrameAccessor, 0));
+                };
+                out.VidCellGetFrame = resolveOptional("CVidCell::GetFrame",
+                                                      patterns.vidCellGetFrame,
+                                                      rvas.vidCellGetFrame);
+                out.VidCellGetCurrentCenterPoint = confirmTwin(rvas.vidCellGetCurrentCenterPoint);
+                out.VidCellGetCurrentFrameSize = confirmTwin(rvas.vidCellGetCurrentFrameSize);
+                if (!(out.VidCellGetFrame && out.VidCellGetCurrentCenterPoint &&
+                      out.VidCellGetCurrentFrameSize)) {
+                    out.VidCellGetFrame = out.VidCellGetCurrentCenterPoint =
+                        out.VidCellGetCurrentFrameSize = 0;
+                    LOG_WARN("Animation interpolation disabled: this build has no complete set "
+                             "of CVidCell frame targets");
+                }
+            }
+            for (std::size_t index = 0;
+                 cfg.smoothSpriteMovement && index < manifest.smoothedObjectRenders.size();
+                 ++index) {
+                const auto &target = manifest.smoothedObjectRenders[index];
+                if (!target.name) continue;
+                out.SmoothedObjectRenders[index] =
+                    resolveOptional(target.name, target.pattern, target.referenceRva);
+            }
+            if (cfg.smoothSpriteMovement) {
+                out.ParticleUpdate = resolveOptional("CParticle::AsynchronousUpdate",
+                                                     patterns.particleUpdate, rvas.particleUpdate);
+                out.ParticleRender = resolveOptional("CParticle::Render", patterns.particleRender,
+                                                     rvas.particleRender);
+                if (!(out.ParticleUpdate && out.ParticleRender)) {
+                    out.ParticleUpdate = out.ParticleRender = 0;
+                }
+            }
+            if (out.SpriteRender && out.SpriteRenderMarkers && out.SpriteRenderHealthBar) {
+                LOG_INFO("Sprite render targets resolved at RVA 0x{:X} / 0x{:X} / 0x{:X}",
+                         out.SpriteRender - moduleBase, out.SpriteRenderMarkers - moduleBase,
+                         out.SpriteRenderHealthBar - moduleBase);
+            } else {
+                out.SpriteRender = out.SpriteRenderMarkers = out.SpriteRenderHealthBar = 0;
+                LOG_WARN("Sprite movement smoothing disabled: this build has no complete set of "
+                         "sprite render targets");
+            }
+        }
+
+        // Optional targets: world post passes. Resolved only when requested
+        // (or when debug hotkeys can switch them on), and only as a pair.
+        if (cfg.softFogOfWar || cfg.bloom || cfg.spriteUpscale || cfg.enableDebugHotkeys) {
+            out.RenderFog = resolveOptional("CInfinity::RenderFog", manifest.patterns.renderFog,
+                                            manifest.referenceRvas.renderFog);
+            out.DrawFlush = resolveOptional("DrawFlush_GL", manifest.patterns.drawFlush,
+                                            manifest.referenceRvas.drawFlush);
+            if (out.RenderFog && out.DrawFlush) {
+                LOG_INFO("World post targets resolved at RVA 0x{:X} / 0x{:X}",
+                         out.RenderFog - moduleBase, out.DrawFlush - moduleBase);
+                out.DrawQueueCount = draw_queue_count_address(manifest.drawQueue, out.DrawFlush);
+                out.DrawQueueCommands =
+                    draw_queue_commands_address(manifest.drawQueue, out.DrawQueueCount);
+                if (out.DrawQueueCount && out.DrawQueueCommands) {
+                    LOG_INFO("Draw queue resolved: count at RVA 0x{:X}, commands at RVA 0x{:X}",
+                             out.DrawQueueCount - moduleBase, out.DrawQueueCommands - moduleBase);
+                    if (manifest.spriteAtlas.valid() &&
+                        (cfg.spriteUpscale || cfg.enableDebugHotkeys)) {
+                        out.TextureUpload =
+                            resolveOptional("TexSubImage_GL", manifest.patterns.textureUpload,
+                                            manifest.referenceRvas.textureUpload);
+                        if (!out.TextureUpload && cfg.spriteUpscale) {
+                            LOG_WARN("Sprite upscaling disabled: TexSubImage_GL did not resolve");
+                        }
+                    }
+                } else {
+                    out.DrawQueueCount = out.DrawQueueCommands = 0;
+                    if (cfg.bloom) {
+                        LOG_WARN("Bloom disabled: the draw queue was not found in DrawFlush_GL");
+                    }
+                }
+            } else {
+                const bool known =
+                    !manifest.patterns.renderFog.empty() && !manifest.patterns.drawFlush.empty();
+                out.RenderFog = out.DrawFlush = 0;
+                if (cfg.softFogOfWar || cfg.bloom || cfg.spriteUpscale) {
+                    LOG_WARN("Soft fog of war, bloom and sprite upscaling disabled: {}",
+                             known ? "RenderFog/DrawFlush did not resolve uniquely"
+                                   : "this build has no RenderFog/DrawFlush targets");
+                }
+            }
+        }
 
         const bool success = out.LoadArea && out.RenderTexture;
 

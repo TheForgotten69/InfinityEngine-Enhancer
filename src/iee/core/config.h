@@ -7,10 +7,28 @@ struct EngineConfig {
   bool enableAnisotropicFiltering = false;
   float maxAnisotropy = 8.0f;
   float lodBias = -0.25f;
+  bool smoothSpriteMovement = false;
+  bool interpolateAnimations = false;
+  bool softFogOfWar = false;
+  float softFogRadius = 24.0f;  // world pixels; 0 = capture without blur
+  float softFogDrift = 10.0f;   // world pixels the soft edge drifts by; 0 = still
+  float softFogSmoothing = 0.25f;  // seconds the fog takes to follow a visibility change
+  bool bloom = false;
+  float bloomStrength = 0.35f;
+  // How strongly light-emitting effects brighten what is around them; 0 = off.
+  float lightSpill = 1.5f;
+  // World pixels the air above warm light sources ripples by; 0 = off.
+  float heatShimmer = 1.5f;
+  // Edge-adaptive 2x upscale (FSR1) of the sprite atlas before it is drawn.
+  bool spriteUpscale = false;
+  float spriteSharpness = 0.5f;  // 0 = no sharpening pass effect, 1 = strongest
 
   bool dumpEngineShaders = false;
   bool enableDebugHotkeys = false;
   bool enableWaterEffect = true;
+  bool enablePointEffects = true;
+
+  bool enableAreaAnimationScan = true;
 
   bool enableVerboseLogging = false;
   bool enablePerformanceLogging = false;
